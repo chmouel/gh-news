@@ -1,0 +1,187 @@
+# gh-news
+
+GitHub notifications TUI built with Rust and ratatui. Because checking notifications in the terminal is way better than opening a browser.
+
+<img width="1750" height="1103" alt="image" src="https://github.com/user-attachments/assets/bcb9012c-aac3-46d4-9680-d39561b5a4ab" />
+
+## Installation
+
+Build from source:
+
+```bash
+git clone https://github.com/chmouel/gh-news.git
+cd gh-news
+cargo build --release
+```
+
+Or install with cargo:
+
+```bash
+cargo install --git https://github.com/chmouel/gh-news.git
+```
+
+## Setup
+
+You need a GitHub token. The app looks for it in this order:
+
+1. `GH_TOKEN` env var
+2. `GITHUB_TOKEN` env var  
+3. Your `gh` CLI config at `~/.config/gh/hosts.yml` (or `$XDG_CONFIG_HOME/gh/hosts.yml`)
+
+Easiest way is to just run `gh auth login` if you have the GitHub CLI installed. Otherwise set `GH_TOKEN` to your personal access token.
+
+## Usage
+
+Just run it:
+
+```bash
+gh-news
+```
+
+### Options
+
+- `-a, --all` - Show all notifications (not just unread)
+- `-c, --config <PATH>` - Use a custom config file instead of the default
+- `-f, --filter <PATTERN>` - Only show notifications matching this regex
+- `-n, --max-notifications <N>` - Limit how many to fetch
+- `-p, --participating` - Only show notifications where you're participating/mentioned
+- `-r, --mark-read` - Mark all notifications as read (non-interactive)
+- `-s, --static-display` - Print notifications and exit (for scripts)
+
+### Examples
+
+Filter to specific repos:
+
+```bash
+gh-news --filter "my-org/my-repo"
+```
+
+Only things you're involved in:
+
+```bash
+gh-news --participating
+```
+
+Mark everything read:
+
+```bash
+gh-news --mark-read
+```
+
+Static output for scripts:
+
+```bash
+gh-news --static-display | grep "something"
+```
+
+## Keybindings
+
+- `Enter` - View details
+- `Tab` - Toggle preview
+- `Ctrl+R` - Reload
+- `Ctrl+T` - Mark as read
+- `Ctrl+A` - Mark all as read
+- `Ctrl+B` - Open in browser
+- `Ctrl+D` - View diff
+- `Ctrl+F` - View patch
+- `Ctrl+W` - Mark done
+- `Ctrl+X` - Comment
+- `Ctrl+Y` - Toggle state
+- `Backtab` - Resize preview
+- `?` - Help
+
+## Configuration
+
+gh-news can be configured via a TOML file at `~/.config/gh-news/config.toml`. All options are optional and have sensible defaults. CLI flags take precedence over config file settings.
+
+### Example Config
+
+```toml
+# API & Network
+auto_refresh_interval = 300  # seconds, 0 to disable
+api_timeout = 30             # seconds
+max_notifications = 100      # limit notifications fetched
+pagination_size = 50         # notifications per API page
+
+# Default filters (same as CLI flags)
+show_read = false            # show read notifications (like --all)
+participating_only = false   # only participating (like --participating)
+default_filter = ""          # regex filter always applied
+
+# Display
+default_preview_mode = "horizontal"  # "off", "horizontal", or "vertical"
+repos_collapsed = false              # start with repos collapsed
+
+# External commands
+browser_command = ""         # custom browser, e.g. "firefox" (uses system default if empty)
+
+# Notification hooks
+on_new_notification_command = ""  # command to run when new notifications appear
+
+# GitHub Enterprise (optional)
+github_host = "github.com"   # change for GHE, e.g. "github.mycompany.com"
+```
+
+### Notification Hooks
+
+Run a custom command when new notifications appear during auto-refresh:
+
+```toml
+on_new_notification_command = "/path/to/your/script.sh"
+```
+
+The command runs once per new notification with these environment variables:
+
+| Variable | Description |
+|----------|-------------|
+| `GH_NEWS_ID` | Notification ID |
+| `GH_NEWS_TITLE` | Notification title |
+| `GH_NEWS_REPO` | Repository name |
+| `GH_NEWS_OWNER` | Repository owner |
+| `GH_NEWS_TYPE` | Type (Issue, PullRequest, Discussion, etc.) |
+| `GH_NEWS_REASON` | Reason (mention, review_requested, comment, etc.) |
+| `GH_NEWS_URL` | Web URL (if available) |
+| `GH_NEWS_UNREAD` | Read status (true/false) |
+| `GH_NEWS_UPDATED_AT` | ISO 8601 timestamp (if available) |
+
+**Example: Desktop notification (Linux)**
+
+```bash
+#!/bin/bash
+notify-send "GitHub: $GH_NOTIFY_TYPE" "$GH_NOTIFY_TITLE"
+```
+
+**Example: Sound alert**
+
+```toml
+on_new_notification_command = "paplay /usr/share/sounds/freedesktop/stereo/message.oga"
+```
+
+**Example: Conditional action**
+
+```bash
+#!/bin/bash
+if [ "$GH_NOTIFY_REASON" = "review_requested" ]; then
+    notify-send -u critical "Review Requested" "$GH_NOTIFY_TITLE"
+fi
+```
+
+**Note:** For commands with complex arguments or shell features, use a wrapper script.
+
+## Environment Variables
+
+- `GH_TOKEN` - GitHub personal access token (takes precedence over `GITHUB_TOKEN`)
+- `GITHUB_TOKEN` - GitHub personal access token (fallback if `GH_TOKEN` not set)
+- `GH_NEWS_AUTO_REFRESH_INTERVAL` - Auto-refresh interval in seconds (default: 300). Set to 0 to disable.
+
+## Building
+
+```bash
+cargo build --release
+```
+
+Needs Rust 2021 edition.
+
+## License
+
+Unlicense - do whatever you want with it.
