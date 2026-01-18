@@ -1,0 +1,46 @@
+# See https://pre-commit.com for more information
+# See https://pre-commit.com/hooks.html for more hooks
+default_install_hook_types: ["pre-push"]
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-vcs-permalinks
+  - repo: local
+    hooks:
+      - id: cargo-check
+        name: "Cargo Check"
+        entry: cargo
+        args: ["check"]
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: cargo-build
+        name: "Cargo Build"
+        entry: cargo
+        args: ["build"]
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: cargo-clippy
+        name: "Cargo Clippy"
+        entry: cargo
+        args: ["clippy", "--", "-D", "warnings"]
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: test
+        name: "Cargo test"
+        entry: cargo
+        args: ["test"]
+        language: system
+        types: [rust]
+        pass_filenames: false
+      - id: fmt
+        name: fmt
+        description: Format files with cargo fmt.
+        entry: cargo fmt
+        language: system
+        types: [rust]
+        args: ["--"]
