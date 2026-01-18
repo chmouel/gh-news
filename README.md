@@ -6,7 +6,7 @@ GitHub notifications TUI built with Rust and ratatui.
 
 ## Installation
 
-Build from source:
+Install as a `gh` CLI extension (easiest):
 
 ```bash
 gh extension install chmouel/gh-news
