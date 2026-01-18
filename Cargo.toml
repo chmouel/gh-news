@@ -1,6 +1,6 @@
 [package]
 name = "gh-news"
-version = "0.1.1"
+version = "0.1.0"
 edition = "2021"
 authors = ["Chmouel Boudjnah <chmouel@chmouel.com>"]
 description = "GitHub notifications TUI built with Rust and ratatui"
