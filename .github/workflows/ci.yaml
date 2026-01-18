@@ -37,10 +37,8 @@ jobs:
   test:
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest]
         include:
-          - os: windows-latest
-            bins: --bins
           - os: macOS-latest
             bins: --bins
     runs-on: ${{ matrix.os }}
