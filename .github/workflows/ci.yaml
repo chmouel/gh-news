@@ -14,21 +14,15 @@ jobs:
     strategy:
       matrix:
         include:
-          - target: android-arm64
-            os: ubuntu-latest
-            cargo_build_target: aarch64-linux-android
-          - target: darwin-amd64
-            os: macos-latest
-            cargo_build_target: x86_64-apple-darwin
           - target: darwin-arm64
             os: macos-latest
             cargo_build_target: aarch64-apple-darwin
           - target: linux-amd64
             os: ubuntu-latest
             cargo_build_target: x86_64-unknown-linux-gnu
-          - target: windows-amd64
-            os: windows-latest
-            cargo_build_target: x86_64-pc-windows-msvc
+          - target: linux-arm64
+            os: ubuntu-latest
+            cargo_build_target: aarch64-unknown-linux-gnu
     runs-on: ${{ matrix.os }}
     env:
       CARGO_BUILD_TARGET: ${{ matrix.cargo_build_target }}
