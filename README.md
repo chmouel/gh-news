@@ -2,7 +2,7 @@
 
 GitHub notifications TUI built with Rust and ratatui. 
 
-<img width="1750" height="1103" alt="image" src="https://github.com/user-attachments/assets/bcb9012c-aac3-46d4-9680-d39561b5a4ab" />
+<img width="1761" height="1140" alt="image" src="https://github.com/user-attachments/assets/8afafa37-67c0-49d3-9375-1c07cdcfed21" />
 
 ## Installation
 
