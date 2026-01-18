@@ -1,6 +1,6 @@
 # gh-news
 
-GitHub notifications TUI built with Rust and ratatui. Because checking notifications in the terminal is way better than opening a browser.
+GitHub notifications TUI built with Rust and ratatui. 
 
 <img width="1750" height="1103" alt="image" src="https://github.com/user-attachments/assets/bcb9012c-aac3-46d4-9680-d39561b5a4ab" />
 
@@ -174,14 +174,6 @@ fi
 - `GITHUB_TOKEN` - GitHub personal access token (fallback if `GH_TOKEN` not set)
 - `GH_NEWS_AUTO_REFRESH_INTERVAL` - Auto-refresh interval in seconds (default: 300). Set to 0 to disable.
 
-## Building
-
-```bash
-cargo build --release
-```
-
-Needs Rust 2021 edition.
-
 ## License
 
-Unlicense - do whatever you want with it.
+[Apache 2.0](LICENSE)
