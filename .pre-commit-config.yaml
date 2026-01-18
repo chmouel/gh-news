@@ -19,7 +19,7 @@ repos:
       - id: cargo-build
         name: "Cargo Build"
         entry: cargo
-        args: ["build"]
+        args: ["build", "--release"]
         language: system
         types: [rust]
         pass_filenames: false
