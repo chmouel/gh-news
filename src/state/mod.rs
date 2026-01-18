@@ -29,6 +29,8 @@ pub struct AppState {
     pub filter_pattern: Option<String>,
     // Track if we're showing all notifications (read and unread)
     pub show_all: bool,
+    // Confirmation dialog state
+    pub confirm_action: Option<ConfirmAction>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +39,7 @@ pub enum InputMode {
     Normal,
     Help,
     Search,
+    Confirm,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +54,17 @@ pub enum PaneFocus {
     None,  // Both panes visible (split view)
     Pane1, // Notifications list zoomed
     Pane2, // Preview zoomed
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MarkAllOption {
+    MarkReadOnly,       // Default - just mark as read
+    MarkReadAndArchive, // Mark as read AND archive (done)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfirmAction {
+    MarkAllRead { selected: MarkAllOption },
 }
 
 impl AppState {
@@ -73,6 +87,7 @@ impl AppState {
             loading_message: String::new(),
             filter_pattern: None,
             show_all: false,
+            confirm_action: None,
         }
     }
 

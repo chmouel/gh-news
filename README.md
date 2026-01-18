@@ -80,19 +80,21 @@ gh news --static-display | grep "something"
 
 ## Keybindings
 
-- `Enter` - View details
-- `Tab` - Toggle preview
-- `Ctrl+R` - Reload
-- `Ctrl+T` - Mark as read
-- `Ctrl+A` - Mark all as read
-- `Ctrl+B` - Open in browser
-- `Ctrl+D` - View diff
-- `Ctrl+F` - View patch
-- `Ctrl+W` - Mark done
-- `Ctrl+X` - Comment
-- `Ctrl+Y` - Toggle state
-- `Backtab` - Resize preview
-- `?` - Help
+- `↑`/`↓` or `j`/`k` - Navigate notifications
+- `Home`/`End` - Jump to first/last notification
+- `PageUp`/`PageDown` - Page navigation (or scroll preview if shown)
+- `Enter` - Open notification in browser and mark as read
+- `o` - Open notification in browser without marking as read
+- `Space` - Toggle repository expansion
+- `h` - Collapse current repository
+- `t` - Toggle read/unread status
+- `Tab` - Cycle preview modes (Off → Horizontal → Vertical)
+- `J`/`K` - Scroll preview (line by line)
+- `Shift+U`/`Shift+D` - Scroll preview (5 lines)
+- `Ctrl+U`/`Ctrl+D` - Scroll preview (page)
+- `1`/`2` - Focus pane 1 (list) / pane 2 (preview)
+- `Esc` or `q` or `Ctrl+C` - Quit application
+- `?` - Show help
 
 ## Configuration
 

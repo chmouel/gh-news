@@ -3,9 +3,9 @@ use crate::error::Result;
 use crate::hooks;
 use crate::models::Notification;
 use crate::preview::{PreviewData, PreviewFetcher};
-use crate::state::{AppState, InputMode, PaneFocus, PreviewMode};
+use crate::state::{AppState, ConfirmAction, InputMode, MarkAllOption, PaneFocus, PreviewMode};
 use crate::terminal::Terminal;
-use crate::ui::components::{help, list, loading, preview, status};
+use crate::ui::components::{confirm, help, list, loading, preview, status};
 use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
     MouseEventKind,
@@ -41,6 +41,7 @@ pub struct App {
     preview_widget: preview::PreviewWidget,
     status_widget: status::StatusWidget,
     help_widget: help::HelpWidget,
+    confirm_widget: confirm::ConfirmWidget,
     loading_widget: loading::LoadingWidget,
     api_client: Option<crate::api::GitHubClient>,
     last_refresh: Instant,
@@ -131,6 +132,7 @@ impl App {
             preview_widget: preview::PreviewWidget::new(),
             status_widget: status::StatusWidget::new(),
             help_widget: help::HelpWidget::new(),
+            confirm_widget: confirm::ConfirmWidget::new(),
             loading_widget: loading::LoadingWidget::new(),
             api_client: None,
             last_refresh: Instant::now(),
@@ -183,11 +185,12 @@ impl App {
         participating: bool,
         max_notifications: Option<usize>,
     ) {
-        if self.config.auto_refresh_interval == 0 {
-            return; // Auto-refresh disabled
-        }
-
+        // Always store refresh args for manual refresh (Ctrl+R)
         self.refresh_args = Some((all, participating, max_notifications));
+
+        if self.config.auto_refresh_interval == 0 {
+            return; // Auto-refresh disabled, but manual refresh still works
+        }
 
         let _interval = self.config.auto_refresh_interval;
 
@@ -647,6 +650,13 @@ impl App {
                 }
             }
         }
+
+        // Render confirmation dialog as overlay (if active)
+        if self.state.input_mode == InputMode::Confirm {
+            if let Some(ConfirmAction::MarkAllRead { selected }) = self.state.confirm_action {
+                self.confirm_widget.render(frame, size, selected);
+            }
+        }
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
@@ -663,7 +673,67 @@ impl App {
                 }
                 Ok(())
             }
+            InputMode::Confirm => self.handle_confirm_key(key),
         }
+    }
+
+    fn handle_confirm_key(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Esc => {
+                self.state.input_mode = InputMode::Normal;
+                self.state.confirm_action = None;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Some(ConfirmAction::MarkAllRead { ref mut selected }) =
+                    self.state.confirm_action
+                {
+                    *selected = MarkAllOption::MarkReadAndArchive;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Some(ConfirmAction::MarkAllRead { ref mut selected }) =
+                    self.state.confirm_action
+                {
+                    *selected = MarkAllOption::MarkReadOnly;
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(action) = self.state.confirm_action.take() {
+                    self.execute_confirmed_action(action)?;
+                }
+                self.state.input_mode = InputMode::Normal;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn execute_confirmed_action(&mut self, action: ConfirmAction) -> Result<()> {
+        match action {
+            ConfirmAction::MarkAllRead { selected } => {
+                if let Some(ref client) = self.api_client {
+                    match selected {
+                        MarkAllOption::MarkReadAndArchive => {
+                            // Archive (mark as done) each notification individually
+                            for notif in &self.state.notifications {
+                                let _ = client.mark_thread_done(&notif.id);
+                            }
+                        }
+                        MarkAllOption::MarkReadOnly => {
+                            // Just mark all as read
+                            client.mark_all_read(None)?;
+                        }
+                    }
+                    // Update local state
+                    for notif in &mut self.state.notifications {
+                        notif.unread = false;
+                    }
+                    // Refresh to sync with server
+                    self.refresh_notifications()?;
+                }
+            }
+        }
+        Ok(())
     }
 
     fn handle_normal_key(&mut self, key: KeyEvent) -> Result<()> {
@@ -856,6 +926,18 @@ impl App {
                     }
                 }
             }
+            KeyCode::Char('o') => {
+                // Open notification URL without marking as read
+                if let Some(notification) = self.state.selected_notification() {
+                    if let Some(url) = notification.web_url() {
+                        if let Err(e) = self.open_url(&url) {
+                            eprintln!("Failed to open URL {}: {}", url, e);
+                        }
+                    } else {
+                        eprintln!("No URL available for this notification");
+                    }
+                }
+            }
             KeyCode::Char(' ') => {
                 // Space bar toggles repository expansion
                 if let Some(repo_name) = self.state.selected_repo() {
@@ -965,7 +1047,17 @@ impl App {
                 }
             }
             KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                // Reload - will be handled by caller
+                // Force refresh notifications
+                self.refresh_notifications()?;
+            }
+            KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // Show confirmation dialog for mark all as read
+                if !self.state.notifications.is_empty() {
+                    self.state.confirm_action = Some(ConfirmAction::MarkAllRead {
+                        selected: MarkAllOption::MarkReadOnly, // Default
+                    });
+                    self.state.input_mode = InputMode::Confirm;
+                }
             }
             _ => {}
         }

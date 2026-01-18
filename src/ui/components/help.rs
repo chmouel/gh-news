@@ -20,7 +20,7 @@ impl HelpWidget {
 
         // Calculate centered box dimensions
         let box_width = 68.min(area.width.saturating_sub(4));
-        let box_height = 36.min(area.height.saturating_sub(4));
+        let box_height = 40.min(area.height.saturating_sub(4));
         let box_x = (area.width.saturating_sub(box_width)) / 2;
         let box_y = (area.height.saturating_sub(box_height)) / 2;
 
@@ -95,6 +95,12 @@ impl HelpWidget {
                 colors.fg_muted,
             ),
             make_key_line(
+                "o",
+                "Open notification (without marking read)",
+                colors.green,
+                colors.fg_muted,
+            ),
+            make_key_line(
                 "Space",
                 "Toggle repository expansion",
                 colors.green,
@@ -109,6 +115,13 @@ impl HelpWidget {
             make_key_line(
                 "t",
                 "Toggle read/unread status",
+                colors.green,
+                colors.fg_muted,
+            ),
+            make_key_line("Ctrl+A", "Mark all as read", colors.green, colors.fg_muted),
+            make_key_line(
+                "Ctrl+R",
+                "Refresh notifications",
                 colors.green,
                 colors.fg_muted,
             ),

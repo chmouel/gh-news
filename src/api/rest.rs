@@ -214,6 +214,26 @@ impl GitHubClient {
         Ok(())
     }
 
+    pub fn mark_thread_done(&self, thread_id: &str) -> Result<()> {
+        let url = format!("{}/notifications/threads/{}", self.api_base, thread_id);
+        let response = self.client.delete(&url).send().map_err(Error::from)?;
+
+        // DELETE returns 204 No Content on success
+        if !response.status().is_success() {
+            let status = response.status();
+            let message = response
+                .text()
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(ApiError::HttpStatus {
+                status: status.as_u16(),
+                message,
+            }
+            .into());
+        }
+
+        Ok(())
+    }
+
     pub fn get_vulnerability_alert_by_url(&self, url: &str) -> Result<Value> {
         let response = self.client.get(url).send().map_err(Error::from)?;
 
