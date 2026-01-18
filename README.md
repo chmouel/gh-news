@@ -1,6 +1,6 @@
 # gh-news
 
-GitHub notifications TUI built with Rust and ratatui. 
+GitHub notifications TUI built with Rust and ratatui.
 
 <img width="1761" height="1140" alt="image" src="https://github.com/user-attachments/assets/8afafa37-67c0-49d3-9375-1c07cdcfed21" />
 
@@ -39,7 +39,7 @@ Easiest way is to just run `gh auth login` if you have the GitHub CLI installed.
 Just run it:
 
 ```bash
-gh-news
+gh news
 ```
 
 ### Options
@@ -57,25 +57,25 @@ gh-news
 Filter to specific repos:
 
 ```bash
-gh-news --filter "my-org/my-repo"
+gh news --filter "my-org/my-repo"
 ```
 
 Only things you're involved in:
 
 ```bash
-gh-news --participating
+gh news --participating
 ```
 
 Mark everything read:
 
 ```bash
-gh-news --mark-read
+gh news --mark-read
 ```
 
 Static output for scripts:
 
 ```bash
-gh-news --static-display | grep "something"
+gh news --static-display | grep "something"
 ```
 
 ## Keybindings
