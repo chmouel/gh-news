@@ -30,6 +30,9 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: r7kamura/rust-problem-matchers@v1
+      - name: Install ARM64 cross-compilation toolchain
+        if: matrix.cargo_build_target == 'aarch64-unknown-linux-gnu'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
       - name: Build
         shell: bash
         run: scripts/build_dist.sh ci-run
