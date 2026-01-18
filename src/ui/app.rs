@@ -31,7 +31,6 @@ struct FetchRequest {
 #[derive(Debug)]
 struct FetchResult {
     notification_id: String,
-    result: std::result::Result<PreviewData, String>,
 }
 
 pub struct App {
@@ -118,7 +117,6 @@ fn preview_worker_thread(
         // Send completion signal
         let _ = tx.send(FetchResult {
             notification_id: request.notification_id,
-            result,
         });
     }
 }
@@ -353,6 +351,7 @@ impl App {
         }
 
         self.fetch_preview_for_selected_notification();
+        self.prefetch_next_preview();
     }
 
     fn fetch_preview_for_selected_notification(&mut self) {
@@ -413,6 +412,53 @@ impl App {
 
     pub fn fetch_preview_for_selected(&mut self) {
         self.auto_fetch_preview_for_selected();
+    }
+
+    /// Prefetch the next notification's details in the background
+    fn prefetch_next_preview(&mut self) {
+        // Don't prefetch if preview is disabled
+        if !self.state.show_preview() {
+            return;
+        }
+
+        // Find next notification in tree
+        let current_idx = self.state.selected_index;
+
+        // Search forward from current position for next Notification item
+        let next_notif = (current_idx + 1..self.state.tree_items.len()).find_map(|i| {
+            if let Some(crate::state::TreeItem::Notification(notif_idx)) =
+                self.state.tree_items.get(i)
+            {
+                self.state.notifications.get(*notif_idx)
+            } else {
+                None
+            }
+        });
+
+        // If found, queue for prefetch
+        if let Some(notif) = next_notif {
+            let notification_id = notif.id.clone();
+
+            // Skip if already cached or currently loading
+            {
+                let cache = self.preview_cache.lock();
+                let loading = self.preview_loading.lock();
+                if cache.contains_key(&notification_id) || loading.contains(&notification_id) {
+                    return; // Already have it or it's being fetched
+                }
+            }
+
+            // Mark as loading and send fetch request
+            self.preview_loading.lock().insert(notification_id.clone());
+
+            if let Some(ref tx) = self.prefetch_tx {
+                let _ = tx.send(FetchRequest {
+                    notification_id,
+                    notification: notif.clone(),
+                    config: self.config.clone(),
+                });
+            }
+        }
     }
 
     pub fn run(&mut self, terminal: &mut Terminal) -> Result<()> {
@@ -671,6 +717,7 @@ impl App {
                 // Auto-fetch preview for the newly selected notification
                 if self.state.show_preview() {
                     self.fetch_preview_for_selected_notification();
+                    self.prefetch_next_preview();
                 }
             }
             KeyCode::Down | KeyCode::Char('j') => {
@@ -680,6 +727,7 @@ impl App {
                 // Auto-fetch preview for the newly selected notification
                 if self.state.show_preview() {
                     self.fetch_preview_for_selected_notification();
+                    self.prefetch_next_preview();
                 }
             }
             KeyCode::PageUp => {
@@ -695,6 +743,7 @@ impl App {
                     self.state.preview_scroll = 0;
                     if self.state.show_preview() {
                         self.fetch_preview_for_selected_notification();
+                        self.prefetch_next_preview();
                     }
                 }
             }
@@ -711,6 +760,7 @@ impl App {
                     self.state.preview_scroll = 0;
                     if self.state.show_preview() {
                         self.fetch_preview_for_selected_notification();
+                        self.prefetch_next_preview();
                     }
                 }
             }
@@ -719,6 +769,7 @@ impl App {
                 self.state.preview_scroll = 0;
                 if self.state.show_preview() {
                     self.fetch_preview_for_selected_notification();
+                    self.prefetch_next_preview();
                 }
             }
             KeyCode::End => {
@@ -728,6 +779,7 @@ impl App {
                 self.state.preview_scroll = 0;
                 if self.state.show_preview() {
                     self.fetch_preview_for_selected_notification();
+                    self.prefetch_next_preview();
                 }
             }
             KeyCode::Enter => {
@@ -774,6 +826,7 @@ impl App {
 
                         // Fetch preview for the selected notification
                         self.fetch_preview_for_selected_notification();
+                        self.prefetch_next_preview();
                     }
                 } else if let Some(notification) = self.state.selected_notification() {
                     // Open the notification URL in the browser
@@ -878,6 +931,7 @@ impl App {
                 // If showing preview and no content loaded, fetch it (uses cache)
                 if self.state.show_preview() && self.state.preview_content.is_none() {
                     self.fetch_preview_for_selected_notification();
+                    self.prefetch_next_preview();
                 }
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::SHIFT) => {
@@ -1177,10 +1231,12 @@ impl App {
                             // Fetch and show preview for the selected notification
                             if self.state.show_preview() {
                                 self.fetch_preview_for_selected_notification();
+                                self.prefetch_next_preview();
                             } else {
                                 // Enable preview if it's off
                                 self.state.preview_mode = PreviewMode::Horizontal;
                                 self.fetch_preview_for_selected_notification();
+                                self.prefetch_next_preview();
                             }
                         } else if let Some(crate::state::TreeItem::RepositoryHeader(repo_name)) =
                             self.state.tree_items.get(clicked_item_idx)
@@ -1212,6 +1268,7 @@ impl App {
                                 self.state.preview_scroll = 0;
                                 if self.state.show_preview() {
                                     self.fetch_preview_for_selected_notification();
+                                    self.prefetch_next_preview();
                                 }
                             }
                         } else {
@@ -1280,6 +1337,7 @@ impl App {
                             // Fetch preview for the newly selected notification
                             if self.state.show_preview() {
                                 self.fetch_preview_for_selected_notification();
+                                self.prefetch_next_preview();
                             }
                         }
                     }
