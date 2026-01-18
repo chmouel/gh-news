@@ -20,9 +20,6 @@ jobs:
           - target: linux-amd64
             os: ubuntu-latest
             cargo_build_target: x86_64-unknown-linux-gnu
-          - target: linux-arm64
-            os: ubuntu-latest
-            cargo_build_target: aarch64-unknown-linux-gnu
     runs-on: ${{ matrix.os }}
     env:
       CARGO_BUILD_TARGET: ${{ matrix.cargo_build_target }}
@@ -30,9 +27,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: r7kamura/rust-problem-matchers@v1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.cargo_build_target }}
       - name: Install ARM64 cross-compilation toolchain
         if: matrix.cargo_build_target == 'aarch64-unknown-linux-gnu'
         run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
+      - name: Clean build directory
+        run: cargo clean --target ${{ matrix.cargo_build_target }}
       - name: Build
         shell: bash
         run: scripts/build_dist.sh ci-run
@@ -51,6 +53,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: r7kamura/rust-problem-matchers@v1
+      - uses: Swatinem/rust-cache@v2
       - name: Run tests
         run: cargo test ${{ matrix.bins }}
 
@@ -59,6 +62,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: r7kamura/rust-problem-matchers@v1
+      - uses: Swatinem/rust-cache@v2
       - name: Run Format
         run: cargo fmt --all -- --check
       - name: Run clippy
