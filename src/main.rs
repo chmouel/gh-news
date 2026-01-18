@@ -78,6 +78,9 @@ fn run() -> Result<()> {
     // Set API client in app for fetching previews
     app.set_api_client(client);
 
+    // Start background preview worker thread
+    app.start_preview_worker();
+
     // Start auto-refresh if enabled
     app.start_auto_refresh(opts.show_all, opts.participating, opts.max_notifications);
 

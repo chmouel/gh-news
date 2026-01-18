@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::error::Result;
 use crate::hooks;
+use crate::models::Notification;
 use crate::preview::{PreviewData, PreviewFetcher};
 use crate::state::{AppState, InputMode, PaneFocus, PreviewMode};
 use crate::terminal::Terminal;
@@ -9,10 +10,29 @@ use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
     MouseEventKind,
 };
+use parking_lot::Mutex;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
 use std::collections::{HashMap, HashSet};
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::Arc;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+
+/// Request to fetch a preview in the background
+#[derive(Debug)]
+struct FetchRequest {
+    notification_id: String,
+    notification: Notification,
+    config: Config,
+}
+
+/// Result from background preview fetch
+#[derive(Debug)]
+struct FetchResult {
+    notification_id: String,
+    result: std::result::Result<PreviewData, String>,
+}
 
 pub struct App {
     state: AppState,
@@ -26,8 +46,81 @@ pub struct App {
     api_client: Option<crate::api::GitHubClient>,
     last_refresh: Instant,
     refresh_args: Option<(bool, bool, Option<usize>)>, // (all, participating, max_notifications)
-    preview_cache: HashMap<String, PreviewData>,       // Cache previews by notification ID
+    preview_cache: Arc<Mutex<HashMap<String, PreviewData>>>, // Thread-safe cache
+    preview_loading: Arc<Mutex<HashSet<String>>>,      // Track in-flight requests
     previous_notification_ids: HashSet<String>,        // Track notification IDs for new detection
+    // Background preview fetcher
+    prefetch_tx: Option<Sender<FetchRequest>>,
+    prefetch_result_rx: Option<Receiver<FetchResult>>,
+    prefetch_thread: Option<JoinHandle<()>>,
+}
+
+/// Background worker thread that fetches previews
+fn preview_worker_thread(
+    rx: Receiver<FetchRequest>,
+    tx: Sender<FetchResult>,
+    cache: Arc<Mutex<HashMap<String, PreviewData>>>,
+    loading: Arc<Mutex<HashSet<String>>>,
+) {
+    while let Ok(request) = rx.recv() {
+        // Check cache first (avoid redundant work)
+        {
+            let cache_lock = cache.lock();
+            if cache_lock.contains_key(&request.notification_id) {
+                loading.lock().remove(&request.notification_id);
+                continue;
+            }
+        }
+
+        // Create temporary client for this request
+        let client_result = crate::api::GitHubClient::new(&request.config);
+        let client = match client_result {
+            Ok(c) => c,
+            Err(e) => {
+                // Failed to create client, cache error
+                let error_data = PreviewData::Generic {
+                    title: request.notification.title().to_string(),
+                    notification_type: request.notification.notification_type(),
+                    body: format!("Error creating API client\n\n{}", e),
+                };
+                let mut cache_lock = cache.lock();
+                cache_lock.insert(request.notification_id.clone(), error_data);
+                loading.lock().remove(&request.notification_id);
+                continue;
+            }
+        };
+
+        // Fetch preview
+        let result = PreviewFetcher::fetch_preview(&client, &request.notification)
+            .map_err(|e| e.to_string());
+
+        // Handle result
+        match &result {
+            Ok(data) => {
+                let mut cache_lock = cache.lock();
+                cache_lock.insert(request.notification_id.clone(), data.clone());
+            }
+            Err(error) => {
+                // Cache error to avoid retries
+                let error_data = PreviewData::Generic {
+                    title: request.notification.title().to_string(),
+                    notification_type: request.notification.notification_type(),
+                    body: format!("Error loading details\n\n{}", error),
+                };
+                let mut cache_lock = cache.lock();
+                cache_lock.insert(request.notification_id.clone(), error_data);
+            }
+        }
+
+        // Mark as no longer loading
+        loading.lock().remove(&request.notification_id);
+
+        // Send completion signal
+        let _ = tx.send(FetchResult {
+            notification_id: request.notification_id,
+            result,
+        });
+    }
 }
 
 impl App {
@@ -44,13 +137,33 @@ impl App {
             api_client: None,
             last_refresh: Instant::now(),
             refresh_args: None,
-            preview_cache: HashMap::new(),
+            preview_cache: Arc::new(Mutex::new(HashMap::new())),
+            preview_loading: Arc::new(Mutex::new(HashSet::new())),
             previous_notification_ids: HashSet::new(),
+            prefetch_tx: None,
+            prefetch_result_rx: None,
+            prefetch_thread: None,
         }
     }
 
     pub fn set_api_client(&mut self, client: crate::api::GitHubClient) {
         self.api_client = Some(client);
+    }
+
+    /// Start the background preview worker thread
+    pub fn start_preview_worker(&mut self) {
+        let (req_tx, req_rx) = channel::<FetchRequest>();
+        let (result_tx, result_rx) = channel::<FetchResult>();
+        let cache = Arc::clone(&self.preview_cache);
+        let loading = Arc::clone(&self.preview_loading);
+
+        let handle = thread::spawn(move || {
+            preview_worker_thread(req_rx, result_tx, cache, loading);
+        });
+
+        self.prefetch_tx = Some(req_tx);
+        self.prefetch_result_rx = Some(result_rx);
+        self.prefetch_thread = Some(handle);
     }
 
     /// Open a URL in the browser using custom command if configured, otherwise system default.
@@ -243,55 +356,58 @@ impl App {
     }
 
     fn fetch_preview_for_selected_notification(&mut self) {
-        // Check cache first before fetching
-        if let Some(notification) = self.state.selected_notification() {
-            let notification_id = notification.id.clone();
+        // Get selected notification and clone data we need
+        let (notification_id, notification_type, notification_clone) =
+            match self.state.selected_notification() {
+                Some(n) => (n.id.clone(), n.notification_type(), n.clone()),
+                None => {
+                    self.state.preview_content = None;
+                    return;
+                }
+            };
 
-            // Check if we have this preview cached
-            if let Some(cached_content) = self.preview_cache.get(&notification_id) {
-                // Use cached content
-                self.state.preview_content = Some(cached_content.clone());
+        // Check cache first
+        {
+            let cache = self.preview_cache.lock();
+            if let Some(cached) = cache.get(&notification_id) {
+                self.state.preview_content = Some(cached.clone());
                 self.state.preview_scroll = 0;
                 return;
             }
+        }
 
-            // Not in cache, fetch it
-            let title = notification.title().to_string();
-            let repo = notification.repo_full_name().to_string();
-            let notification_type = notification.notification_type();
-
-            if let Some(ref client) = self.api_client {
-                match PreviewFetcher::fetch_preview(client, notification) {
-                    Ok(content) => {
-                        // Store in cache
-                        self.preview_cache
-                            .insert(notification_id.clone(), content.clone());
-                        self.state.preview_content = Some(content);
-                        self.state.preview_scroll = 0;
-                    }
-                    Err(_e) => {
-                        // Cache error message too, so we don't retry failed requests
-                        let error_content = PreviewData::Generic {
-                            title: title.clone(),
-                            notification_type,
-                            body: format!("Error loading preview\n\nRepository: {}", repo),
-                        };
-                        self.preview_cache
-                            .insert(notification_id.clone(), error_content.clone());
-                        self.state.preview_content = Some(error_content);
-                    }
-                }
-            } else {
-                // Cache error message for missing API client
-                let error_content = PreviewData::Generic {
-                    title: title.clone(),
+        // Check if already loading
+        {
+            let loading = self.preview_loading.lock();
+            if loading.contains(&notification_id) {
+                // Already being fetched, show loading state
+                self.state.preview_content = Some(PreviewData::Generic {
+                    title: "Loading details...".to_string(),
                     notification_type,
-                    body: format!("API client not available\n\nRepository: {}", repo),
-                };
-                self.preview_cache
-                    .insert(notification_id.clone(), error_content.clone());
-                self.state.preview_content = Some(error_content);
+                    body: "⏳ Fetching details...\n\nThis may take a moment.".to_string(),
+                });
+                return;
             }
+        }
+
+        // Mark as loading
+        self.preview_loading.lock().insert(notification_id.clone());
+
+        // Show loading state immediately
+        self.state.preview_content = Some(PreviewData::Generic {
+            title: "Loading details...".to_string(),
+            notification_type,
+            body: "⏳ Fetching details...\n\nThis may take a moment.".to_string(),
+        });
+        self.state.preview_scroll = 0;
+
+        // Send to background thread
+        if let Some(ref tx) = self.prefetch_tx {
+            let _ = tx.send(FetchRequest {
+                notification_id,
+                notification: notification_clone,
+                config: self.config.clone(),
+            });
         }
     }
 
@@ -319,6 +435,23 @@ impl App {
                         // In production, this could be sent to a logging system
                         // For now, we silently continue to avoid UI disruption
                         let _ = e; // Acknowledge error but don't panic
+                    }
+                }
+            }
+
+            // Poll for background fetch completions (non-blocking)
+            if let Some(ref rx) = self.prefetch_result_rx {
+                while let Ok(result) = rx.try_recv() {
+                    // Check if this is for the currently selected notification
+                    if let Some(current_notif) = self.state.selected_notification() {
+                        if current_notif.id == result.notification_id {
+                            // Update preview with fetched data
+                            let cache = self.preview_cache.lock();
+                            if let Some(data) = cache.get(&result.notification_id) {
+                                self.state.preview_content = Some(data.clone());
+                                self.state.preview_scroll = 0;
+                            }
+                        }
                     }
                 }
             }
@@ -1174,5 +1307,17 @@ impl App {
             }
         }
         Ok(())
+    }
+}
+
+impl Drop for App {
+    fn drop(&mut self) {
+        // Signal worker to exit by dropping the channel
+        drop(self.prefetch_tx.take());
+
+        // Wait for worker thread to finish
+        if let Some(handle) = self.prefetch_thread.take() {
+            let _ = handle.join();
+        }
     }
 }
