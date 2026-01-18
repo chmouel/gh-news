@@ -41,7 +41,7 @@ jobs:
       - name: Build
         shell: bash
         run: scripts/build_dist.sh release
-      - uses: cli/gh-extension-precompile@v1
+      - uses: cli/gh-extension-precompile@v2
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
         with:
           build_script_override: "scripts/build_dist.sh"
