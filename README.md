@@ -9,9 +9,13 @@ GitHub notifications TUI built with Rust and ratatui.
 Build from source:
 
 ```bash
-git clone https://github.com/chmouel/gh-news.git
-cd gh-news
-cargo build --release
+gh extension install chmouel/gh-news
+```
+
+Then run it:
+
+```bash
+gh news
 ```
 
 Or install with cargo:
