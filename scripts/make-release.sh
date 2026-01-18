@@ -4,6 +4,12 @@ VERSION=${1-""}
 CARGO_VERSION=$(grep '^version = "' Cargo.toml | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+')
 PKGNAME=$(grep '^name = "' Cargo.toml | sed -E 's/.*"([^"]*)"/\1/')
 
+# Make sure we are clean git state
+[[ -n $(git status --porcelain) ]] && {
+  echo "you have uncommitted changes, please commit or stash them first"
+  exit 1
+}
+
 bumpversion() {
   current=$(git describe --tags $(git rev-list --tags --max-count=1) || echo 0.0.0)
   echo "Current tag version is ${current}"
