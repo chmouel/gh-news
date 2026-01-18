@@ -48,8 +48,8 @@ impl AppStateFile {
         let path = Self::get_state_path()?;
 
         if !path.exists() {
-            // Return default if file doesn't exist
-            return Ok(PreviewMode::Horizontal);
+            // Return error so caller can use its own default
+            return Err(Error::Config("State file does not exist".to_string()));
         }
 
         let content = fs::read_to_string(&path).map_err(Error::Io)?;

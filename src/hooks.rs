@@ -43,10 +43,7 @@ pub fn execute_new_notification_hook(
         .env("GH_NEWS_TITLE", notification.title())
         .env("GH_NEWS_REPO", repo_name)
         .env("GH_NEWS_OWNER", owner)
-        .env(
-            "GH_NEWS_TYPE",
-            notification.notification_type().to_string(),
-        )
+        .env("GH_NEWS_TYPE", notification.notification_type().to_string())
         .env("GH_NEWS_REASON", notification.reason_enum().to_string())
         .env("GH_NEWS_UNREAD", notification.unread.to_string());
 

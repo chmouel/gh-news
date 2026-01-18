@@ -62,7 +62,7 @@ impl AppState {
             expanded_repos: HashMap::new(),
             selected_index: 0,
             filter: None,
-            preview_mode: PreviewMode::Horizontal, // Preview open by default
+            preview_mode: PreviewMode::Vertical, // Preview open by default
             focused_pane: PaneFocus::None,
             show_help: false,
             preview_content: None,

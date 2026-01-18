@@ -44,7 +44,7 @@ impl Default for Config {
             show_read: false,
             participating_only: false,
             default_filter: None,
-            default_preview_mode: "horizontal".to_string(),
+            default_preview_mode: "vertical".to_string(),
             repos_collapsed: false,
             browser_command: None,
             on_new_notification_command: None,

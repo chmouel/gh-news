@@ -109,7 +109,7 @@ participating_only = false   # only participating (like --participating)
 default_filter = ""          # regex filter always applied
 
 # Display
-default_preview_mode = "horizontal"  # "off", "horizontal", or "vertical"
+default_preview_mode = "vertical"    # "off", "horizontal", or "vertical"
 repos_collapsed = false              # start with repos collapsed
 
 # External commands
