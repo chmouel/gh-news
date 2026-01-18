@@ -2,10 +2,10 @@
 set -euf
 VERSION=${1-""}
 CARGO_VERSION=$(grep '^version = "' Cargo.toml | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+')
-PKGNAME=$(grep '^name = "' Cargo.toml | sed -E 's/.*"(\w+)"/\1/')
+PKGNAME=$(grep '^name = "' Cargo.toml | sed -E 's/.*"([^"]*)"/\1/')
 
 bumpversion() {
-  current=$(git describe --tags $(git rev-list --tags --max-count=1))
+  current=$(git describe --tags $(git rev-list --tags --max-count=1) || echo 0.0.0)
   echo "Current tag version is ${current}"
 
   major=$(uv run --with semver python3 -c "import semver,sys;print(str(semver.VersionInfo.parse(sys.argv[1]).bump_major()))" ${current})
