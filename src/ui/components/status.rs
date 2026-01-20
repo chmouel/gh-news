@@ -18,6 +18,8 @@ impl StatusWidget {
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect, state: &AppState, config: &Config) {
+        let colors = crate::ui::theme::TokyoNight::colors();
+
         let interval_text = if config.auto_refresh_interval > 0 {
             if config.auto_refresh_interval >= 60 {
                 format!("🔄 {}min", config.auto_refresh_interval / 60)
@@ -40,7 +42,6 @@ impl StatusWidget {
             })
             .count();
 
-        let colors = crate::ui::theme::TokyoNight::colors();
         let status_parts = vec![
             Span::styled("❓ ", Style::default().fg(colors.yellow)),
             Span::styled("help", self.theme.status_bar),
@@ -58,6 +59,18 @@ impl StatusWidget {
                 .push(Span::styled(interval_text, self.theme.status_bar));
         }
 
+        // Show active filter indicator when not in search mode
+        if let Some(ref pattern) = state.filter_pattern {
+            status_line.spans.push(Span::raw(" · "));
+            status_line
+                .spans
+                .push(Span::styled("🔍 ", Style::default().fg(colors.cyan)));
+            status_line.spans.push(Span::styled(
+                format!("\"{}\"", pattern),
+                Style::default().fg(colors.cyan),
+            ));
+        }
+
         status_line.spans.push(Span::raw(" · "));
         status_line.spans.push(Span::styled(
             format!("📬 {} notifications", state.visible_count()),
@@ -66,7 +79,6 @@ impl StatusWidget {
 
         if unread_count > 0 {
             status_line.spans.push(Span::raw(" · "));
-            let colors = crate::ui::theme::TokyoNight::colors();
             status_line.spans.push(Span::styled(
                 format!("🔴 {} unread", unread_count),
                 Style::default().fg(colors.red).add_modifier(Modifier::BOLD),

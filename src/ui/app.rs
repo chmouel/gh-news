@@ -1,11 +1,12 @@
 use crate::config::Config;
 use crate::error::Result;
+use crate::filter::Filter;
 use crate::hooks;
 use crate::models::Notification;
 use crate::preview::{PreviewData, PreviewFetcher};
 use crate::state::{AppState, ConfirmAction, InputMode, MarkAllOption, PaneFocus, PreviewMode};
 use crate::terminal::Terminal;
-use crate::ui::components::{confirm, help, list, loading, preview, status};
+use crate::ui::components::{confirm, filter, help, list, loading, preview, status};
 use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
     MouseEventKind,
@@ -46,6 +47,7 @@ pub struct App {
     help_widget: help::HelpWidget,
     confirm_widget: confirm::ConfirmWidget,
     loading_widget: loading::LoadingWidget,
+    filter_widget: filter::FilterWidget,
     api_client: Option<crate::api::GitHubClient>,
     last_refresh: Instant,
     refresh_args: Option<(bool, bool, Option<usize>)>, // (all, participating, max_notifications)
@@ -143,6 +145,7 @@ impl App {
             help_widget: help::HelpWidget::new(),
             confirm_widget: confirm::ConfirmWidget::new(),
             loading_widget: loading::LoadingWidget::new(),
+            filter_widget: filter::FilterWidget::new(),
             api_client: None,
             last_refresh: Instant::now(),
             refresh_args: None,
@@ -709,6 +712,11 @@ impl App {
             }
         }
 
+        // Render filter input as overlay (if in search mode)
+        if self.state.input_mode == InputMode::Search {
+            self.filter_widget.render(frame, size, &self.state);
+        }
+
         // Render confirmation dialog as overlay (if active)
         if self.state.input_mode == InputMode::Confirm {
             if let Some(ConfirmAction::MarkAllRead { selected }) = self.state.confirm_action {
@@ -1188,6 +1196,11 @@ impl App {
                     self.state.input_mode = InputMode::Confirm;
                 }
             }
+            KeyCode::Char('/') => {
+                // Enter interactive filter mode
+                self.state.search_query.clear();
+                self.state.input_mode = InputMode::Search;
+            }
             _ => {}
         }
         Ok(())
@@ -1196,22 +1209,46 @@ impl App {
     fn handle_search_key(&mut self, key: KeyEvent) -> Result<()> {
         match key.code {
             KeyCode::Esc => {
+                // Clear filter and exit search mode
                 self.state.input_mode = InputMode::Normal;
                 self.state.search_query.clear();
+                self.state.set_filter(None);
+                self.state.set_filter_pattern(None);
             }
             KeyCode::Enter => {
+                // Keep current filter and exit search mode
                 self.state.input_mode = InputMode::Normal;
-                // Apply search filter
             }
             KeyCode::Char(c) => {
                 self.state.search_query.push(c);
+                self.apply_search_filter();
             }
             KeyCode::Backspace => {
                 self.state.search_query.pop();
+                self.apply_search_filter();
             }
             _ => {}
         }
         Ok(())
+    }
+
+    fn apply_search_filter(&mut self) {
+        if self.state.search_query.is_empty() {
+            self.state.set_filter(None);
+            self.state.set_filter_pattern(None);
+        } else {
+            // Try as regex first, fall back to case-insensitive literal match
+            let pattern = &self.state.search_query;
+            let filter = Filter::new(Some(&format!("(?i){}", pattern)))
+                .or_else(|_| {
+                    // Invalid regex, escape it and use as literal
+                    Filter::new(Some(&format!("(?i){}", regex::escape(pattern))))
+                })
+                .ok();
+            self.state.set_filter(filter);
+            self.state
+                .set_filter_pattern(Some(self.state.search_query.clone()));
+        }
     }
 
     fn handle_mouse(&mut self, mouse_event: MouseEvent, size: Rect) -> Result<()> {

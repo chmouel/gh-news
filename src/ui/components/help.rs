@@ -132,6 +132,12 @@ impl HelpWidget {
                 colors.green,
                 colors.fg_muted,
             ),
+            make_key_line(
+                "/",
+                "Filter notifications (type to search)",
+                colors.green,
+                colors.fg_muted,
+            ),
             Line::from(""),
             // Preview Section
             Line::from(vec![Span::styled(

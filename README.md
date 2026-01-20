@@ -92,6 +92,7 @@ gh news --static-display | grep "something"
 - `t` - Toggle read/unread status
 - `!` - Pin/unpin notification (pinned appear at top)
 - `M` - Toggle auto-mark-read on scroll
+- `/` - Filter notifications (type to search, Enter to keep, Esc to clear)
 - `Tab` - Cycle preview modes (Off → Horizontal → Vertical)
 - `J`/`K` - Scroll preview (line by line)
 - `Shift+U`/`Shift+D` - Scroll preview (5 lines)
