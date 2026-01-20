@@ -772,19 +772,33 @@ impl App {
                 if let Some(ref client) = self.api_client {
                     match selected {
                         MarkAllOption::MarkReadAndArchive => {
-                            // Archive (mark as done) each notification individually
+                            // Archive (mark as done) each non-pinned notification individually
                             for notif in &self.state.notifications {
-                                let _ = client.mark_thread_done(&notif.id);
+                                if !self.state.is_pinned(&notif.id) {
+                                    let _ = client.mark_thread_done(&notif.id);
+                                }
                             }
                         }
                         MarkAllOption::MarkReadOnly => {
-                            // Just mark all as read
-                            client.mark_all_read(None)?;
+                            // Mark each non-pinned notification as read individually
+                            for notif in &self.state.notifications {
+                                if !self.state.is_pinned(&notif.id) {
+                                    let _ = client.mark_notification_read(&notif.id);
+                                }
+                            }
                         }
                     }
-                    // Update local state
+                    // Update local state (skip pinned notifications)
+                    let pinned_ids: HashSet<_> = self
+                        .state
+                        .pinned_notifications
+                        .iter()
+                        .map(|n| n.id.as_str())
+                        .collect();
                     for notif in &mut self.state.notifications {
-                        notif.unread = false;
+                        if !pinned_ids.contains(notif.id.as_str()) {
+                            notif.unread = false;
+                        }
                     }
                     // Refresh to sync with server
                     self.refresh_notifications()?;
