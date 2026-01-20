@@ -24,6 +24,9 @@ pub struct Config {
     pub default_preview_mode: String,
     pub repos_collapsed: bool,
 
+    // Behaviour
+    pub auto_mark_read: bool,
+
     // External commands
     pub browser_command: Option<String>,
 
@@ -46,6 +49,7 @@ impl Default for Config {
             default_filter: None,
             default_preview_mode: "vertical".to_string(),
             repos_collapsed: false,
+            auto_mark_read: true,
             browser_command: None,
             on_new_notification_command: None,
             github_host: "github.com".to_string(),

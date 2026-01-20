@@ -32,4 +32,8 @@ pub struct Args {
     /// Print a static display (non-interactive)
     #[arg(short = 's', long)]
     pub static_display: bool,
+
+    /// Disable auto-marking notifications as read when navigating
+    #[arg(long)]
+    pub no_auto_mark_read: bool,
 }

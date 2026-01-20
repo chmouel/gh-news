@@ -7,12 +7,19 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppStateFile {
     pub preview_mode: String,
+    #[serde(default = "default_auto_mark_read")]
+    pub auto_mark_read: bool,
+}
+
+fn default_auto_mark_read() -> bool {
+    true
 }
 
 impl AppStateFile {
-    pub fn new(preview_mode: PreviewMode) -> Self {
+    pub fn new(preview_mode: PreviewMode, auto_mark_read: bool) -> Self {
         Self {
             preview_mode: preview_mode_to_string(preview_mode),
+            auto_mark_read,
         }
     }
 
@@ -32,23 +39,10 @@ impl AppStateFile {
         Ok(state_dir.join("state.toml"))
     }
 
-    pub fn save(preview_mode: PreviewMode) -> Result<()> {
-        let state = Self::new(preview_mode);
-        let path = Self::get_state_path()?;
-
-        let toml_content = toml::to_string_pretty(&state)
-            .map_err(|e| Error::Config(format!("Failed to serialize state: {}", e)))?;
-
-        fs::write(&path, toml_content).map_err(Error::Io)?;
-
-        Ok(())
-    }
-
-    pub fn load() -> Result<PreviewMode> {
+    fn load_full() -> Result<AppStateFile> {
         let path = Self::get_state_path()?;
 
         if !path.exists() {
-            // Return error so caller can use its own default
             return Err(Error::Config("State file does not exist".to_string()));
         }
 
@@ -57,7 +51,44 @@ impl AppStateFile {
         let state: AppStateFile = toml::from_str(&content)
             .map_err(|e| Error::Config(format!("Failed to parse state: {}", e)))?;
 
+        Ok(state)
+    }
+
+    fn save_full(&self) -> Result<()> {
+        let path = Self::get_state_path()?;
+
+        let toml_content = toml::to_string_pretty(self)
+            .map_err(|e| Error::Config(format!("Failed to serialize state: {}", e)))?;
+
+        fs::write(&path, toml_content).map_err(Error::Io)?;
+
+        Ok(())
+    }
+
+    pub fn save(preview_mode: PreviewMode) -> Result<()> {
+        // Load existing state to preserve other fields
+        let mut state =
+            Self::load_full().unwrap_or_else(|_| Self::new(preview_mode, default_auto_mark_read()));
+        state.preview_mode = preview_mode_to_string(preview_mode);
+        state.save_full()
+    }
+
+    pub fn load() -> Result<PreviewMode> {
+        let state = Self::load_full()?;
         Ok(state.get_preview_mode())
+    }
+
+    pub fn save_auto_mark_read(auto_mark_read: bool) -> Result<()> {
+        // Load existing state to preserve other fields
+        let mut state =
+            Self::load_full().unwrap_or_else(|_| Self::new(PreviewMode::Vertical, auto_mark_read));
+        state.auto_mark_read = auto_mark_read;
+        state.save_full()
+    }
+
+    pub fn load_auto_mark_read() -> Result<bool> {
+        let state = Self::load_full()?;
+        Ok(state.auto_mark_read)
     }
 }
 

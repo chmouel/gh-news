@@ -51,6 +51,7 @@ gh news
 - `-p, --participating` - Only show notifications where you're participating/mentioned
 - `-r, --mark-read` - Mark all notifications as read (non-interactive)
 - `-s, --static-display` - Print notifications and exit (for scripts)
+- `--no-auto-mark-read` - Disable auto-marking notifications as read when navigating
 
 ### Examples
 
@@ -88,6 +89,7 @@ gh news --static-display | grep "something"
 - `Space` - Toggle repository expansion
 - `h` - Collapse current repository
 - `t` - Toggle read/unread status
+- `M` - Toggle auto-mark-read on scroll
 - `Tab` - Cycle preview modes (Off → Horizontal → Vertical)
 - `J`/`K` - Scroll preview (line by line)
 - `Shift+U`/`Shift+D` - Scroll preview (5 lines)
@@ -117,6 +119,9 @@ default_filter = ""          # regex filter always applied
 # Display
 default_preview_mode = "vertical"    # "off", "horizontal", or "vertical"
 repos_collapsed = false              # start with repos collapsed
+
+# Behaviour
+auto_mark_read = true                # mark notifications read when navigating to them
 
 # External commands
 browser_command = ""         # custom browser, e.g. "firefox" (uses system default if empty)

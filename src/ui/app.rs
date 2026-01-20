@@ -33,6 +33,9 @@ struct FetchResult {
     notification_id: String,
 }
 
+/// Dwell time before auto-marking a notification as read (ms)
+const AUTO_MARK_READ_DWELL_MS: u64 = 400;
+
 pub struct App {
     state: AppState,
     config: Config,
@@ -53,6 +56,9 @@ pub struct App {
     prefetch_tx: Option<Sender<FetchRequest>>,
     prefetch_result_rx: Option<Receiver<FetchResult>>,
     prefetch_thread: Option<JoinHandle<()>>,
+    // Auto-mark-read state
+    auto_mark_read_enabled: bool,
+    pending_mark_read: Option<(String, Instant)>, // (notification_id, timestamp)
 }
 
 /// Background worker thread that fetches previews
@@ -124,6 +130,7 @@ fn preview_worker_thread(
 
 impl App {
     pub fn new(config: Config) -> Self {
+        let auto_mark_read = config.auto_mark_read;
         Self {
             state: AppState::new(),
             config,
@@ -143,6 +150,51 @@ impl App {
             prefetch_tx: None,
             prefetch_result_rx: None,
             prefetch_thread: None,
+            auto_mark_read_enabled: auto_mark_read,
+            pending_mark_read: None,
+        }
+    }
+
+    pub fn set_auto_mark_read(&mut self, enabled: bool) {
+        self.auto_mark_read_enabled = enabled;
+    }
+
+    /// Queue the currently selected notification for auto-mark-read after dwell time
+    fn queue_auto_mark_read(&mut self) {
+        if !self.auto_mark_read_enabled {
+            return;
+        }
+
+        if let Some(notification) = self.state.selected_notification() {
+            if notification.is_unread() {
+                let notification_id = notification.id.clone();
+                self.pending_mark_read = Some((notification_id, Instant::now()));
+            } else {
+                self.pending_mark_read = None;
+            }
+        } else {
+            self.pending_mark_read = None;
+        }
+    }
+
+    /// Process pending auto-mark-read if dwell time has elapsed
+    fn process_pending_mark_read(&mut self) {
+        let dwell_time = Duration::from_millis(AUTO_MARK_READ_DWELL_MS);
+
+        if let Some((ref notification_id, timestamp)) = self.pending_mark_read.clone() {
+            if timestamp.elapsed() >= dwell_time {
+                // Update local state optimistically
+                self.state.mark_notification_read(notification_id);
+
+                // Call API (non-blocking, log errors)
+                if let Some(ref client) = self.api_client {
+                    if let Err(e) = client.mark_notification_read(notification_id) {
+                        eprintln!("Failed to auto-mark notification as read: {}", e);
+                    }
+                }
+
+                self.pending_mark_read = None;
+            }
         }
     }
 
@@ -505,6 +557,9 @@ impl App {
                 }
             }
 
+            // Process pending auto-mark-read (debounced)
+            self.process_pending_mark_read();
+
             // Use standard timeout for native ratatui behavior
             let timeout = Duration::from_millis(250); // Standard ratatui polling timeout
 
@@ -789,6 +844,7 @@ impl App {
                     self.fetch_preview_for_selected_notification();
                     self.prefetch_next_preview();
                 }
+                self.queue_auto_mark_read();
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 self.state.move_down();
@@ -799,6 +855,7 @@ impl App {
                     self.fetch_preview_for_selected_notification();
                     self.prefetch_next_preview();
                 }
+                self.queue_auto_mark_read();
             }
             KeyCode::PageUp => {
                 if self.state.show_preview() {
@@ -815,6 +872,7 @@ impl App {
                         self.fetch_preview_for_selected_notification();
                         self.prefetch_next_preview();
                     }
+                    self.queue_auto_mark_read();
                 }
             }
             KeyCode::PageDown => {
@@ -832,6 +890,7 @@ impl App {
                         self.fetch_preview_for_selected_notification();
                         self.prefetch_next_preview();
                     }
+                    self.queue_auto_mark_read();
                 }
             }
             KeyCode::Home => {
@@ -841,6 +900,7 @@ impl App {
                     self.fetch_preview_for_selected_notification();
                     self.prefetch_next_preview();
                 }
+                self.queue_auto_mark_read();
             }
             KeyCode::End => {
                 if !self.state.tree_items.is_empty() {
@@ -851,6 +911,7 @@ impl App {
                     self.fetch_preview_for_selected_notification();
                     self.prefetch_next_preview();
                 }
+                self.queue_auto_mark_read();
             }
             KeyCode::Enter => {
                 // If selected item is a repository header, expand it and select first notification
@@ -1014,6 +1075,22 @@ impl App {
                 if self.state.show_preview() && self.state.preview_content.is_none() {
                     self.fetch_preview_for_selected_notification();
                     self.prefetch_next_preview();
+                }
+            }
+            KeyCode::Char('M') => {
+                // Toggle auto-mark-read on scroll
+                self.auto_mark_read_enabled = !self.auto_mark_read_enabled;
+
+                // Clear pending mark if disabling
+                if !self.auto_mark_read_enabled {
+                    self.pending_mark_read = None;
+                }
+
+                // Save to state file
+                if let Err(e) = crate::state_file::AppStateFile::save_auto_mark_read(
+                    self.auto_mark_read_enabled,
+                ) {
+                    let _ = e;
                 }
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::SHIFT) => {
@@ -1330,6 +1407,7 @@ impl App {
                                 self.fetch_preview_for_selected_notification();
                                 self.prefetch_next_preview();
                             }
+                            self.queue_auto_mark_read();
                         } else if let Some(crate::state::TreeItem::RepositoryHeader(repo_name)) =
                             self.state.tree_items.get(clicked_item_idx)
                         {
@@ -1362,6 +1440,7 @@ impl App {
                                     self.fetch_preview_for_selected_notification();
                                     self.prefetch_next_preview();
                                 }
+                                self.queue_auto_mark_read();
                             }
                         } else {
                             // Clicked outside list items (on borders/padding) - toggle zoom
@@ -1431,6 +1510,7 @@ impl App {
                                 self.fetch_preview_for_selected_notification();
                                 self.prefetch_next_preview();
                             }
+                            self.queue_auto_mark_read();
                         }
                     }
                 }

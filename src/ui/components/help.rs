@@ -125,6 +125,12 @@ impl HelpWidget {
                 colors.green,
                 colors.fg_muted,
             ),
+            make_key_line(
+                "M",
+                "Toggle auto-mark-read on scroll",
+                colors.green,
+                colors.fg_muted,
+            ),
             Line::from(""),
             // Preview Section
             Line::from(vec![Span::styled(

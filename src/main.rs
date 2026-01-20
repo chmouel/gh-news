@@ -34,6 +34,7 @@ struct RuntimeOptions {
     participating: bool,
     max_notifications: Option<usize>,
     filter_pattern: Option<String>,
+    auto_mark_read: bool,
 }
 
 impl RuntimeOptions {
@@ -45,6 +46,8 @@ impl RuntimeOptions {
             // CLI takes precedence if provided
             max_notifications: args.max_notifications.or(config.max_notifications),
             filter_pattern: args.filter.clone().or(config.default_filter.clone()),
+            // CLI --no-auto-mark-read overrides config
+            auto_mark_read: !args.no_auto_mark_read && config.auto_mark_read,
         }
     }
 }
@@ -109,6 +112,16 @@ fn run() -> Result<()> {
         }
         Err(_) => {
             app_state.preview_mode = config.get_default_preview_mode();
+        }
+    }
+
+    // Try to load saved auto_mark_read from state file, fallback to runtime option
+    match state_file::AppStateFile::load_auto_mark_read() {
+        Ok(saved_auto_mark_read) => {
+            app.set_auto_mark_read(saved_auto_mark_read);
+        }
+        Err(_) => {
+            app.set_auto_mark_read(opts.auto_mark_read);
         }
     }
 
