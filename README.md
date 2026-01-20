@@ -66,6 +66,7 @@ gh news --static-display | grep "something" # List notifications without TUI
 - `Space` - Toggle repository expansion
 - `h` - Collapse current repository
 - `.` - Toggle read/unread status
+- `A` - Toggle showing read notifications
 - `!` - Pin/unpin notification (pinned appear at top)
 - `M` - Toggle auto-mark-read on scroll
 - `/` - Filter notifications (type to search, Enter to keep, Esc to clear)

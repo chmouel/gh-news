@@ -1196,6 +1196,17 @@ impl App {
                 // Force refresh notifications
                 self.refresh_notifications()?;
             }
+            KeyCode::Char('A') | KeyCode::Char('a')
+                if key.modifiers.contains(KeyModifiers::SHIFT) =>
+            {
+                // Toggle showing read notifications
+                self.state.show_all = !self.state.show_all;
+                if let Some((_, participating, max_notifications)) = self.refresh_args {
+                    self.refresh_args =
+                        Some((self.state.show_all, participating, max_notifications));
+                }
+                self.refresh_notifications()?;
+            }
             KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 // Show confirmation dialog for mark all as read
                 if !self.state.notifications.is_empty() {
