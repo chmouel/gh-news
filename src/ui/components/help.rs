@@ -113,7 +113,7 @@ impl HelpWidget {
                 colors.fg_muted,
             ),
             make_key_line(
-                "t",
+                ".",
                 "Toggle read/unread status",
                 colors.green,
                 colors.fg_muted,

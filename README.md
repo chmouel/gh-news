@@ -4,7 +4,6 @@ GitHub notifications TUI built with Rust and ratatui.
 
 <img width="1865" height="1242" alt="Screenshot 2026-01-20 at 14 58 15" src="https://github.com/user-attachments/assets/dae19973-afdc-4b67-abdf-d63ff8f1446a" />
 
-
 ## Installation
 
 Install as a `gh` CLI extension (easiest):
@@ -66,7 +65,7 @@ gh news --static-display | grep "something" # List notifications without TUI
 - `o` - Open notification in browser without marking as read
 - `Space` - Toggle repository expansion
 - `h` - Collapse current repository
-- `t` - Toggle read/unread status
+- `.` - Toggle read/unread status
 - `!` - Pin/unpin notification (pinned appear at top)
 - `M` - Toggle auto-mark-read on scroll
 - `/` - Filter notifications (type to search, Enter to keep, Esc to clear)

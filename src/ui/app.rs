@@ -1064,7 +1064,7 @@ impl App {
                     }
                 }
             }
-            KeyCode::Char('t') => {
+            KeyCode::Char('.') => {
                 // Toggle read/unread status of selected notification
                 if let Some(notification) = self.state.selected_notification() {
                     let notification_id = notification.id.clone();
@@ -1082,6 +1082,15 @@ impl App {
                                     // Revert local state on API failure
                                     self.state.toggle_notification_read(&notification_id);
                                 }
+                            }
+                            // Move to next notification
+                            self.state.move_down();
+                            // Scroll preview to top when selection changes
+                            self.state.preview_scroll = 0;
+                            // Auto-fetch preview for the newly selected notification
+                            if self.state.show_preview() {
+                                self.fetch_preview_for_selected_notification();
+                                self.prefetch_next_preview();
                             }
                         }
                         // If marking as unread (was read, now unread), just update local state
