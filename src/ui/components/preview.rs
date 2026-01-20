@@ -58,18 +58,34 @@ impl PreviewWidget {
             self.render_preview_data(frame, inner_area, preview_data, state, &colors);
         } else {
             // No preview available
-            let empty_text = vec![
-                Line::from(""),
-                Line::from(vec![Span::styled(
-                    "📄 No preview available",
-                    Style::default().fg(colors.fg_dim),
-                )]),
-                Line::from(""),
-                Line::from(vec![Span::styled(
-                    "Select a notification to view its content",
-                    Style::default().fg(colors.fg_muted),
-                )]),
-            ];
+            let empty_text =
+                if state.filtered_notifications.is_empty() && !state.notifications.is_empty() {
+                    vec![
+                        Line::from(""),
+                        Line::from(vec![Span::styled(
+                            "🔍 Filtering active",
+                            Style::default().fg(colors.fg_dim),
+                        )]),
+                        Line::from(""),
+                        Line::from(vec![Span::styled(
+                            "No notifications match your filter",
+                            Style::default().fg(colors.fg_muted),
+                        )]),
+                    ]
+                } else {
+                    vec![
+                        Line::from(""),
+                        Line::from(vec![Span::styled(
+                            "📄 No preview available",
+                            Style::default().fg(colors.fg_dim),
+                        )]),
+                        Line::from(""),
+                        Line::from(vec![Span::styled(
+                            "Select a notification to view its content",
+                            Style::default().fg(colors.fg_muted),
+                        )]),
+                    ]
+                };
 
             let paragraph = Paragraph::new(empty_text)
                 .style(self.theme.preview)

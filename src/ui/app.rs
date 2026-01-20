@@ -812,6 +812,8 @@ impl App {
         self.status_widget
             .render(frame, chunks[0], &self.state, &self.config);
 
+        let preview_mode = self.effective_preview_mode();
+
         // Check if a pane is focused (zoomed)
         match self.state.focused_pane {
             PaneFocus::Pane1 => {
@@ -829,7 +831,7 @@ impl App {
             }
             PaneFocus::None => {
                 // Normal split layout based on preview_mode
-                let main_chunks = match self.state.preview_mode {
+                let main_chunks = match preview_mode {
                     PreviewMode::Off => Layout::default()
                         .direction(Direction::Horizontal)
                         .constraints([Constraint::Percentage(100)])
@@ -854,7 +856,7 @@ impl App {
                     }
                 };
 
-                match self.state.preview_mode {
+                match preview_mode {
                     PreviewMode::Off => {
                         self.list_widget.render(frame, main_chunks[0], &self.state);
                     }
@@ -1437,6 +1439,14 @@ impl App {
         Ok(())
     }
 
+    fn effective_preview_mode(&self) -> PreviewMode {
+        if self.state.show_preview() {
+            self.state.preview_mode
+        } else {
+            PreviewMode::Off
+        }
+    }
+
     fn get_list_area(&self, size: Rect) -> Option<Rect> {
         // Account for status bar (1 line at top)
         if size.height < 2 {
@@ -1468,7 +1478,7 @@ impl App {
             }
             PaneFocus::None => {
                 // Split view - determine list area based on preview_mode
-                match self.state.preview_mode {
+                match self.effective_preview_mode() {
                     PreviewMode::Off => Some(main_area),
                     PreviewMode::Horizontal => {
                         let chunks = Layout::default()
@@ -1610,7 +1620,7 @@ impl App {
             }
             PaneFocus::None => {
                 // Split view - determine which pane based on preview_mode
-                match self.state.preview_mode {
+                match self.effective_preview_mode() {
                     PreviewMode::Off => {
                         // Only Pane1 exists
                         Some(PaneFocus::Pane1)

@@ -435,7 +435,7 @@ impl AppState {
     }
 
     pub fn show_preview(&self) -> bool {
-        self.preview_mode != PreviewMode::Off
+        self.preview_mode != PreviewMode::Off && !self.notifications.is_empty()
     }
 
     pub fn mark_notification_read(&mut self, notification_id: &str) {
