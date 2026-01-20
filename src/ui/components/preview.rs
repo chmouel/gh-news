@@ -4,7 +4,10 @@ use crate::state::AppState;
 use crate::ui::theme::{Theme, TokyoNight};
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarState},
+    widgets::{
+        block::{Position, Title},
+        Block, Borders, Paragraph, Scrollbar, ScrollbarState,
+    },
 };
 
 pub struct PreviewWidget {
@@ -36,6 +39,13 @@ impl PreviewWidget {
                         .fg(self.theme.highlight_fg)
                         .add_modifier(Modifier::BOLD),
                 ),
+            )
+            .title(
+                Title::from(
+                    Line::from(" ? Help q Quit ").style(Style::default().fg(colors.fg_dim)),
+                )
+                .alignment(Alignment::Right)
+                .position(Position::Bottom),
             )
             .border_style(self.theme.border)
             .border_type(ratatui::widgets::BorderType::Rounded)
