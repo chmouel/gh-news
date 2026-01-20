@@ -89,6 +89,7 @@ gh news --static-display | grep "something"
 - `Space` - Toggle repository expansion
 - `h` - Collapse current repository
 - `t` - Toggle read/unread status
+- `!` - Pin/unpin notification (pinned appear at top)
 - `M` - Toggle auto-mark-read on scroll
 - `Tab` - Cycle preview modes (Off → Horizontal → Vertical)
 - `J`/`K` - Scroll preview (line by line)

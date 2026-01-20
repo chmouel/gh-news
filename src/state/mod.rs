@@ -1,10 +1,11 @@
 use crate::filter::Filter;
 use crate::models::Notification;
 use crate::preview::PreviewData;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TreeItem {
+    PinnedHeader,             // Header for pinned notifications section
     RepositoryHeader(String), // Repository full name
     Notification(usize),      // Index into notifications
 }
@@ -31,6 +32,8 @@ pub struct AppState {
     pub show_all: bool,
     // Confirmation dialog state
     pub confirm_action: Option<ConfirmAction>,
+    // Pinned notification IDs
+    pub pinned_notification_ids: HashSet<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,7 +91,27 @@ impl AppState {
             filter_pattern: None,
             show_all: false,
             confirm_action: None,
+            pinned_notification_ids: HashSet::new(),
         }
+    }
+
+    pub fn toggle_pin(&mut self, notification_id: &str) -> bool {
+        if self.pinned_notification_ids.contains(notification_id) {
+            self.pinned_notification_ids.remove(notification_id);
+            false
+        } else {
+            self.pinned_notification_ids
+                .insert(notification_id.to_string());
+            true
+        }
+    }
+
+    pub fn is_pinned(&self, notification_id: &str) -> bool {
+        self.pinned_notification_ids.contains(notification_id)
+    }
+
+    pub fn set_pinned_notifications(&mut self, ids: Vec<String>) {
+        self.pinned_notification_ids = ids.into_iter().collect();
     }
 
     pub fn set_notifications(&mut self, notifications: Vec<Notification>) {
@@ -142,13 +165,49 @@ impl AppState {
     pub fn build_tree(&mut self) {
         use chrono::{DateTime, Utc};
 
-        // Group filtered notifications by repository
+        self.tree_items.clear();
+
+        // Partition into pinned and non-pinned notifications
+        let (pinned_indices, regular_indices): (Vec<usize>, Vec<usize>) =
+            self.filtered_notifications.iter().partition(|&&idx| {
+                self.notifications
+                    .get(idx)
+                    .map(|n| self.pinned_notification_ids.contains(&n.id))
+                    .unwrap_or(false)
+            });
+
+        // Add pinned section if there are pinned notifications
+        if !pinned_indices.is_empty() {
+            self.tree_items.push(TreeItem::PinnedHeader);
+
+            // Sort pinned notifications by timestamp (newest first)
+            let mut sorted_pinned = pinned_indices;
+            sorted_pinned.sort_by(|&a, &b| {
+                let timestamp_a = self
+                    .notifications
+                    .get(a)
+                    .and_then(|n| n.effective_timestamp())
+                    .unwrap_or(DateTime::<Utc>::MIN_UTC);
+                let timestamp_b = self
+                    .notifications
+                    .get(b)
+                    .and_then(|n| n.effective_timestamp())
+                    .unwrap_or(DateTime::<Utc>::MIN_UTC);
+                timestamp_b.cmp(&timestamp_a)
+            });
+
+            for idx in sorted_pinned {
+                self.tree_items.push(TreeItem::Notification(idx));
+            }
+        }
+
+        // Group non-pinned notifications by repository
         let mut repo_groups: HashMap<String, Vec<usize>> = HashMap::new();
 
-        for &notif_idx in &self.filtered_notifications {
-            if let Some(notif) = self.notifications.get(notif_idx) {
+        for idx in regular_indices {
+            if let Some(notif) = self.notifications.get(idx) {
                 let repo_name = notif.repo_full_name().to_string();
-                repo_groups.entry(repo_name).or_default().push(notif_idx);
+                repo_groups.entry(repo_name).or_default().push(idx);
             }
         }
 
@@ -190,7 +249,6 @@ impl AppState {
         repo_list.sort_by(|a, b| b.2.cmp(&a.2)); // Descending order (newest first)
 
         // Build tree items: repository headers and their notifications
-        self.tree_items.clear();
         for (repo_name, notif_indices, _) in repo_list {
             // Add repository header
             self.tree_items
@@ -238,7 +296,7 @@ impl AppState {
             .get(self.selected_index)
             .and_then(|item| match item {
                 TreeItem::Notification(idx) => self.notifications.get(*idx),
-                TreeItem::RepositoryHeader(_) => None,
+                TreeItem::RepositoryHeader(_) | TreeItem::PinnedHeader => None,
             })
     }
 
@@ -247,7 +305,7 @@ impl AppState {
             .get(self.selected_index)
             .and_then(|item| match item {
                 TreeItem::RepositoryHeader(repo) => Some(repo.as_str()),
-                TreeItem::Notification(_) => None,
+                TreeItem::Notification(_) | TreeItem::PinnedHeader => None,
             })
     }
 

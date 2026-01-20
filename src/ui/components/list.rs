@@ -78,6 +78,34 @@ impl ListWidget {
                 let is_selected = display_idx == app_state.selected_index;
 
                 match item {
+                    crate::state::TreeItem::PinnedHeader => {
+                        let colors = TokyoNight::colors();
+                        let mut line = vec![];
+
+                        // Pin icon
+                        line.push(Span::styled(
+                            "󰐃 ",
+                            if is_selected {
+                                Style::default().fg(self.theme.highlight_fg)
+                            } else {
+                                Style::default().fg(colors.red)
+                            },
+                        ));
+
+                        // "Pinned" text
+                        line.push(Span::styled(
+                            "Pinned",
+                            if is_selected {
+                                Style::default()
+                                    .fg(self.theme.highlight_fg)
+                                    .add_modifier(Modifier::BOLD)
+                            } else {
+                                Style::default().fg(colors.red).add_modifier(Modifier::BOLD)
+                            },
+                        ));
+
+                        ListItem::new(Line::from(line))
+                    }
                     crate::state::TreeItem::RepositoryHeader(repo_name) => {
                         // Check if this repo is expanded
                         let is_expanded = app_state
@@ -154,6 +182,7 @@ impl ListWidget {
                     crate::state::TreeItem::Notification(notif_idx) => {
                         if let Some(notif) = app_state.notifications.get(*notif_idx) {
                             let time = notif.time_display();
+                            let is_pinned = app_state.is_pinned(&notif.id);
 
                             // Build styled line with spans
                             let mut line = vec![];
@@ -162,9 +191,14 @@ impl ListWidget {
                             // 󰆍 = subdirectory_arrow_right
                             line.push(Span::styled("  󰆍 ", Style::default().fg(Color::DarkGray)));
 
-                            // Unread indicator - enhanced styling
+                            // Unread/pinned indicator - enhanced styling
                             let colors = TokyoNight::colors();
-                            if notif.is_unread() {
+                            if is_pinned {
+                                line.push(Span::styled(
+                                    "󰐃 ",
+                                    Style::default().fg(colors.red).add_modifier(Modifier::BOLD),
+                                ));
+                            } else if notif.is_unread() {
                                 line.push(Span::styled(
                                     " ",
                                     Style::default().fg(colors.red).add_modifier(Modifier::BOLD),
@@ -203,11 +237,12 @@ impl ListWidget {
                                 reason_style,
                             ));
 
-                            // Title - italic and dimmed if read (regardless of show_all flag)
-                            let title_style = if notif.is_unread() {
+                            // Title - red if pinned, italic and dimmed if read
+                            let title_style = if is_pinned {
+                                Style::default().fg(colors.red)
+                            } else if notif.is_unread() {
                                 self.theme.title
                             } else {
-                                let colors = crate::ui::theme::TokyoNight::colors();
                                 self.theme
                                     .title
                                     .fg(colors.fg_dim)

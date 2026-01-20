@@ -1056,6 +1056,25 @@ impl App {
                     }
                 }
             }
+            KeyCode::Char('!') => {
+                // Toggle pin status of selected notification
+                if let Some(notification) = self.state.selected_notification() {
+                    let notification_id = notification.id.clone();
+                    self.state.toggle_pin(&notification_id);
+
+                    // Persist to disk
+                    let pinned: Vec<String> =
+                        self.state.pinned_notification_ids.iter().cloned().collect();
+                    if let Err(e) =
+                        crate::state_file::AppStateFile::save_pinned_notifications(&pinned)
+                    {
+                        eprintln!("Failed to save pinned notifications: {}", e);
+                    }
+
+                    // Rebuild tree to move notification to/from pinned section
+                    self.state.build_tree();
+                }
+            }
             KeyCode::Tab => {
                 // Cycle through preview modes: Off -> Horizontal -> Vertical -> Off
                 self.state.preview_mode = match self.state.preview_mode {

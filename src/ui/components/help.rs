@@ -118,6 +118,7 @@ impl HelpWidget {
                 colors.green,
                 colors.fg_muted,
             ),
+            make_key_line("!", "Pin/unpin notification", colors.green, colors.fg_muted),
             make_key_line("Ctrl+A", "Mark all as read", colors.green, colors.fg_muted),
             make_key_line(
                 "Ctrl+R",

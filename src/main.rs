@@ -125,6 +125,12 @@ fn run() -> Result<()> {
         }
     }
 
+    // Load pinned notifications from state file
+    if let Ok(pinned_ids) = state_file::AppStateFile::load_pinned_notifications() {
+        app_state.set_pinned_notifications(pinned_ids);
+        app_state.build_tree();
+    }
+
     app.update_state(app_state);
 
     // Auto-fetch preview for first notification if preview is enabled

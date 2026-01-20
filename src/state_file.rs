@@ -9,6 +9,8 @@ pub struct AppStateFile {
     pub preview_mode: String,
     #[serde(default = "default_auto_mark_read")]
     pub auto_mark_read: bool,
+    #[serde(default)]
+    pub pinned_notifications: Vec<String>,
 }
 
 fn default_auto_mark_read() -> bool {
@@ -20,6 +22,7 @@ impl AppStateFile {
         Self {
             preview_mode: preview_mode_to_string(preview_mode),
             auto_mark_read,
+            pinned_notifications: Vec::new(),
         }
     }
 
@@ -89,6 +92,19 @@ impl AppStateFile {
     pub fn load_auto_mark_read() -> Result<bool> {
         let state = Self::load_full()?;
         Ok(state.auto_mark_read)
+    }
+
+    pub fn save_pinned_notifications(pinned: &[String]) -> Result<()> {
+        // Load existing state to preserve other fields
+        let mut state = Self::load_full()
+            .unwrap_or_else(|_| Self::new(PreviewMode::Vertical, default_auto_mark_read()));
+        state.pinned_notifications = pinned.to_vec();
+        state.save_full()
+    }
+
+    pub fn load_pinned_notifications() -> Result<Vec<String>> {
+        let state = Self::load_full()?;
+        Ok(state.pinned_notifications)
     }
 }
 
