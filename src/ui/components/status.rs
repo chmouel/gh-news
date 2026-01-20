@@ -52,6 +52,15 @@ impl StatusWidget {
 
         let mut status_line = Line::from(status_parts);
 
+        // Show status message if present (e.g., after marking all as read)
+        if let Some(ref msg) = state.status_message {
+            status_line.spans.push(Span::raw(" · "));
+            status_line.spans.push(Span::styled(
+                format!("✓ {}", msg),
+                Style::default().fg(colors.green),
+            ));
+        }
+
         if !interval_text.is_empty() {
             status_line.spans.push(Span::raw(" · "));
             status_line

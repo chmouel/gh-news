@@ -937,17 +937,34 @@ impl App {
     fn execute_confirmed_action(&mut self, action: ConfirmAction) -> Result<()> {
         match action {
             ConfirmAction::MarkAllRead { selected } => {
-                let message = match selected {
-                    MarkAllOption::MarkReadAndArchive => "Archiving notifications...",
-                    MarkAllOption::MarkReadOnly => "Marking notifications as read...",
+                // Count non-pinned notifications before action
+                let count = self
+                    .state
+                    .notifications
+                    .iter()
+                    .filter(|n| !self.state.is_pinned(&n.id))
+                    .count();
+
+                // Execute directly (blocking, no progress bar)
+                self.perform_blocking_action(BlockingAction::MarkAllRead { selected })?;
+
+                // Set status message
+                let msg = match selected {
+                    MarkAllOption::MarkReadAndArchive => {
+                        format!("Archived {} notifications", count)
+                    }
+                    MarkAllOption::MarkReadOnly => format!("Marked {} as read", count),
                 };
-                self.queue_blocking_action(BlockingAction::MarkAllRead { selected }, message);
+                self.state.status_message = Some(msg);
             }
         }
         Ok(())
     }
 
     fn handle_normal_key(&mut self, key: KeyEvent) -> Result<()> {
+        // Clear status message on any key press
+        self.state.status_message = None;
+
         match key.code {
             KeyCode::Esc => {
                 // If a pane is focused, zoom out to split view

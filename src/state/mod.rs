@@ -34,6 +34,8 @@ pub struct AppState {
     pub confirm_action: Option<ConfirmAction>,
     // Pinned notifications (stored as full data to persist after being marked read)
     pub pinned_notifications: Vec<Notification>,
+    // Status message displayed in the status bar (e.g., after marking all as read)
+    pub status_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,6 +94,7 @@ impl AppState {
             show_all: false,
             confirm_action: None,
             pinned_notifications: Vec::new(),
+            status_message: None,
         }
     }
 
