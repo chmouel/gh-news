@@ -1,5 +1,7 @@
 # Agents Profile
 
+Read README.md for general project information.
+
 ## Quick Rules
 
 - Remove dead code and unused items
