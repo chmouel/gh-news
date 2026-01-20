@@ -122,7 +122,10 @@ impl ListWidget {
                                 app_state
                                     .notifications
                                     .get(idx)
-                                    .map(|n| n.repo_full_name() == repo_name)
+                                    .map(|n| {
+                                        n.repo_full_name() == repo_name
+                                            && !app_state.is_pinned(&n.id)
+                                    })
                                     .unwrap_or(false)
                             })
                             .count();

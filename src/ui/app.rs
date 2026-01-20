@@ -1004,8 +1004,16 @@ impl App {
             }
             KeyCode::Char(' ') => {
                 // Space bar toggles repository expansion
-                if let Some(repo_name) = self.state.selected_repo() {
-                    let repo_name = repo_name.to_string();
+                let repo_name = self.state.selected_repo().map(str::to_string).or_else(|| {
+                    self.state.selected_notification().and_then(|notification| {
+                        if self.state.is_pinned(&notification.id) {
+                            Some(notification.repo_full_name().to_string())
+                        } else {
+                            None
+                        }
+                    })
+                });
+                if let Some(repo_name) = repo_name {
                     self.state.toggle_repo_expansion(&repo_name);
                 }
             }
@@ -1075,25 +1083,8 @@ impl App {
                     self.state.build_tree();
 
                     // Restore selection to same notification
-                    if let Some(new_idx) = self.state.tree_items.iter().position(|item| {
-                        if let crate::state::TreeItem::Notification(notif_idx) = item {
-                            self.state
-                                .notifications
-                                .get(*notif_idx)
-                                .map(|n| n.id == selected_notif_id)
-                                .unwrap_or(false)
-                        } else {
-                            false
-                        }
-                    }) {
-                        self.state.selected_index = new_idx;
-                    } else {
-                        // Fallback: select first notification if original not found
-                        if let Some(first_notif) = self.state.tree_items.iter().position(|item| {
-                            matches!(item, crate::state::TreeItem::Notification(_))
-                        }) {
-                            self.state.selected_index = first_notif;
-                        }
+                    if !self.state.select_notification_by_id(&selected_notif_id) {
+                        self.state.select_first_notification();
                     }
 
                     // Refresh preview for selected notification

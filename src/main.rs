@@ -136,8 +136,16 @@ fn run() -> Result<()> {
 
     // Set pinned notifications (already loaded and merged earlier)
     if !pinned_notifications.is_empty() {
+        let selected_notif_id = app_state.selected_notification().map(|n| n.id.clone());
         app_state.set_pinned_notifications(pinned_notifications);
         app_state.build_tree();
+        if let Some(notification_id) = selected_notif_id {
+            if !app_state.select_notification_by_id(&notification_id) {
+                app_state.select_first_notification();
+            }
+        } else {
+            app_state.select_first_notification();
+        }
     }
 
     app.update_state(app_state);

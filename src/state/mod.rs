@@ -152,23 +152,7 @@ impl AppState {
         // Build tree structure grouped by repository
         self.build_tree();
 
-        // Find the first notification (not a repository header) and select it
-        if let Some(first_notif_idx) = self.tree_items.iter().enumerate().find_map(|(idx, item)| {
-            if matches!(item, TreeItem::Notification(_)) {
-                Some(idx)
-            } else {
-                None
-            }
-        }) {
-            self.selected_index = first_notif_idx;
-        } else {
-            // No notifications available, just ensure selected_index is valid
-            if !self.tree_items.is_empty() {
-                self.selected_index = self.selected_index.min(self.tree_items.len() - 1);
-            } else {
-                self.selected_index = 0;
-            }
-        }
+        self.select_first_notification();
     }
 
     pub fn build_tree(&mut self) {
@@ -324,7 +308,14 @@ impl AppState {
             return Some(repo.as_str());
         }
 
-        // If the selected item is a Notification, walk backwards to find the parent RepositoryHeader
+        if let Some(TreeItem::Notification(idx)) = self.tree_items.get(self.selected_index) {
+            return self
+                .notifications
+                .get(*idx)
+                .map(|notification| notification.repo_full_name());
+        }
+
+        // Fallback for headers without a direct notification (keeps behaviour for legacy layouts).
         for i in (0..self.selected_index).rev() {
             if let Some(TreeItem::RepositoryHeader(repo)) = self.tree_items.get(i) {
                 return Some(repo.as_str());
@@ -332,6 +323,42 @@ impl AppState {
         }
 
         None
+    }
+
+    pub fn select_first_notification(&mut self) -> bool {
+        if let Some(first_notif_idx) = self
+            .tree_items
+            .iter()
+            .position(|item| matches!(item, TreeItem::Notification(_)))
+        {
+            self.selected_index = first_notif_idx;
+            true
+        } else {
+            if !self.tree_items.is_empty() {
+                self.selected_index = self.selected_index.min(self.tree_items.len() - 1);
+            } else {
+                self.selected_index = 0;
+            }
+            false
+        }
+    }
+
+    pub fn select_notification_by_id(&mut self, notification_id: &str) -> bool {
+        if let Some(new_idx) = self.tree_items.iter().position(|item| {
+            if let TreeItem::Notification(notif_idx) = item {
+                self.notifications
+                    .get(*notif_idx)
+                    .map(|notification| notification.id == notification_id)
+                    .unwrap_or(false)
+            } else {
+                false
+            }
+        }) {
+            self.selected_index = new_idx;
+            true
+        } else {
+            false
+        }
     }
 
     pub fn move_up(&mut self) {
