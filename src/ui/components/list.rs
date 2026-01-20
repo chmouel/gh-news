@@ -275,7 +275,19 @@ impl ListWidget {
             .iter()
             .filter(|item| matches!(item, crate::state::TreeItem::RepositoryHeader(_)))
             .count();
+        let unread_count = app_state
+            .filtered_notifications
+            .iter()
+            .filter(|&&idx| {
+                app_state
+                    .notifications
+                    .get(idx)
+                    .map(|n| n.is_unread())
+                    .unwrap_or(false)
+            })
+            .count();
 
+        let colors = crate::ui::theme::TokyoNight::colors();
         let list = List::new(items)
             .block(
                 Block::default()
@@ -290,13 +302,25 @@ impl ListWidget {
                             ),
                     )
                     .title(
-                        Line::from(format!("󰞏{count} 󰉋{repo_count} "))
-                            .right_aligned()
-                            .style(
+                        Line::from(vec![
+                            Span::styled(
+                                format!("󰞏{count} "),
                                 Style::default()
                                     .fg(self.theme.highlight_fg)
                                     .add_modifier(Modifier::BOLD),
                             ),
+                            Span::styled(
+                                format!(" {unread_count} "),
+                                Style::default().fg(colors.red).add_modifier(Modifier::BOLD),
+                            ),
+                            Span::styled(
+                                format!("󰉋{repo_count} "),
+                                Style::default()
+                                    .fg(self.theme.highlight_fg)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                        ])
+                        .right_aligned(),
                     )
                     .border_style(self.theme.border)
                     .border_type(ratatui::widgets::BorderType::Rounded)
