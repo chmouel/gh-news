@@ -2,6 +2,76 @@ use comrak::nodes::{AstNode, NodeValue};
 use comrak::{parse_document, Arena};
 use ratatui::prelude::*;
 
+/// Strips HTML tags from a string, converting common elements to text formatting.
+fn strip_html_tags(html: &str) -> String {
+    // Convert common HTML elements to text equivalents
+    let html = html
+        // Line breaks
+        .replace("<br>", "\n")
+        .replace("<br/>", "\n")
+        .replace("<br />", "\n")
+        // Block elements with spacing
+        .replace("</p>", "\n\n")
+        .replace("</div>", "\n")
+        .replace("</blockquote>", "\n")
+        // Headers with visual distinction
+        .replace("<h1>", "\n\n## ")
+        .replace("</h1>", "\n")
+        .replace("<h2>", "\n\n### ")
+        .replace("</h2>", "\n")
+        .replace("<h3>", "\n#### ")
+        .replace("</h3>", "\n")
+        .replace("<h4>", "\n##### ")
+        .replace("</h4>", "\n")
+        // Lists
+        .replace("<li>", "  • ")
+        .replace("</li>", "\n")
+        .replace("</ul>", "\n")
+        .replace("</ol>", "\n")
+        // Code blocks
+        .replace("<pre>", "\n```\n")
+        .replace("</pre>", "\n```\n")
+        .replace("<code>", "`")
+        .replace("</code>", "`")
+        // Tables
+        .replace("</th>", " | ")
+        .replace("</td>", " | ")
+        .replace("</tr>", "\n")
+        // Collapsible sections
+        .replace("<details>", "\n")
+        .replace("</details>", "\n")
+        .replace("<summary>", "▶ ")
+        .replace("</summary>", "\n");
+
+    // Strip remaining tags
+    let mut result = String::new();
+    let mut in_tag = false;
+    for c in html.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            _ if !in_tag => result.push(c),
+            _ => {}
+        }
+    }
+
+    // Clean up excessive whitespace
+    let mut cleaned = String::new();
+    let mut newline_count = 0;
+    for c in result.chars() {
+        if c == '\n' {
+            newline_count += 1;
+            if newline_count <= 2 {
+                cleaned.push(c);
+            }
+        } else {
+            newline_count = 0;
+            cleaned.push(c);
+        }
+    }
+    cleaned
+}
+
 pub struct MarkdownRenderer;
 
 impl MarkdownRenderer {
@@ -183,15 +253,12 @@ impl MarkdownToRatatui {
                 self.add_blank_line();
             }
             NodeValue::HtmlBlock(ref block) => {
-                // Render HTML blocks as plain text (or skip)
                 let html = block.literal.as_str();
-                for line in html.lines() {
-                    if !line.trim().is_empty() {
-                        self.add_line(Line::from(vec![Span::styled(
-                            line.to_string(),
-                            Style::default().fg(self.colors.fg_dim),
-                        )]));
-                    }
+                let markdown = strip_html_tags(html);
+                // Pass through comrak for proper styled rendering
+                let rendered_lines = MarkdownRenderer::render_simple(&markdown);
+                for line in rendered_lines {
+                    self.lines.push(line);
                 }
             }
             NodeValue::Paragraph => {
@@ -631,12 +698,10 @@ impl MarkdownToRatatui {
                 }
             }
             NodeValue::HtmlInline(ref html) => {
-                // Render HTML inline as plain text
-                // HtmlInline is just a String in comrak
-                spans.push(Span::styled(
-                    html.to_string(),
-                    Style::default().fg(self.colors.fg_dim),
-                ));
+                let text = strip_html_tags(html);
+                if !text.trim().is_empty() {
+                    spans.push(Span::raw(text));
+                }
             }
             NodeValue::TaskItem(checked) => {
                 let marker = if checked.is_some() { "☑" } else { "☐" };
