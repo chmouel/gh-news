@@ -26,10 +26,10 @@
 # ==============================================================================
 
 # How often to refresh notifications automatically (in seconds).
-# Default: 300 (5 minutes)
+# Default: 120 (5 minutes)
 # Environment variable: GH_NEWS_AUTO_REFRESH_INTERVAL
 # CLI flag: (not available as flag, set via env or config)
-auto_refresh_interval = 300
+auto_refresh_interval = 120
 
 # HTTP request timeout (in seconds).
 # Default: 30

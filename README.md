@@ -90,7 +90,7 @@ See also the example config file [here](./config.example.toml).
 
 ```toml
 # API & Network
-auto_refresh_interval = 300  # seconds, 0 to disable
+auto_refresh_interval = 120  # seconds, 0 to disable
 api_timeout = 30             # seconds
 max_notifications = 100      # limit notifications fetched
 pagination_size = 50         # notifications per API page
@@ -167,7 +167,7 @@ fi
 
 - `GH_TOKEN` - GitHub personal access token (takes precedence over `GITHUB_TOKEN`)
 - `GITHUB_TOKEN` - GitHub personal access token (fallback if `GH_TOKEN` not set)
-- `GH_NEWS_AUTO_REFRESH_INTERVAL` - Auto-refresh interval in seconds (default: 300). Set to 0 to disable.
+- `GH_NEWS_AUTO_REFRESH_INTERVAL` - Auto-refresh interval in seconds (default: 120). Set to 0 to disable.
 
 ## License
 

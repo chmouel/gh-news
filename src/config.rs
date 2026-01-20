@@ -40,7 +40,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            auto_refresh_interval: 300,
+            auto_refresh_interval: 120,
             api_timeout: 30,
             max_notifications: None,
             pagination_size: 50,
@@ -126,7 +126,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
-        assert_eq!(config.auto_refresh_interval, 300);
+        assert_eq!(config.auto_refresh_interval, 120);
         assert_eq!(config.api_timeout, 30);
         assert_eq!(config.pagination_size, 50);
         assert!(!config.show_read);
