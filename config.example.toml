@@ -1,0 +1,155 @@
+# gh-news Configuration Example
+#
+# This is an example configuration file for gh-news. Copy this file to your
+# configuration directory to get started:
+#
+#   cp config.example.toml ~/.config/gh-news/config.toml
+#
+# Configuration can be overridden by:
+#   1. Command-line arguments (highest priority)
+#   2. Environment variables
+#   3. Config file values (this file)
+#   4. Hardcoded defaults (lowest priority)
+#
+# For authentication, gh-news uses these environment variables in order:
+#   - GH_TOKEN (highest priority)
+#   - GITHUB_TOKEN
+#   - ~/.config/gh/hosts.yml (gh CLI configuration)
+#
+# Some settings are also persisted in state file (~/.cache/gh-news/state.toml)
+# and will override config file values when present:
+#   - preview_mode (user's preferred layout)
+#   - auto_mark_read (user's toggle)
+#
+# ==============================================================================
+# NETWORK & API SETTINGS
+# ==============================================================================
+
+# How often to refresh notifications automatically (in seconds).
+# Default: 300 (5 minutes)
+# Environment variable: GH_NEWS_AUTO_REFRESH_INTERVAL
+# CLI flag: (not available as flag, set via env or config)
+auto_refresh_interval = 300
+
+# HTTP request timeout (in seconds).
+# Default: 30
+# CLI flag: (not available as flag, set via env or config)
+api_timeout = 30
+
+# Maximum number of notifications to fetch from GitHub API.
+# Leave commented out to fetch all notifications (default).
+# Default: no limit
+# CLI flag: --max-notifications <NUMBER> / -n <NUMBER>
+# max_notifications = 100
+
+# Number of notifications to fetch per API request (pagination size).
+# Default: 50
+# CLI flag: (not available as flag, set via env or config)
+pagination_size = 50
+
+# ==============================================================================
+# DEFAULT FILTERS
+# ==============================================================================
+
+# Show read notifications by default (unless filtered out by other options).
+# Default: false
+# CLI flag: --all / -a
+show_read = false
+
+# Show only notifications where you are directly participating (commenting, etc).
+# Default: false
+# CLI flag: --participating / -p
+participating_only = false
+
+# Apply a regular expression filter to notification subjects by default.
+# Useful for permanently filtering out certain notification types.
+# Examples:
+#   default_filter = "(?i)dependabot"  # Hide Dependabot notifications
+#   default_filter = "release|tag"     # Show only releases and tags
+# Default: (empty, no filter)
+# CLI flag: --filter <REGEX> / -f <REGEX>
+# default_filter = ""
+
+# ==============================================================================
+# DISPLAY SETTINGS
+# ==============================================================================
+
+# Default preview mode for notification details.
+# Options: "off", "horizontal", "vertical"
+#   - off:        Don't show preview pane (more space for notification list)
+#   - horizontal: Preview appears below the notification list
+#   - vertical:   Preview appears to the right of the notification list
+# Default: "vertical"
+# Note: This can be toggled at runtime and will be saved to state file.
+# CLI flag: (not available as flag, set via env or config)
+default_preview_mode = "vertical"
+
+# Start with repository groups collapsed.
+# Default: false
+# CLI flag: (not available as flag, set via env or config)
+repos_collapsed = false
+
+# ==============================================================================
+# BEHAVIOR
+# ==============================================================================
+
+# Automatically mark notifications as read when you navigate away from them.
+# Default: true
+# CLI flag: --no-auto-mark-read
+# Note: Can be toggled at runtime and will be saved to state file.
+auto_mark_read = true
+
+# ==============================================================================
+# EXTERNAL COMMANDS & HOOKS
+# ==============================================================================
+
+# Custom command to open URLs in a browser.
+# If not set, gh-news will use your system's default browser.
+# Examples:
+#   browser_command = "firefox"        # Use Firefox
+#   browser_command = "open -a Safari" # Use Safari (macOS)
+#   browser_command = "xdg-open"       # Use XDG default (Linux)
+# Default: (use system default)
+# CLI flag: (not available as flag, set via env or config)
+# browser_command = ""
+
+# Command to execute when a new notification arrives.
+# Useful for sending notifications to your desktop, playing a sound, etc.
+#
+# Available environment variables:
+#   - GH_NEWS_ID          Repository notification ID
+#   - GH_NEWS_TITLE       Notification subject
+#   - GH_NEWS_REPO        Repository name (owner/repo)
+#   - GH_NEWS_OWNER       Repository owner
+#   - GH_NEWS_TYPE        Notification type (PullRequest, Issue, etc)
+#   - GH_NEWS_REASON      Why you're notified (mention, review_requested, etc)
+#   - GH_NEWS_URL         URL to the notification
+#   - GH_NEWS_UNREAD      "true" or "false"
+#   - GH_NEWS_UPDATED_AT  Last update timestamp (RFC3339 format)
+#
+# Examples:
+#   # macOS desktop notification
+#   on_new_notification_command = "osascript -e 'display notification \"$GH_NEWS_TITLE\" with title \"gh-news: $GH_NEWS_REPO\"'"
+#
+#   # Linux libnotify
+#   on_new_notification_command = "notify-send 'gh-news' '$GH_NEWS_TITLE ($GH_NEWS_REPO)'"
+#
+#   # Play a sound (macOS)
+#   on_new_notification_command = "afplay /System/Library/Sounds/Glass.aiff"
+#
+# Default: (no hook, notifications are silent)
+# CLI flag: (not available as flag, set via env or config)
+# on_new_notification_command = ""
+
+# ==============================================================================
+# GITHUB ENTERPRISE
+# ==============================================================================
+
+# GitHub API host for GitHub Enterprise Server installations.
+# Use this to connect to your enterprise GitHub instance.
+# Examples:
+#   github_host = "github.example.com"     # Enterprise Server
+#   github_host = "github.com"             # GitHub Cloud (default)
+# Default: "github.com"
+# CLI flag: (not available as flag, set via env or config)
+github_host = "github.com"

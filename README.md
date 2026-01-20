@@ -104,6 +104,8 @@ gh-news can be configured via a TOML file at `~/.config/gh-news/config.toml`. Al
 
 ### Example Config
 
+See also the example config file [here](./config.example.toml).
+
 ```toml
 # API & Network
 auto_refresh_interval = 300  # seconds, 0 to disable
