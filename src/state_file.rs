@@ -1,4 +1,5 @@
 use crate::error::{Error, Result};
+use crate::models::Notification;
 use crate::state::PreviewMode;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -10,7 +11,7 @@ pub struct AppStateFile {
     #[serde(default = "default_auto_mark_read")]
     pub auto_mark_read: bool,
     #[serde(default)]
-    pub pinned_notifications: Vec<String>,
+    pub pinned_notifications: Vec<Notification>,
 }
 
 fn default_auto_mark_read() -> bool {
@@ -94,7 +95,7 @@ impl AppStateFile {
         Ok(state.auto_mark_read)
     }
 
-    pub fn save_pinned_notifications(pinned: &[String]) -> Result<()> {
+    pub fn save_pinned_notifications(pinned: &[Notification]) -> Result<()> {
         // Load existing state to preserve other fields
         let mut state = Self::load_full()
             .unwrap_or_else(|_| Self::new(PreviewMode::Vertical, default_auto_mark_read()));
@@ -102,7 +103,7 @@ impl AppStateFile {
         state.save_full()
     }
 
-    pub fn load_pinned_notifications() -> Result<Vec<String>> {
+    pub fn load_pinned_notifications() -> Result<Vec<Notification>> {
         let state = Self::load_full()?;
         Ok(state.pinned_notifications)
     }

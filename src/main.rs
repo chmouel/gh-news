@@ -76,7 +76,16 @@ fn run() -> Result<()> {
 
     // Fetch notifications
     let client = api::GitHubClient::new(&config)?;
-    let notifications = fetch_notifications(&client, &config, &opts)?;
+    let mut notifications = fetch_notifications(&client, &config, &opts)?;
+
+    // Load pinned notifications from state file and merge with fetched notifications
+    let pinned_notifications =
+        state_file::AppStateFile::load_pinned_notifications().unwrap_or_default();
+    for pinned in &pinned_notifications {
+        if !notifications.iter().any(|n| n.id == pinned.id) {
+            notifications.push(pinned.clone());
+        }
+    }
 
     // Set API client in app for fetching previews
     app.set_api_client(client);
@@ -125,9 +134,9 @@ fn run() -> Result<()> {
         }
     }
 
-    // Load pinned notifications from state file
-    if let Ok(pinned_ids) = state_file::AppStateFile::load_pinned_notifications() {
-        app_state.set_pinned_notifications(pinned_ids);
+    // Set pinned notifications (already loaded and merged earlier)
+    if !pinned_notifications.is_empty() {
+        app_state.set_pinned_notifications(pinned_notifications);
         app_state.build_tree();
     }
 

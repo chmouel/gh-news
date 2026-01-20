@@ -59,6 +59,8 @@ pub struct App {
     // Auto-mark-read state
     auto_mark_read_enabled: bool,
     pending_mark_read: Option<(String, Instant)>, // (notification_id, timestamp)
+    // Track if pinned notifications need to be saved
+    pinned_state_dirty: bool,
 }
 
 /// Background worker thread that fetches previews
@@ -152,6 +154,7 @@ impl App {
             prefetch_thread: None,
             auto_mark_read_enabled: auto_mark_read,
             pending_mark_read: None,
+            pinned_state_dirty: false,
         }
     }
 
@@ -1059,20 +1062,45 @@ impl App {
             KeyCode::Char('!') => {
                 // Toggle pin status of selected notification
                 if let Some(notification) = self.state.selected_notification() {
-                    let notification_id = notification.id.clone();
-                    self.state.toggle_pin(&notification_id);
+                    // Capture notification ID before rebuild to preserve selection
+                    let selected_notif_id = notification.id.clone();
+                    let notification = notification.clone();
 
-                    // Persist to disk
-                    let pinned: Vec<String> =
-                        self.state.pinned_notification_ids.iter().cloned().collect();
-                    if let Err(e) =
-                        crate::state_file::AppStateFile::save_pinned_notifications(&pinned)
-                    {
-                        eprintln!("Failed to save pinned notifications: {}", e);
-                    }
+                    self.state.toggle_pin(notification);
+
+                    // Mark state as dirty instead of immediate save
+                    self.pinned_state_dirty = true;
 
                     // Rebuild tree to move notification to/from pinned section
                     self.state.build_tree();
+
+                    // Restore selection to same notification
+                    if let Some(new_idx) = self.state.tree_items.iter().position(|item| {
+                        if let crate::state::TreeItem::Notification(notif_idx) = item {
+                            self.state
+                                .notifications
+                                .get(*notif_idx)
+                                .map(|n| n.id == selected_notif_id)
+                                .unwrap_or(false)
+                        } else {
+                            false
+                        }
+                    }) {
+                        self.state.selected_index = new_idx;
+                    } else {
+                        // Fallback: select first notification if original not found
+                        if let Some(first_notif) = self.state.tree_items.iter().position(|item| {
+                            matches!(item, crate::state::TreeItem::Notification(_))
+                        }) {
+                            self.state.selected_index = first_notif;
+                        }
+                    }
+
+                    // Refresh preview for selected notification
+                    if self.state.show_preview() {
+                        self.fetch_preview_for_selected_notification();
+                        self.prefetch_next_preview();
+                    }
                 }
             }
             KeyCode::Tab => {
@@ -1561,6 +1589,17 @@ impl App {
 
 impl Drop for App {
     fn drop(&mut self) {
+        // Save pinned state if dirty
+        if self.pinned_state_dirty {
+            let pinned = self.state.get_pinned_notifications();
+            if let Err(e) = crate::state_file::AppStateFile::save_pinned_notifications(pinned) {
+                eprintln!(
+                    "Warning: Failed to save pinned notifications on exit: {}",
+                    e
+                );
+            }
+        }
+
         // Signal worker to exit by dropping the channel
         drop(self.prefetch_tx.take());
 

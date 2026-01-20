@@ -1,7 +1,7 @@
 use crate::filter::Filter;
 use crate::models::Notification;
 use crate::preview::PreviewData;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TreeItem {
@@ -32,8 +32,8 @@ pub struct AppState {
     pub show_all: bool,
     // Confirmation dialog state
     pub confirm_action: Option<ConfirmAction>,
-    // Pinned notification IDs
-    pub pinned_notification_ids: HashSet<String>,
+    // Pinned notifications (stored as full data to persist after being marked read)
+    pub pinned_notifications: Vec<Notification>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,27 +91,36 @@ impl AppState {
             filter_pattern: None,
             show_all: false,
             confirm_action: None,
-            pinned_notification_ids: HashSet::new(),
+            pinned_notifications: Vec::new(),
         }
     }
 
-    pub fn toggle_pin(&mut self, notification_id: &str) -> bool {
-        if self.pinned_notification_ids.contains(notification_id) {
-            self.pinned_notification_ids.remove(notification_id);
+    pub fn toggle_pin(&mut self, notification: Notification) -> bool {
+        if let Some(pos) = self
+            .pinned_notifications
+            .iter()
+            .position(|n| n.id == notification.id)
+        {
+            self.pinned_notifications.remove(pos);
             false
         } else {
-            self.pinned_notification_ids
-                .insert(notification_id.to_string());
+            self.pinned_notifications.push(notification);
             true
         }
     }
 
     pub fn is_pinned(&self, notification_id: &str) -> bool {
-        self.pinned_notification_ids.contains(notification_id)
+        self.pinned_notifications
+            .iter()
+            .any(|n| n.id == notification_id)
     }
 
-    pub fn set_pinned_notifications(&mut self, ids: Vec<String>) {
-        self.pinned_notification_ids = ids.into_iter().collect();
+    pub fn set_pinned_notifications(&mut self, notifications: Vec<Notification>) {
+        self.pinned_notifications = notifications;
+    }
+
+    pub fn get_pinned_notifications(&self) -> &[Notification] {
+        &self.pinned_notifications
     }
 
     pub fn set_notifications(&mut self, notifications: Vec<Notification>) {
@@ -172,7 +181,7 @@ impl AppState {
             self.filtered_notifications.iter().partition(|&&idx| {
                 self.notifications
                     .get(idx)
-                    .map(|n| self.pinned_notification_ids.contains(&n.id))
+                    .map(|n| self.is_pinned(&n.id))
                     .unwrap_or(false)
             });
 
