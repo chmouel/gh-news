@@ -17,9 +17,10 @@ use cli::Args;
 use config::Config;
 use error::Result;
 use filter::Filter;
-use state::AppState;
+use std::sync::mpsc::channel;
+use std::thread;
 use terminal::Terminal;
-use ui::App;
+use ui::{App, InitialLoadData, PendingStateSettings};
 
 fn main() {
     if let Err(e) = run() {
@@ -29,6 +30,7 @@ fn main() {
 }
 
 /// Merged runtime options from CLI args and config file.
+#[derive(Clone)]
 struct RuntimeOptions {
     show_all: bool,
     participating: bool,
@@ -71,24 +73,12 @@ fn run() -> Result<()> {
     }
 
     // Interactive mode
+    let client = api::GitHubClient::new(&config)?;
     let mut terminal = Terminal::new()?;
     let mut app = App::new(config.clone());
 
-    // Fetch notifications
-    let client = api::GitHubClient::new(&config)?;
-    let mut notifications = fetch_notifications(&client, &config, &opts)?;
-
-    // Load pinned notifications from state file and merge with fetched notifications
-    let pinned_notifications =
-        state_file::AppStateFile::load_pinned_notifications().unwrap_or_default();
-    for pinned in &pinned_notifications {
-        if !notifications.iter().any(|n| n.id == pinned.id) {
-            notifications.push(pinned.clone());
-        }
-    }
-
     // Set API client in app for fetching previews
-    app.set_api_client(client);
+    app.set_api_client(client.clone());
 
     // Start background preview worker thread
     app.start_preview_worker();
@@ -103,55 +93,49 @@ fn run() -> Result<()> {
         None
     };
 
-    let mut app_state = AppState::new();
-    app_state.set_notifications(notifications);
-    app_state.set_filter(filter.clone());
-    app_state.set_filter_pattern(opts.filter_pattern.clone());
-    app_state.show_all = opts.show_all;
-
-    // Apply repos_collapsed from config
-    if config.repos_collapsed {
-        app_state.collapse_all_repos();
-    }
-
     // Try to load saved preview mode from state file, fallback to config default
-    match state_file::AppStateFile::load() {
-        Ok(saved_mode) => {
-            app_state.preview_mode = saved_mode;
-        }
-        Err(_) => {
-            app_state.preview_mode = config.get_default_preview_mode();
-        }
-    }
+    let preview_mode = match state_file::AppStateFile::load() {
+        Ok(saved_mode) => saved_mode,
+        Err(_) => config.get_default_preview_mode(),
+    };
 
     // Try to load saved auto_mark_read from state file, fallback to runtime option
     match state_file::AppStateFile::load_auto_mark_read() {
-        Ok(saved_auto_mark_read) => {
-            app.set_auto_mark_read(saved_auto_mark_read);
-        }
-        Err(_) => {
-            app.set_auto_mark_read(opts.auto_mark_read);
-        }
+        Ok(saved_auto_mark_read) => app.set_auto_mark_read(saved_auto_mark_read),
+        Err(_) => app.set_auto_mark_read(opts.auto_mark_read),
     }
 
-    // Set pinned notifications (already loaded and merged earlier)
-    if !pinned_notifications.is_empty() {
-        let selected_notif_id = app_state.selected_notification().map(|n| n.id.clone());
-        app_state.set_pinned_notifications(pinned_notifications);
-        app_state.build_tree();
-        if let Some(notification_id) = selected_notif_id {
-            if !app_state.select_notification_by_id(&notification_id) {
-                app_state.select_first_notification();
+    let settings = PendingStateSettings {
+        filter,
+        filter_pattern: opts.filter_pattern.clone(),
+        show_all: opts.show_all,
+        repos_collapsed: config.repos_collapsed,
+        preview_mode,
+    };
+
+    let (tx, rx) = channel();
+    let config_clone = config.clone();
+    let opts_clone = opts.clone();
+    let client_clone = client.clone();
+    thread::spawn(move || {
+        let result = (|| {
+            let mut notifications = fetch_notifications(&client_clone, &config_clone, &opts_clone)?;
+            let pinned_notifications =
+                state_file::AppStateFile::load_pinned_notifications().unwrap_or_default();
+            for pinned in &pinned_notifications {
+                if !notifications.iter().any(|n| n.id == pinned.id) {
+                    notifications.push(pinned.clone());
+                }
             }
-        } else {
-            app_state.select_first_notification();
-        }
-    }
+            Ok(InitialLoadData {
+                notifications,
+                pinned_notifications,
+            })
+        })();
+        let _ = tx.send(result);
+    });
 
-    app.update_state(app_state);
-
-    // Auto-fetch preview for first notification if preview is enabled
-    app.fetch_preview_for_selected();
+    app.start_initial_load(rx, settings);
 
     // Run the app
     app.run(&mut terminal)?;

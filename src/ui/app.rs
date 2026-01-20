@@ -15,7 +15,7 @@ use parking_lot::Mutex;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
 use std::collections::{HashMap, HashSet};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -32,6 +32,26 @@ struct FetchRequest {
 #[derive(Debug)]
 struct FetchResult {
     notification_id: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct InitialLoadData {
+    pub notifications: Vec<Notification>,
+    pub pinned_notifications: Vec<Notification>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingStateSettings {
+    pub filter: Option<Filter>,
+    pub filter_pattern: Option<String>,
+    pub show_all: bool,
+    pub repos_collapsed: bool,
+    pub preview_mode: PreviewMode,
+}
+
+enum BlockingAction {
+    Refresh,
+    MarkAllRead { selected: MarkAllOption },
 }
 
 /// Dwell time before auto-marking a notification as read (ms)
@@ -58,6 +78,9 @@ pub struct App {
     prefetch_tx: Option<Sender<FetchRequest>>,
     prefetch_result_rx: Option<Receiver<FetchResult>>,
     prefetch_thread: Option<JoinHandle<()>>,
+    initial_load_rx: Option<Receiver<crate::error::Result<InitialLoadData>>>,
+    pending_state_settings: Option<PendingStateSettings>,
+    pending_blocking_action: Option<BlockingAction>,
     // Auto-mark-read state
     auto_mark_read_enabled: bool,
     pending_mark_read: Option<(String, Instant)>, // (notification_id, timestamp)
@@ -155,6 +178,9 @@ impl App {
             prefetch_tx: None,
             prefetch_result_rx: None,
             prefetch_thread: None,
+            initial_load_rx: None,
+            pending_state_settings: None,
+            pending_blocking_action: None,
             auto_mark_read_enabled: auto_mark_read,
             pending_mark_read: None,
             pinned_state_dirty: false,
@@ -208,6 +234,59 @@ impl App {
         self.api_client = Some(client);
     }
 
+    pub fn start_initial_load(
+        &mut self,
+        rx: Receiver<crate::error::Result<InitialLoadData>>,
+        settings: PendingStateSettings,
+    ) {
+        self.initial_load_rx = Some(rx);
+        self.pending_state_settings = Some(settings);
+        self.state.loading = true;
+        self.state.loading_message = "Fetching notifications from GitHub".to_string();
+    }
+
+    fn apply_initial_load(&mut self, data: InitialLoadData) {
+        let settings = self
+            .pending_state_settings
+            .take()
+            .unwrap_or(PendingStateSettings {
+                filter: None,
+                filter_pattern: None,
+                show_all: false,
+                repos_collapsed: self.config.repos_collapsed,
+                preview_mode: self.config.get_default_preview_mode(),
+            });
+
+        let mut app_state = AppState::new();
+        app_state.set_notifications(data.notifications);
+        app_state.set_filter(settings.filter);
+        app_state.set_filter_pattern(settings.filter_pattern);
+        app_state.show_all = settings.show_all;
+
+        if settings.repos_collapsed {
+            app_state.collapse_all_repos();
+        }
+
+        app_state.preview_mode = settings.preview_mode;
+
+        if !data.pinned_notifications.is_empty() {
+            let selected_notif_id = app_state.selected_notification().map(|n| n.id.clone());
+            app_state.set_pinned_notifications(data.pinned_notifications);
+            app_state.build_tree();
+            if let Some(notification_id) = selected_notif_id {
+                if !app_state.select_notification_by_id(&notification_id) {
+                    app_state.select_first_notification();
+                }
+            } else {
+                app_state.select_first_notification();
+            }
+        }
+
+        self.update_state(app_state);
+        self.fetch_preview_for_selected();
+        self.last_refresh = Instant::now();
+    }
+
     /// Start the background preview worker thread
     pub fn start_preview_worker(&mut self) {
         let (req_tx, req_rx) = channel::<FetchRequest>();
@@ -256,12 +335,57 @@ impl App {
         // No need for a separate thread since we're already polling events
     }
 
+    fn queue_blocking_action(&mut self, action: BlockingAction, message: &str) {
+        self.state.loading = true;
+        self.state.loading_message = message.to_string();
+        self.pending_blocking_action = Some(action);
+    }
+
+    fn perform_blocking_action(&mut self, action: BlockingAction) -> Result<()> {
+        match action {
+            BlockingAction::Refresh => self.refresh_notifications(),
+            BlockingAction::MarkAllRead { selected } => {
+                if let Some(ref client) = self.api_client {
+                    match selected {
+                        MarkAllOption::MarkReadAndArchive => {
+                            for notif in &self.state.notifications {
+                                if !self.state.is_pinned(&notif.id) {
+                                    let _ = client.mark_thread_done(&notif.id);
+                                }
+                            }
+                        }
+                        MarkAllOption::MarkReadOnly => {
+                            for notif in &self.state.notifications {
+                                if !self.state.is_pinned(&notif.id) {
+                                    let _ = client.mark_notification_read(&notif.id);
+                                }
+                            }
+                        }
+                    }
+
+                    let pinned_ids: HashSet<_> = self
+                        .state
+                        .pinned_notifications
+                        .iter()
+                        .map(|n| n.id.as_str())
+                        .collect();
+                    for notif in &mut self.state.notifications {
+                        if !pinned_ids.contains(notif.id.as_str()) {
+                            notif.unread = false;
+                        }
+                    }
+
+                    self.refresh_notifications()?;
+                }
+                Ok(())
+            }
+        }
+    }
+
     fn refresh_notifications(&mut self) -> Result<()> {
         if let Some(ref client) = self.api_client {
             if let Some((all, participating, max_notifications)) = self.refresh_args {
-                // Don't show loading indicator for auto-refresh to avoid UI flicker
-                // self.state.loading = true;
-                // self.state.loading_message = "Refreshing notifications...".to_string();
+                // Loading state is managed by the caller to avoid auto-refresh flicker.
 
                 // Fetch notifications
                 let mut all_notifications = Vec::new();
@@ -533,8 +657,34 @@ impl App {
                 break;
             }
 
+            if let Some(ref rx) = self.initial_load_rx {
+                match rx.try_recv() {
+                    Ok(result) => {
+                        self.initial_load_rx = None;
+                        match result {
+                            Ok(data) => self.apply_initial_load(data),
+                            Err(e) => return Err(e),
+                        }
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        return Err(crate::error::Error::Terminal(
+                            "Initial load channel closed unexpectedly".to_string(),
+                        ));
+                    }
+                    Err(TryRecvError::Empty) => {}
+                }
+            }
+
+            if self.initial_load_rx.is_none() {
+                if let Some(action) = self.pending_blocking_action.take() {
+                    self.perform_blocking_action(action)?;
+                    self.state.loading = false;
+                    self.state.loading_message.clear();
+                }
+            }
+
             // Check for auto-refresh signal (non-blocking)
-            if self.config.auto_refresh_interval > 0 {
+            if self.config.auto_refresh_interval > 0 && !self.state.loading {
                 let elapsed = self.last_refresh.elapsed();
                 if elapsed >= Duration::from_secs(self.config.auto_refresh_interval) {
                     if let Err(e) = self.refresh_notifications() {
@@ -573,7 +723,17 @@ impl App {
                 match event::read().map_err(|e| crate::error::Error::Terminal(e.to_string()))? {
                     Event::Key(key) => {
                         if key.kind == KeyEventKind::Press {
-                            self.handle_key(key)?;
+                            if self.state.loading {
+                                if key.code == KeyCode::Char('q')
+                                    || key.code == KeyCode::Esc
+                                    || (key.code == KeyCode::Char('c')
+                                        && key.modifiers.contains(KeyModifiers::CONTROL))
+                                {
+                                    self.should_quit = true;
+                                }
+                            } else {
+                                self.handle_key(key)?;
+                            }
                         }
                     }
                     Event::Resize(_, _) => {
@@ -777,40 +937,11 @@ impl App {
     fn execute_confirmed_action(&mut self, action: ConfirmAction) -> Result<()> {
         match action {
             ConfirmAction::MarkAllRead { selected } => {
-                if let Some(ref client) = self.api_client {
-                    match selected {
-                        MarkAllOption::MarkReadAndArchive => {
-                            // Archive (mark as done) each non-pinned notification individually
-                            for notif in &self.state.notifications {
-                                if !self.state.is_pinned(&notif.id) {
-                                    let _ = client.mark_thread_done(&notif.id);
-                                }
-                            }
-                        }
-                        MarkAllOption::MarkReadOnly => {
-                            // Mark each non-pinned notification as read individually
-                            for notif in &self.state.notifications {
-                                if !self.state.is_pinned(&notif.id) {
-                                    let _ = client.mark_notification_read(&notif.id);
-                                }
-                            }
-                        }
-                    }
-                    // Update local state (skip pinned notifications)
-                    let pinned_ids: HashSet<_> = self
-                        .state
-                        .pinned_notifications
-                        .iter()
-                        .map(|n| n.id.as_str())
-                        .collect();
-                    for notif in &mut self.state.notifications {
-                        if !pinned_ids.contains(notif.id.as_str()) {
-                            notif.unread = false;
-                        }
-                    }
-                    // Refresh to sync with server
-                    self.refresh_notifications()?;
-                }
+                let message = match selected {
+                    MarkAllOption::MarkReadAndArchive => "Archiving notifications...",
+                    MarkAllOption::MarkReadOnly => "Marking notifications as read...",
+                };
+                self.queue_blocking_action(BlockingAction::MarkAllRead { selected }, message);
             }
         }
         Ok(())
@@ -1194,7 +1325,7 @@ impl App {
             }
             KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 // Force refresh notifications
-                self.refresh_notifications()?;
+                self.queue_blocking_action(BlockingAction::Refresh, "Refreshing notifications...");
             }
             KeyCode::Char('A') | KeyCode::Char('a')
                 if key.modifiers.contains(KeyModifiers::SHIFT) =>
@@ -1205,7 +1336,7 @@ impl App {
                     self.refresh_args =
                         Some((self.state.show_all, participating, max_notifications));
                 }
-                self.refresh_notifications()?;
+                self.queue_blocking_action(BlockingAction::Refresh, "Refreshing notifications...");
             }
             KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 // Show confirmation dialog for mark all as read

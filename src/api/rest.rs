@@ -9,6 +9,7 @@ use std::time::Duration;
 
 const API_VERSION: &str = "2022-11-28";
 
+#[derive(Clone)]
 pub struct GitHubClient {
     client: Client,
     api_base: String,
