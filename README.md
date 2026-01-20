@@ -19,12 +19,6 @@ Then run it:
 gh news
 ```
 
-Or install with cargo:
-
-```bash
-cargo install --git https://github.com/chmouel/gh-news.git
-```
-
 ## Setup
 
 You need a GitHub token. The app looks for it in this order:
@@ -56,28 +50,11 @@ gh news
 
 ### Examples
 
-Filter to specific repos:
-
 ```bash
-gh news --filter "my-org/my-repo"
-```
-
-Only things you're involved in:
-
-```bash
-gh news --participating
-```
-
-Mark everything read:
-
-```bash
-gh news --mark-read
-```
-
-Static output for scripts:
-
-```bash
-gh news --static-display | grep "something"
+gh news --filter "my-org/my-repo" # Filter to specific repos
+gh news --participating # Only things you're involved in
+gh news --mark-read # Mark everything read:
+gh news --static-display | grep "something" # List notifications without TUI
 ```
 
 ## Keybindings
