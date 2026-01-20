@@ -51,7 +51,7 @@ bumpversion() {
 
 vfile=Cargo.toml
 sed -i "s/^version = .*/version = \"${VERSION}\"/" ${vfile}
-cargo build
+cargo build --release
 git commit -S -m "Release ${VERSION} 🥳" ${vfile} Cargo.lock || true
 [[ ${VERSION} != v* ]] && VERSION="v${VERSION}"
 git tag -s ${VERSION} -m "Releasing version ${VERSION}"
