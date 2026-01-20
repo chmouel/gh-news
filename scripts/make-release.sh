@@ -11,7 +11,9 @@ PKGNAME=$(grep '^name = "' Cargo.toml | sed -E 's/.*"([^"]*)"/\1/')
 }
 
 bumpversion() {
+  local current major minor patch mode
   current=$(git describe --tags $(git rev-list --tags --max-count=1) || echo 0.0.0)
+  current=${current#v}
   echo "Current tag version is ${current}"
 
   major=$(uv run --with semver python3 -c "import semver,sys;print(str(semver.VersionInfo.parse(sys.argv[1]).bump_major()))" ${current})
