@@ -1,7 +1,7 @@
 use crate::filter::Filter;
 use crate::models::Notification;
 use crate::preview::PreviewData;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TreeItem {
@@ -36,6 +36,8 @@ pub struct AppState {
     pub pinned_notifications: Vec<Notification>,
     // Status message displayed in the status bar (e.g., after marking all as read)
     pub status_message: Option<String>,
+    // Multi-select: notification IDs that are currently selected
+    pub selected_notification_ids: HashSet<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -70,6 +72,7 @@ pub enum MarkAllOption {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfirmAction {
     MarkAllRead { selected: MarkAllOption },
+    ArchiveSelected { count: usize, option: MarkAllOption },
 }
 
 impl AppState {
@@ -95,6 +98,7 @@ impl AppState {
             confirm_action: None,
             pinned_notifications: Vec::new(),
             status_message: None,
+            selected_notification_ids: HashSet::new(),
         }
     }
 
@@ -459,5 +463,35 @@ impl AppState {
         } else {
             None
         }
+    }
+
+    // Multi-select helper methods
+
+    pub fn is_selected(&self, notification_id: &str) -> bool {
+        self.selected_notification_ids.contains(notification_id)
+    }
+
+    pub fn toggle_selection(&mut self, notification_id: String) {
+        if self.selected_notification_ids.contains(&notification_id) {
+            self.selected_notification_ids.remove(&notification_id);
+        } else {
+            self.selected_notification_ids.insert(notification_id);
+        }
+    }
+
+    pub fn clear_selection(&mut self) {
+        self.selected_notification_ids.clear();
+    }
+
+    pub fn has_selection(&self) -> bool {
+        !self.selected_notification_ids.is_empty()
+    }
+
+    pub fn selection_count(&self) -> usize {
+        self.selected_notification_ids.len()
+    }
+
+    pub fn get_selected_notification_ids(&self) -> Vec<String> {
+        self.selected_notification_ids.iter().cloned().collect()
     }
 }

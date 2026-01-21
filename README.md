@@ -60,23 +60,37 @@ gh news --static-display | grep "something" # List notifications without TUI
 
 ## Keybindings
 
+### Navigation
 - `↑`/`↓` or `j`/`k` - Navigate notifications
 - `Home`/`End` - Jump to first/last notification
 - `PageUp`/`PageDown` - Page navigation (or scroll preview if shown)
+
+### Actions
 - `Enter` - Open notification in browser and mark as read
 - `o` - Open notification in browser without marking as read
-- `Space` - Toggle repository expansion
-- `h` - Collapse current repository
 - `.` - Toggle read/unread status
-- `A` - Toggle showing read notifications
 - `!` - Pin/unpin notification (pinned appear at top)
-- `M` - Toggle auto-mark-read on scroll
+- `h` - Collapse current repository
+
+### Multi-select
+- `Space` - Toggle selection on notification (magenta checkmark)
+- `Esc` - Clear selection (or quit if no selection)
+- `Enter` - Open all selected + mark as read
+- `o` - Open all selected without marking as read
+- `.` - Mark all selected as read
+- `Ctrl+A` - Archive selected (or all if none selected)
+
+### View & Filter
+- `A` - Toggle showing read notifications
 - `/` - Filter notifications (type to search, Enter to keep, Esc to clear)
 - `Tab` - Cycle preview modes (Off → Horizontal → Vertical)
 - `J`/`K` - Scroll preview (line by line)
 - `Shift+U`/`Shift+D` - Scroll preview (5 lines)
 - `Ctrl+U`/`Ctrl+D` - Scroll preview (page)
 - `1`/`2` - Focus pane 1 (list) / pane 2 (preview)
+- `M` - Toggle auto-mark-read on scroll
+
+### General
 - `Esc` or `q` or `Ctrl+C` - Quit application
 - `?` - Show help
 

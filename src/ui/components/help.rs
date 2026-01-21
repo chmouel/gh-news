@@ -90,22 +90,23 @@ impl HelpWidget {
             Line::from(""),
             make_key_line(
                 "Enter",
-                "Open notification in browser",
+                "Open in browser (or all selected)",
                 colors.green,
                 colors.fg_muted,
             ),
             make_key_line(
                 "o",
-                "Open notification (without marking read)",
+                "Open without marking read",
                 colors.green,
                 colors.fg_muted,
             ),
             make_key_line(
-                "Space",
-                "Toggle repository expansion",
+                ".",
+                "Toggle read status (or mark selected)",
                 colors.green,
                 colors.fg_muted,
             ),
+            make_key_line("!", "Pin/unpin notification", colors.green, colors.fg_muted),
             make_key_line(
                 "h",
                 "Collapse current repository",
@@ -113,35 +114,57 @@ impl HelpWidget {
                 colors.fg_muted,
             ),
             make_key_line(
-                ".",
-                "Toggle read/unread status",
+                "Ctrl+A",
+                "Archive selected (or mark all read)",
                 colors.green,
                 colors.fg_muted,
             ),
-            make_key_line(
-                "A",
-                "Toggle showing read notifications",
-                colors.green,
-                colors.fg_muted,
-            ),
-            make_key_line("!", "Pin/unpin notification", colors.green, colors.fg_muted),
-            make_key_line("Ctrl+A", "Mark all as read", colors.green, colors.fg_muted),
             make_key_line(
                 "Ctrl+R",
                 "Refresh notifications",
                 colors.green,
                 colors.fg_muted,
             ),
+            Line::from(""),
+            // Multi-select Section
+            Line::from(vec![Span::styled(
+                "Multi-select",
+                Style::default()
+                    .fg(colors.magenta)
+                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::UNDERLINED),
+            )])
+            .centered(),
+            Line::from(""),
+            make_key_line(
+                "Space",
+                "Toggle selection (auto-advance)",
+                colors.magenta,
+                colors.fg_muted,
+            ),
+            make_key_line("Esc", "Clear selection", colors.magenta, colors.fg_muted),
+            Line::from(""),
+            // View Section
+            Line::from(vec![Span::styled(
+                "View & Filter",
+                Style::default()
+                    .fg(colors.orange)
+                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::UNDERLINED),
+            )])
+            .centered(),
+            Line::from(""),
+            make_key_line(
+                "A",
+                "Toggle showing read notifications",
+                colors.orange,
+                colors.fg_muted,
+            ),
+            make_key_line("/", "Filter notifications", colors.orange, colors.fg_muted),
             make_key_line(
                 "M",
                 "Toggle auto-mark-read on scroll",
-                colors.green,
-                colors.fg_muted,
-            ),
-            make_key_line(
-                "/",
-                "Filter notifications (type to search)",
-                colors.green,
+                colors.orange,
                 colors.fg_muted,
             ),
             Line::from(""),

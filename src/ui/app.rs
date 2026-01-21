@@ -871,16 +871,19 @@ impl App {
 
         // Render confirmation dialog as overlay (if active)
         if self.state.input_mode == InputMode::Confirm {
-            if let Some(ConfirmAction::MarkAllRead { selected }) = self.state.confirm_action {
-                let count = self
-                    .state
-                    .filtered_notifications
-                    .iter()
-                    .filter(|&&idx| !self.state.is_pinned(&self.state.notifications[idx].id))
-                    .count();
+            if let Some(ref action) = self.state.confirm_action {
+                let count = match action {
+                    ConfirmAction::ArchiveSelected { count, .. } => *count,
+                    ConfirmAction::MarkAllRead { .. } => self
+                        .state
+                        .filtered_notifications
+                        .iter()
+                        .filter(|&&idx| !self.state.is_pinned(&self.state.notifications[idx].id))
+                        .count(),
+                };
                 let is_filtered = self.state.filter.is_some();
                 self.confirm_widget
-                    .render(frame, size, selected, count, is_filtered);
+                    .render(frame, size, action, count, is_filtered);
             }
         }
     }
@@ -909,20 +912,24 @@ impl App {
                 self.state.input_mode = InputMode::Normal;
                 self.state.confirm_action = None;
             }
-            KeyCode::Up | KeyCode::Char('k') => {
-                if let Some(ConfirmAction::MarkAllRead { ref mut selected }) =
-                    self.state.confirm_action
-                {
+            KeyCode::Up | KeyCode::Char('k') => match &mut self.state.confirm_action {
+                Some(ConfirmAction::MarkAllRead { ref mut selected }) => {
                     *selected = MarkAllOption::MarkReadAndArchive;
                 }
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if let Some(ConfirmAction::MarkAllRead { ref mut selected }) =
-                    self.state.confirm_action
-                {
+                Some(ConfirmAction::ArchiveSelected { ref mut option, .. }) => {
+                    *option = MarkAllOption::MarkReadAndArchive;
+                }
+                None => {}
+            },
+            KeyCode::Down | KeyCode::Char('j') => match &mut self.state.confirm_action {
+                Some(ConfirmAction::MarkAllRead { ref mut selected }) => {
                     *selected = MarkAllOption::MarkReadOnly;
                 }
-            }
+                Some(ConfirmAction::ArchiveSelected { ref mut option, .. }) => {
+                    *option = MarkAllOption::MarkReadOnly;
+                }
+                None => {}
+            },
             KeyCode::Enter => {
                 if let Some(action) = self.state.confirm_action.take() {
                     self.execute_confirmed_action(action)?;
@@ -967,6 +974,42 @@ impl App {
                 };
                 self.state.status_message = Some(msg);
             }
+            ConfirmAction::ArchiveSelected { count, option } => {
+                // Process selected notifications
+                let selected_ids = self.state.get_selected_notification_ids();
+
+                if let Some(ref client) = self.api_client {
+                    for notification_id in &selected_ids {
+                        let result = match option {
+                            MarkAllOption::MarkReadAndArchive => {
+                                client.mark_thread_done(notification_id)
+                            }
+                            MarkAllOption::MarkReadOnly => {
+                                client.mark_notification_read(notification_id)
+                            }
+                        };
+
+                        if let Err(e) = result {
+                            eprintln!("Failed to process notification {}: {}", notification_id, e);
+                        }
+                    }
+                }
+
+                self.state.clear_selection();
+
+                // Refresh to reflect changes
+                self.queue_blocking_action(BlockingAction::Refresh, "Refreshing notifications...");
+
+                let msg = match option {
+                    MarkAllOption::MarkReadAndArchive => {
+                        format!("Archived {} selected notifications", count)
+                    }
+                    MarkAllOption::MarkReadOnly => {
+                        format!("Marked {} selected notifications as read", count)
+                    }
+                };
+                self.state.status_message = Some(msg);
+            }
         }
         Ok(())
     }
@@ -977,8 +1020,11 @@ impl App {
 
         match key.code {
             KeyCode::Esc => {
-                // If a pane is focused, zoom out to split view
-                if self.state.focused_pane != PaneFocus::None {
+                // First, clear selection if any
+                if self.state.has_selection() {
+                    self.state.clear_selection();
+                } else if self.state.focused_pane != PaneFocus::None {
+                    // If a pane is focused, zoom out to split view
                     self.state.focused_pane = PaneFocus::None;
                 } else {
                     // Otherwise, quit
@@ -1097,8 +1143,46 @@ impl App {
                 self.queue_auto_mark_read();
             }
             KeyCode::Enter => {
-                // If selected item is a repository header, expand it and select first notification
-                if let Some(repo_name) = self.state.selected_repo() {
+                if self.state.has_selection() {
+                    // Open all selected notifications and mark as read
+                    let selected_ids = self.state.get_selected_notification_ids();
+                    let mut opened_count = 0;
+                    let mut marked_count = 0;
+
+                    for notification_id in &selected_ids {
+                        // Find the notification by ID
+                        if let Some(notif) = self
+                            .state
+                            .notifications
+                            .iter()
+                            .find(|n| &n.id == notification_id)
+                        {
+                            if let Some(url) = notif.web_url() {
+                                if self.open_url(&url).is_ok() {
+                                    opened_count += 1;
+                                }
+                            }
+
+                            if notif.is_unread() {
+                                marked_count += 1;
+                            }
+                        }
+
+                        self.state.mark_notification_read(notification_id);
+                        if let Some(ref client) = self.api_client {
+                            let _ = client.mark_notification_read(notification_id);
+                        }
+                    }
+
+                    self.state.clear_selection();
+                    self.state.status_message = Some(format!(
+                        "Opened {} notification{}, marked {} as read",
+                        opened_count,
+                        if opened_count == 1 { "" } else { "s" },
+                        marked_count
+                    ));
+                } else if let Some(repo_name) = self.state.selected_repo() {
+                    // If selected item is a repository header, expand it and select first notification
                     let repo_name = repo_name.to_string();
 
                     // Expand the repo if it's collapsed
@@ -1171,8 +1255,31 @@ impl App {
                 }
             }
             KeyCode::Char('o') => {
-                // Open notification URL without marking as read
-                if let Some(notification) = self.state.selected_notification() {
+                if self.state.has_selection() {
+                    // Open all selected notifications without marking as read
+                    let selected_ids = self.state.get_selected_notification_ids();
+                    let mut opened_count = 0;
+
+                    for notification_id in &selected_ids {
+                        if let Some(notif) = self
+                            .state
+                            .notifications
+                            .iter()
+                            .find(|n| &n.id == notification_id)
+                        {
+                            if let Some(url) = notif.web_url() {
+                                if self.open_url(&url).is_ok() {
+                                    opened_count += 1;
+                                }
+                            }
+                        }
+                    }
+
+                    self.state.clear_selection();
+                    self.state.status_message =
+                        Some(format!("Opened {} notifications", opened_count));
+                } else if let Some(notification) = self.state.selected_notification() {
+                    // Open notification URL without marking as read
                     if let Some(url) = notification.web_url() {
                         if let Err(e) = self.open_url(&url) {
                             eprintln!("Failed to open URL {}: {}", url, e);
@@ -1183,17 +1290,14 @@ impl App {
                 }
             }
             KeyCode::Char(' ') => {
-                // Space bar toggles repository expansion
-                let repo_name = self.state.selected_repo().map(str::to_string).or_else(|| {
-                    self.state.selected_notification().and_then(|notification| {
-                        if self.state.is_pinned(&notification.id) {
-                            Some(notification.repo_full_name().to_string())
-                        } else {
-                            None
-                        }
-                    })
-                });
-                if let Some(repo_name) = repo_name {
+                // Space bar toggles multi-select on notifications
+                if let Some(notification) = self.state.selected_notification() {
+                    let notification_id = notification.id.clone();
+                    self.state.toggle_selection(notification_id);
+                    self.state.move_down(); // Auto-advance to next notification
+                } else if let Some(repo_name) = self.state.selected_repo() {
+                    // On repo headers, toggle expansion (legacy behaviour)
+                    let repo_name = repo_name.to_string();
                     self.state.toggle_repo_expansion(&repo_name);
                 }
             }
@@ -1223,8 +1327,62 @@ impl App {
                 }
             }
             KeyCode::Char('.') => {
-                // Toggle read/unread status of selected notification
-                if let Some(notification) = self.state.selected_notification() {
+                if self.state.has_selection() {
+                    // Toggle read status of all selected notifications
+                    let selected_ids = self.state.get_selected_notification_ids();
+                    let count = selected_ids.len();
+                    let mut marked_read = 0;
+                    let mut marked_unread = 0;
+
+                    for notification_id in &selected_ids {
+                        // Check current state before toggle
+                        let was_unread = self
+                            .state
+                            .notifications
+                            .iter()
+                            .find(|n| n.id == *notification_id)
+                            .map(|n| n.is_unread())
+                            .unwrap_or(false);
+
+                        if let Some(is_now_unread) =
+                            self.state.toggle_notification_read(notification_id)
+                        {
+                            if was_unread && !is_now_unread {
+                                // Went from unread to read - call API
+                                marked_read += 1;
+                                if let Some(ref client) = self.api_client {
+                                    if let Err(e) = client.mark_notification_read(notification_id) {
+                                        eprintln!(
+                                            "Failed to mark notification {} as read: {}",
+                                            notification_id, e
+                                        );
+                                    }
+                                }
+                            } else if !was_unread && is_now_unread {
+                                // Went from read to unread - local only
+                                marked_unread += 1;
+                            }
+                        }
+                    }
+
+                    self.state.clear_selection();
+
+                    // Build status message based on what happened
+                    let msg = if marked_read > 0 && marked_unread > 0 {
+                        format!(
+                            "Toggled {} notifications ({} read, {} unread)",
+                            count, marked_read, marked_unread
+                        )
+                    } else if marked_read > 0 {
+                        format!("Marked {} notifications as read", marked_read)
+                    } else if marked_unread > 0 {
+                        format!("Marked {} notifications as unread", marked_unread)
+                    } else {
+                        format!("Toggled {} notifications", count)
+                    };
+                    self.state.status_message = Some(msg);
+                } else if let Some(notification) = self.state.selected_notification() {
+                    // Toggle read/unread status of single notification
                     let notification_id = notification.id.clone();
                     let was_unread = notification.is_unread();
 
@@ -1257,9 +1415,56 @@ impl App {
                 }
             }
             KeyCode::Char('!') => {
-                // Toggle pin status of selected notification
-                if let Some(notification) = self.state.selected_notification() {
-                    // Capture notification ID before rebuild to preserve selection
+                if self.state.has_selection() {
+                    // Toggle pin status of all selected notifications
+                    let selected_ids = self.state.get_selected_notification_ids();
+                    let count = selected_ids.len();
+                    let mut pinned = 0;
+                    let mut unpinned = 0;
+
+                    for notification_id in &selected_ids {
+                        // Find the notification by ID and clone it
+                        if let Some(notification) = self
+                            .state
+                            .notifications
+                            .iter()
+                            .find(|n| n.id == *notification_id)
+                            .cloned()
+                        {
+                            let was_pinned = self.state.is_pinned(&notification.id);
+                            self.state.toggle_pin(notification);
+                            if was_pinned {
+                                unpinned += 1;
+                            } else {
+                                pinned += 1;
+                            }
+                        }
+                    }
+
+                    self.pinned_state_dirty = true;
+                    self.state.build_tree();
+                    self.state.clear_selection();
+                    self.state.select_first_notification();
+
+                    if self.state.show_preview() {
+                        self.fetch_preview_for_selected_notification();
+                        self.prefetch_next_preview();
+                    }
+
+                    // Build status message
+                    let msg = if pinned > 0 && unpinned > 0 {
+                        format!(
+                            "Toggled {} pins ({} pinned, {} unpinned)",
+                            count, pinned, unpinned
+                        )
+                    } else if pinned > 0 {
+                        format!("Pinned {} notifications", pinned)
+                    } else {
+                        format!("Unpinned {} notifications", unpinned)
+                    };
+                    self.state.status_message = Some(msg);
+                } else if let Some(notification) = self.state.selected_notification() {
+                    // Toggle pin status of single notification
                     let selected_notif_id = notification.id.clone();
                     let notification = notification.clone();
 
@@ -1366,8 +1571,16 @@ impl App {
                 self.queue_blocking_action(BlockingAction::Refresh, "Refreshing notifications...");
             }
             KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                // Show confirmation dialog for mark all as read
-                if !self.state.notifications.is_empty() {
+                if self.state.has_selection() {
+                    // Archive selected notifications
+                    let count = self.state.selection_count();
+                    self.state.confirm_action = Some(ConfirmAction::ArchiveSelected {
+                        count,
+                        option: MarkAllOption::MarkReadAndArchive, // Default to archive
+                    });
+                    self.state.input_mode = InputMode::Confirm;
+                } else if !self.state.notifications.is_empty() {
+                    // Show confirmation dialog for mark all as read
                     self.state.confirm_action = Some(ConfirmAction::MarkAllRead {
                         selected: MarkAllOption::MarkReadOnly, // Default
                     });
@@ -1375,7 +1588,8 @@ impl App {
                 }
             }
             KeyCode::Char('/') => {
-                // Enter interactive filter mode
+                // Enter interactive filter mode, clear selection
+                self.state.clear_selection();
                 self.state.search_query.clear();
                 self.state.input_mode = InputMode::Search;
             }

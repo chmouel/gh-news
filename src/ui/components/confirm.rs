@@ -1,4 +1,4 @@
-use crate::state::MarkAllOption;
+use crate::state::{ConfirmAction, MarkAllOption};
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Clear, Paragraph},
@@ -15,7 +15,7 @@ impl ConfirmWidget {
         &self,
         frame: &mut Frame,
         area: Rect,
-        selected: MarkAllOption,
+        action: &ConfirmAction,
         count: usize,
         is_filtered: bool,
     ) {
@@ -37,11 +37,20 @@ impl ConfirmWidget {
         // Clear the background area
         frame.render_widget(Clear, centered_area);
 
+        // Get the selected option from the action
+        let selected = match action {
+            ConfirmAction::MarkAllRead { selected } => *selected,
+            ConfirmAction::ArchiveSelected { option, .. } => *option,
+        };
+
         // Selection indicators
         let (archive_indicator, read_indicator) = match selected {
             MarkAllOption::MarkReadAndArchive => ("[*]", "[ ]"),
             MarkAllOption::MarkReadOnly => ("[ ]", "[*]"),
         };
+
+        // Determine label text based on action type
+        let is_selected_action = matches!(action, ConfirmAction::ArchiveSelected { .. });
 
         let content = vec![
             Line::from(""),
@@ -68,7 +77,11 @@ impl ConfirmWidget {
                     }),
                 ),
                 Span::styled(" Just mark as read ", Style::default()),
-                Span::styled("(default)", Style::default().fg(colors.fg_muted)),
+                if !is_selected_action {
+                    Span::styled("(default)", Style::default().fg(colors.fg_muted))
+                } else {
+                    Span::raw("")
+                },
             ]),
             Line::from(""),
             Line::from(vec![
@@ -82,11 +95,25 @@ impl ConfirmWidget {
             ]),
         ];
 
-        // Build title based on count and filter state
-        let title_text = if is_filtered {
-            format!(" Mark {} Filtered Notifications ", count)
+        // Build title based on action type, count, and filter state
+        let title_text = match action {
+            ConfirmAction::ArchiveSelected { count, .. } => {
+                format!(" Archive {} Selected Notifications ", count)
+            }
+            ConfirmAction::MarkAllRead { .. } => {
+                if is_filtered {
+                    format!(" Mark {} Filtered Notifications ", count)
+                } else {
+                    format!(" Mark {} Notifications ", count)
+                }
+            }
+        };
+
+        // Use magenta for selected action, yellow for mark all
+        let border_color = if is_selected_action {
+            colors.magenta
         } else {
-            format!(" Mark {} Notifications ", count)
+            colors.yellow
         };
 
         let block = Block::default()
@@ -96,13 +123,13 @@ impl ConfirmWidget {
                 Span::styled(
                     title_text,
                     Style::default()
-                        .fg(colors.yellow)
+                        .fg(border_color)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(" ", Style::default()),
             ])
             .title_alignment(Alignment::Center)
-            .border_style(Style::default().fg(colors.yellow))
+            .border_style(Style::default().fg(border_color))
             .border_type(ratatui::widgets::BorderType::Rounded);
 
         let paragraph = Paragraph::new(content)

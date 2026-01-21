@@ -186,13 +186,27 @@ impl ListWidget {
                         if let Some(notif) = app_state.notifications.get(*notif_idx) {
                             let time = notif.time_display();
                             let is_pinned = app_state.is_pinned(&notif.id);
+                            let is_multi_selected = app_state.is_selected(&notif.id);
 
                             // Build styled line with spans
                             let mut line = vec![];
 
+                            // Multi-select checkmark indicator
+                            let colors = TokyoNight::colors();
+                            if is_multi_selected {
+                                line.push(Span::styled(
+                                    "✓ ",
+                                    Style::default()
+                                        .fg(colors.magenta)
+                                        .add_modifier(Modifier::BOLD),
+                                ));
+                            } else {
+                                line.push(Span::styled("  ", Style::default()));
+                            }
+
                             // Indentation for tree structure with nerd-font icon
                             // 󰆍 = subdirectory_arrow_right
-                            line.push(Span::styled("  󰆍 ", Style::default().fg(Color::DarkGray)));
+                            line.push(Span::styled("󰆍 ", Style::default().fg(Color::DarkGray)));
 
                             // Unread/pinned indicator - enhanced styling
                             let colors = TokyoNight::colors();
@@ -291,6 +305,41 @@ impl ListWidget {
             .count();
 
         let colors = crate::ui::theme::TokyoNight::colors();
+        let selection_count = app_state.selection_count();
+
+        // Build title spans for right side
+        let mut title_spans = vec![
+            Span::styled(
+                format!("󰞏{count} "),
+                Style::default()
+                    .fg(self.theme.highlight_fg)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" {unread_count} "),
+                Style::default().fg(colors.red).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("󰉋{repo_count} "),
+                Style::default()
+                    .fg(self.theme.highlight_fg)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ];
+
+        // Add selection count if any items are selected
+        if selection_count > 0 {
+            title_spans.insert(
+                0,
+                Span::styled(
+                    format!("✓{selection_count} "),
+                    Style::default()
+                        .fg(colors.magenta)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            );
+        }
+
         let list = List::new(items)
             .block(
                 Block::default()
@@ -304,27 +353,7 @@ impl ListWidget {
                                     .add_modifier(Modifier::BOLD),
                             ),
                     )
-                    .title(
-                        Line::from(vec![
-                            Span::styled(
-                                format!("󰞏{count} "),
-                                Style::default()
-                                    .fg(self.theme.highlight_fg)
-                                    .add_modifier(Modifier::BOLD),
-                            ),
-                            Span::styled(
-                                format!(" {unread_count} "),
-                                Style::default().fg(colors.red).add_modifier(Modifier::BOLD),
-                            ),
-                            Span::styled(
-                                format!("󰉋{repo_count} "),
-                                Style::default()
-                                    .fg(self.theme.highlight_fg)
-                                    .add_modifier(Modifier::BOLD),
-                            ),
-                        ])
-                        .right_aligned(),
-                    )
+                    .title(Line::from(title_spans).right_aligned())
                     .border_style(self.theme.border)
                     .border_type(ratatui::widgets::BorderType::Rounded)
                     .padding(ratatui::widgets::Padding::new(1, 1, 1, 1)),
