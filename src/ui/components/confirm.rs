@@ -11,7 +11,14 @@ impl ConfirmWidget {
         Self
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect, selected: MarkAllOption) {
+    pub fn render(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        selected: MarkAllOption,
+        count: usize,
+        is_filtered: bool,
+    ) {
         let colors = crate::ui::theme::TokyoNight::colors();
 
         // Calculate centered box dimensions (compact dialog)
@@ -75,12 +82,19 @@ impl ConfirmWidget {
             ]),
         ];
 
+        // Build title based on count and filter state
+        let title_text = if is_filtered {
+            format!(" Mark {} Filtered Notifications ", count)
+        } else {
+            format!(" Mark {} Notifications ", count)
+        };
+
         let block = Block::default()
             .borders(Borders::ALL)
             .title(vec![
                 Span::styled(" ", Style::default()),
                 Span::styled(
-                    " Mark All Notifications ",
+                    title_text,
                     Style::default()
                         .fg(colors.yellow)
                         .add_modifier(Modifier::BOLD),

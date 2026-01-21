@@ -348,30 +348,20 @@ impl App {
                 if let Some(ref client) = self.api_client {
                     match selected {
                         MarkAllOption::MarkReadAndArchive => {
-                            for notif in &self.state.notifications {
+                            for &idx in &self.state.filtered_notifications {
+                                let notif = &self.state.notifications[idx];
                                 if !self.state.is_pinned(&notif.id) {
                                     let _ = client.mark_thread_done(&notif.id);
                                 }
                             }
                         }
                         MarkAllOption::MarkReadOnly => {
-                            for notif in &self.state.notifications {
+                            for &idx in &self.state.filtered_notifications {
+                                let notif = &self.state.notifications[idx];
                                 if !self.state.is_pinned(&notif.id) {
                                     let _ = client.mark_notification_read(&notif.id);
                                 }
                             }
-                        }
-                    }
-
-                    let pinned_ids: HashSet<_> = self
-                        .state
-                        .pinned_notifications
-                        .iter()
-                        .map(|n| n.id.as_str())
-                        .collect();
-                    for notif in &mut self.state.notifications {
-                        if !pinned_ids.contains(notif.id.as_str()) {
-                            notif.unread = false;
                         }
                     }
 
@@ -882,7 +872,15 @@ impl App {
         // Render confirmation dialog as overlay (if active)
         if self.state.input_mode == InputMode::Confirm {
             if let Some(ConfirmAction::MarkAllRead { selected }) = self.state.confirm_action {
-                self.confirm_widget.render(frame, size, selected);
+                let count = self
+                    .state
+                    .filtered_notifications
+                    .iter()
+                    .filter(|&&idx| !self.state.is_pinned(&self.state.notifications[idx].id))
+                    .count();
+                let is_filtered = self.state.filter.is_some();
+                self.confirm_widget
+                    .render(frame, size, selected, count, is_filtered);
             }
         }
     }
@@ -939,23 +937,33 @@ impl App {
     fn execute_confirmed_action(&mut self, action: ConfirmAction) -> Result<()> {
         match action {
             ConfirmAction::MarkAllRead { selected } => {
-                // Count non-pinned notifications before action
+                // Count non-pinned filtered notifications before action
                 let count = self
                     .state
-                    .notifications
+                    .filtered_notifications
                     .iter()
-                    .filter(|n| !self.state.is_pinned(&n.id))
+                    .filter(|&&idx| !self.state.is_pinned(&self.state.notifications[idx].id))
                     .count();
+
+                let is_filtered = self.state.filter.is_some();
 
                 // Execute directly (blocking, no progress bar)
                 self.perform_blocking_action(BlockingAction::MarkAllRead { selected })?;
 
-                // Set status message
-                let msg = match selected {
-                    MarkAllOption::MarkReadAndArchive => {
+                // Set status message (indicate "filtered" when a filter is active)
+                let msg = match (selected, is_filtered) {
+                    (MarkAllOption::MarkReadAndArchive, true) => {
+                        format!("Archived {} filtered notifications", count)
+                    }
+                    (MarkAllOption::MarkReadAndArchive, false) => {
                         format!("Archived {} notifications", count)
                     }
-                    MarkAllOption::MarkReadOnly => format!("Marked {} as read", count),
+                    (MarkAllOption::MarkReadOnly, true) => {
+                        format!("Marked {} filtered notifications as read", count)
+                    }
+                    (MarkAllOption::MarkReadOnly, false) => {
+                        format!("Marked {} as read", count)
+                    }
                 };
                 self.state.status_message = Some(msg);
             }
