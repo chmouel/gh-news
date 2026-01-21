@@ -60,23 +60,42 @@ fn run() -> Result<()> {
     let opts = RuntimeOptions::from_args_and_config(&args, &config);
 
     // Handle non-interactive modes first
-    if args.mark_read {
+    if args.mark_read || args.mark_read_archive {
         let client = api::GitHubClient::new(&config)?;
+        let archive = args.mark_read_archive;
 
-        if let Some(ref pattern) = opts.filter_pattern {
-            // Fetch notifications and apply filter
-            let notifications =
-                client.get_notifications(opts.show_all, opts.participating, None, None)?;
+        let notifications =
+            client.get_notifications(opts.show_all, opts.participating, None, None)?;
+
+        let to_process: Vec<_> = if let Some(ref pattern) = opts.filter_pattern {
             let filter = Filter::new(Some(pattern))?;
-            let filtered: Vec<_> = notifications.iter().filter(|n| filter.matches(n)).collect();
-
-            for notif in &filtered {
-                let _ = client.mark_notification_read(&notif.id);
-            }
-            println!("Marked {} filtered notifications as read.", filtered.len());
+            notifications.iter().filter(|n| filter.matches(n)).collect()
         } else {
+            notifications.iter().collect()
+        };
+
+        // Use bulk API when marking all as read (no filter, no archive)
+        if !archive && opts.filter_pattern.is_none() {
             client.mark_all_read(None)?;
-            println!("All notifications have been marked as read.");
+        } else {
+            for notif in &to_process {
+                if archive {
+                    let _ = client.mark_thread_done(&notif.id);
+                } else {
+                    let _ = client.mark_notification_read(&notif.id);
+                }
+            }
+        }
+
+        let action = if archive { "read and archived" } else { "read" };
+        if opts.filter_pattern.is_some() {
+            println!(
+                "Marked {} filtered notifications as {}.",
+                to_process.len(),
+                action
+            );
+        } else {
+            println!("Marked {} notifications as {}.", to_process.len(), action);
         }
         return Ok(());
     }

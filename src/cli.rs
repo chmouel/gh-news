@@ -29,6 +29,10 @@ pub struct Args {
     #[arg(short = 'r', long)]
     pub mark_read: bool,
 
+    /// Mark all notifications as read and archive them
+    #[arg(long)]
+    pub mark_read_archive: bool,
+
     /// Print a static display (non-interactive)
     #[arg(short = 's', long)]
     pub static_display: bool,
