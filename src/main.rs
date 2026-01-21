@@ -62,8 +62,22 @@ fn run() -> Result<()> {
     // Handle non-interactive modes first
     if args.mark_read {
         let client = api::GitHubClient::new(&config)?;
-        client.mark_all_read(None)?;
-        println!("All notifications have been marked as read.");
+
+        if let Some(ref pattern) = opts.filter_pattern {
+            // Fetch notifications and apply filter
+            let notifications =
+                client.get_notifications(opts.show_all, opts.participating, None, None)?;
+            let filter = Filter::new(Some(pattern))?;
+            let filtered: Vec<_> = notifications.iter().filter(|n| filter.matches(n)).collect();
+
+            for notif in &filtered {
+                let _ = client.mark_notification_read(&notif.id);
+            }
+            println!("Marked {} filtered notifications as read.", filtered.len());
+        } else {
+            client.mark_all_read(None)?;
+            println!("All notifications have been marked as read.");
+        }
         return Ok(());
     }
 
