@@ -1301,7 +1301,7 @@ impl App {
                     self.state.toggle_repo_expansion(&repo_name);
                 }
             }
-            KeyCode::Char('h') => {
+            KeyCode::Left | KeyCode::Char('h') => {
                 // Collapse the current folder if expanded
                 if let Some(repo_name) = self.state.parent_repo_for_selected() {
                     let repo_name = repo_name.to_string();
