@@ -168,6 +168,10 @@ impl HelpWidget {
                         desc: "Toggle showing read notifications",
                     },
                     HelpLine {
+                        key: "E",
+                        desc: "Expunge read notifications",
+                    },
+                    HelpLine {
                         key: "/",
                         desc: "Filter notifications",
                     },

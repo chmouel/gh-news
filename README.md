@@ -82,6 +82,7 @@ gh news --static-display | grep "something" # List notifications without TUI
 
 ### View & Filter
 - `A` - Toggle showing read notifications
+- `E` - Expunge read notifications
 - `/` - Filter notifications (type to search, Enter to keep, Esc to clear)
 - `Tab` - Cycle preview modes (Off → Horizontal → Vertical)
 - `J`/`K` - Scroll preview (line by line)

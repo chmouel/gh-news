@@ -276,7 +276,7 @@ impl App {
             if let Some((all, participating, max_notifications)) = self.refresh_args {
                 // Loading state is managed by the caller to avoid auto-refresh flicker.
 
-                let all_notifications = fetch_notifications(
+                let mut all_notifications = fetch_notifications(
                     client,
                     NotificationFetchOptions {
                         show_all: all,
@@ -285,6 +285,11 @@ impl App {
                         per_page: self.config.pagination_size,
                     },
                 )?;
+                for pinned in self.state.get_pinned_notifications() {
+                    if !all_notifications.iter().any(|n| n.id == pinned.id) {
+                        all_notifications.push(pinned.clone());
+                    }
+                }
 
                 // Preserve current selection if possible
                 let old_notif_id = self.state.selected_notification().map(|n| n.id.clone());
@@ -1487,6 +1492,11 @@ impl App {
                 // Force refresh notifications
                 self.queue_blocking_action(BlockingAction::Refresh, "Refreshing notifications...");
             }
+            KeyCode::Char('E') | KeyCode::Char('e')
+                if key.modifiers.contains(KeyModifiers::SHIFT) =>
+            {
+                self.expunge_read_notifications();
+            }
             KeyCode::Char('A') | KeyCode::Char('a')
                 if key.modifiers.contains(KeyModifiers::SHIFT) =>
             {
@@ -1568,6 +1578,70 @@ impl App {
             self.state.set_filter(filter);
             self.state
                 .set_filter_pattern(Some(self.state.search_query.clone()));
+        }
+    }
+
+    fn expunge_read_notifications(&mut self) {
+        if self.state.show_all {
+            self.state.show_all = false;
+            if let Some((_, participating, max_notifications)) = self.refresh_args {
+                self.refresh_args = Some((false, participating, max_notifications));
+            }
+        }
+
+        let selected_id = self.state.selected_notification().map(|n| n.id.clone());
+        let mut removed = 0usize;
+        let mut kept = Vec::with_capacity(self.state.notifications.len());
+
+        for notification in &self.state.notifications {
+            if notification.is_unread() || self.state.is_pinned(&notification.id) {
+                kept.push(notification.clone());
+            } else {
+                removed += 1;
+            }
+        }
+
+        if removed == 0 {
+            self.state.status_message = Some("No read notifications to expunge".to_string());
+            return;
+        }
+
+        self.state.set_notifications(kept);
+
+        let existing_ids: HashSet<String> = self
+            .state
+            .notifications
+            .iter()
+            .map(|n| n.id.clone())
+            .collect();
+        self.state
+            .selected_notification_ids
+            .retain(|id| existing_ids.contains(id));
+
+        if let Some(notification_id) = selected_id {
+            if !self.state.select_notification_by_id(&notification_id) {
+                self.state.select_first_notification();
+            }
+        } else {
+            self.state.select_first_notification();
+        }
+
+        self.state.preview_scroll = 0;
+        if self.state.show_preview() {
+            self.fetch_preview_for_selected_notification();
+            self.prefetch_next_preview();
+        }
+
+        self.pending_mark_read = None;
+
+        self.state.status_message = Some(format!(
+            "Expunged {} read notification{}",
+            removed,
+            if removed == 1 { "" } else { "s" }
+        ));
+
+        if self.refresh_args.is_some() {
+            self.queue_blocking_action(BlockingAction::Refresh, "Refreshing notifications...");
         }
     }
 
