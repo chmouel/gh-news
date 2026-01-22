@@ -8,7 +8,7 @@ use crate::preview::PreviewData;
 use crate::preview_manager::PreviewManager;
 use crate::state::{AppState, ConfirmAction, InputMode, MarkAllOption, PaneFocus, PreviewMode};
 use crate::terminal::Terminal;
-use crate::ui::components::{confirm, filter, help, list, loading, preview, status};
+use crate::ui::components::{confirm, filter, help, help_search, list, loading, preview, status};
 use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
     MouseEventKind,
@@ -50,6 +50,7 @@ pub struct App {
     preview_widget: preview::PreviewWidget,
     status_widget: status::StatusWidget,
     help_widget: help::HelpWidget,
+    help_search_widget: help_search::HelpSearchWidget,
     confirm_widget: confirm::ConfirmWidget,
     loading_widget: loading::LoadingWidget,
     filter_widget: filter::FilterWidget,
@@ -79,6 +80,7 @@ impl App {
             preview_widget: preview::PreviewWidget::new(),
             status_widget: status::StatusWidget::new(),
             help_widget: help::HelpWidget::new(),
+            help_search_widget: help_search::HelpSearchWidget::new(),
             confirm_widget: confirm::ConfirmWidget::new(),
             loading_widget: loading::LoadingWidget::new(),
             filter_widget: filter::FilterWidget::new(),
@@ -606,7 +608,32 @@ impl App {
         }
 
         if self.state.show_help {
-            self.help_widget.render(frame, size);
+            let layout = help::HelpWidget::layout(size);
+            let filter = self.state.help_search_query.trim();
+            let filter = if filter.is_empty() {
+                None
+            } else {
+                Some(filter)
+            };
+            let content = help::HelpWidget::build_content(filter);
+            self.state.help_view_height = layout.inner_height;
+            self.state.help_content_len =
+                help::HelpWidget::content_height(&content, layout.inner_width);
+            self.clamp_help_scroll();
+            self.help_widget
+                .render(frame, layout, &content, self.state.help_scroll);
+            if self.state.input_mode == InputMode::HelpSearch
+                || !self.state.help_search_query.is_empty()
+            {
+                self.help_search_widget.render(
+                    frame,
+                    size,
+                    &self.state.help_search_query,
+                    content.match_count,
+                    content.total_lines,
+                    self.state.input_mode == InputMode::HelpSearch,
+                );
+            }
             return;
         }
 
@@ -717,16 +744,8 @@ impl App {
         match self.state.input_mode {
             InputMode::Normal => self.handle_normal_key(key),
             InputMode::Search => self.handle_search_key(key),
-            InputMode::Help => {
-                if key.code == KeyCode::Char('?')
-                    || key.code == KeyCode::Char('q')
-                    || key.code == KeyCode::Esc
-                {
-                    self.state.show_help = false;
-                    self.state.input_mode = InputMode::Normal;
-                }
-                Ok(())
-            }
+            InputMode::Help => self.handle_help_key(key),
+            InputMode::HelpSearch => self.handle_help_search_key(key),
             InputMode::Confirm => self.handle_confirm_key(key),
         }
     }
@@ -764,6 +783,132 @@ impl App {
             _ => {}
         }
         Ok(())
+    }
+
+    fn handle_help_key(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Esc => {
+                self.close_help();
+            }
+            KeyCode::Char('/') => {
+                self.state.input_mode = InputMode::HelpSearch;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.scroll_help_by(-1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.scroll_help_by(1);
+            }
+            KeyCode::PageUp => {
+                let page = self.help_page_size();
+                self.scroll_help_by(-(page as isize));
+            }
+            KeyCode::PageDown => {
+                let page = self.help_page_size();
+                self.scroll_help_by(page as isize);
+            }
+            KeyCode::Home => {
+                self.state.help_scroll = 0;
+            }
+            KeyCode::End => {
+                self.state.help_scroll = self.help_max_scroll();
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_help_search_key(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Char('?') | KeyCode::Char('q') => {
+                self.close_help();
+            }
+            KeyCode::Esc => {
+                self.state.help_search_query.clear();
+                self.state.help_scroll = 0;
+                self.state.input_mode = InputMode::Help;
+            }
+            KeyCode::Enter => {
+                self.state.input_mode = InputMode::Help;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.scroll_help_by(-1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.scroll_help_by(1);
+            }
+            KeyCode::PageUp => {
+                let page = self.help_page_size();
+                self.scroll_help_by(-(page as isize));
+            }
+            KeyCode::PageDown => {
+                let page = self.help_page_size();
+                self.scroll_help_by(page as isize);
+            }
+            KeyCode::Home => {
+                self.state.help_scroll = 0;
+            }
+            KeyCode::End => {
+                self.state.help_scroll = self.help_max_scroll();
+            }
+            KeyCode::Char(c) => {
+                self.state.help_search_query.push(c);
+                self.state.help_scroll = 0;
+            }
+            KeyCode::Backspace => {
+                self.state.help_search_query.pop();
+                self.state.help_scroll = 0;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn help_max_scroll(&self) -> usize {
+        if self.state.help_view_height == 0 {
+            return 0;
+        }
+        self.state
+            .help_content_len
+            .saturating_sub(self.state.help_view_height)
+    }
+
+    fn help_page_size(&self) -> usize {
+        let page = self.state.help_view_height.saturating_sub(1);
+        page.max(1)
+    }
+
+    fn scroll_help_by(&mut self, delta: isize) {
+        if delta.is_negative() {
+            let amount = (-delta) as usize;
+            self.state.help_scroll = self.state.help_scroll.saturating_sub(amount);
+        } else {
+            self.state.help_scroll = self.state.help_scroll.saturating_add(delta as usize);
+        }
+        self.clamp_help_scroll();
+    }
+
+    fn clamp_help_scroll(&mut self) {
+        let max_scroll = self.help_max_scroll();
+        if self.state.help_scroll > max_scroll {
+            self.state.help_scroll = max_scroll;
+        }
+    }
+
+    fn open_help(&mut self) {
+        self.state.show_help = true;
+        self.state.input_mode = InputMode::Help;
+        self.state.help_scroll = 0;
+        self.state.help_search_query.clear();
+        self.state.help_content_len = 0;
+        self.state.help_view_height = 0;
+    }
+
+    fn close_help(&mut self) {
+        self.state.show_help = false;
+        self.state.input_mode = InputMode::Normal;
+        self.state.help_scroll = 0;
+        self.state.help_search_query.clear();
     }
 
     fn execute_confirmed_action(&mut self, action: ConfirmAction) -> Result<()> {
@@ -886,8 +1031,7 @@ impl App {
                 self.should_quit = true;
             }
             KeyCode::Char('?') => {
-                self.state.show_help = true;
-                self.state.input_mode = InputMode::Help;
+                self.open_help();
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 self.state.move_up();

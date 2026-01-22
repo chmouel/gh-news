@@ -94,6 +94,12 @@ gh news --static-display | grep "something" # List notifications without TUI
 - `Esc` or `q` or `Ctrl+C` - Quit application
 - `?` - Show help
 
+### Help
+- `↑`/`↓` or `j`/`k` - Scroll help
+- `PageUp`/`PageDown` - Page scroll help
+- `Home`/`End` - Jump to top/bottom of help
+- `/` - Search within help (type to filter, Enter to keep, Esc to clear)
+
 ## Configuration
 
 gh-news can be configured via a TOML file at `~/.config/gh-news/config.toml`. All options are optional and have sensible defaults. CLI flags take precedence over config file settings.
