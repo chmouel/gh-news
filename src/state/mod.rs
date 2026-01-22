@@ -3,6 +3,10 @@ use crate::models::Notification;
 use crate::preview::PreviewData;
 use std::collections::{HashMap, HashSet};
 
+mod tree;
+
+use tree::TreeBuilder;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TreeItem {
     PinnedHeader,             // Header for pinned notifications section
@@ -163,105 +167,19 @@ impl AppState {
     }
 
     pub fn build_tree(&mut self) {
-        use chrono::{DateTime, Utc};
-
-        self.tree_items.clear();
-
-        // Partition into pinned and non-pinned notifications
-        let (pinned_indices, regular_indices): (Vec<usize>, Vec<usize>) =
-            self.filtered_notifications.iter().partition(|&&idx| {
-                self.notifications
-                    .get(idx)
-                    .map(|n| self.is_pinned(&n.id))
-                    .unwrap_or(false)
-            });
-
-        // Add pinned section if there are pinned notifications
-        if !pinned_indices.is_empty() {
-            self.tree_items.push(TreeItem::PinnedHeader);
-
-            // Sort pinned notifications by timestamp (newest first)
-            let mut sorted_pinned = pinned_indices;
-            sorted_pinned.sort_by(|&a, &b| {
-                let timestamp_a = self
-                    .notifications
-                    .get(a)
-                    .and_then(|n| n.effective_timestamp())
-                    .unwrap_or(DateTime::<Utc>::MIN_UTC);
-                let timestamp_b = self
-                    .notifications
-                    .get(b)
-                    .and_then(|n| n.effective_timestamp())
-                    .unwrap_or(DateTime::<Utc>::MIN_UTC);
-                timestamp_b.cmp(&timestamp_a)
-            });
-
-            for idx in sorted_pinned {
-                self.tree_items.push(TreeItem::Notification(idx));
-            }
-        }
-
-        // Group non-pinned notifications by repository
-        let mut repo_groups: HashMap<String, Vec<usize>> = HashMap::new();
-
-        for idx in regular_indices {
-            if let Some(notif) = self.notifications.get(idx) {
-                let repo_name = notif.repo_full_name().to_string();
-                repo_groups.entry(repo_name).or_default().push(idx);
-            }
-        }
-
-        // Create a vector of (repo_name, notif_indices, latest_timestamp) for sorting
-        let mut repo_list: Vec<(String, Vec<usize>, DateTime<Utc>)> = repo_groups
-            .into_iter()
-            .map(|(repo_name, mut notif_indices)| {
-                // Sort notifications within this repository by timestamp (newest first)
-                notif_indices.sort_by(|&a, &b| {
-                    let timestamp_a = self
-                        .notifications
-                        .get(a)
-                        .and_then(|n| n.effective_timestamp())
-                        .unwrap_or(DateTime::<Utc>::MIN_UTC);
-                    let timestamp_b = self
-                        .notifications
-                        .get(b)
-                        .and_then(|n| n.effective_timestamp())
-                        .unwrap_or(DateTime::<Utc>::MIN_UTC);
-                    timestamp_b.cmp(&timestamp_a) // Descending order (newest first)
-                });
-
-                // Find the latest timestamp for this repository
-                let latest_timestamp = notif_indices
-                    .iter()
-                    .filter_map(|&idx| {
-                        self.notifications
-                            .get(idx)
-                            .and_then(|n| n.effective_timestamp())
-                    })
-                    .max()
-                    .unwrap_or(DateTime::<Utc>::MIN_UTC);
-
-                (repo_name, notif_indices, latest_timestamp)
-            })
+        let pinned_ids: HashSet<String> = self
+            .pinned_notifications
+            .iter()
+            .map(|n| n.id.clone())
             .collect();
 
-        // Sort repositories by their latest notification timestamp (newest first)
-        repo_list.sort_by(|a, b| b.2.cmp(&a.2)); // Descending order (newest first)
-
-        // Build tree items: repository headers and their notifications
-        for (repo_name, notif_indices, _) in repo_list {
-            // Add repository header
-            self.tree_items
-                .push(TreeItem::RepositoryHeader(repo_name.clone()));
-
-            // Add notifications if repository is expanded (default: expanded)
-            let is_expanded = *self.expanded_repos.get(&repo_name).unwrap_or(&true);
-            if is_expanded {
-                for &notif_idx in &notif_indices {
-                    self.tree_items.push(TreeItem::Notification(notif_idx));
-                }
-            }
-        }
+        self.tree_items = TreeBuilder::new(
+            &self.notifications,
+            &self.filtered_notifications,
+            &self.expanded_repos,
+            &pinned_ids,
+        )
+        .build();
     }
 
     pub fn toggle_repo_expansion(&mut self, repo_name: &str) {

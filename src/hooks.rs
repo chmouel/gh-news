@@ -22,6 +22,7 @@ use std::process::{Command, Stdio};
 pub fn execute_new_notification_hook(
     command_template: &str,
     notification: &Notification,
+    github_host: &str,
 ) -> std::io::Result<()> {
     // Parse command into program and arguments
     let parts: Vec<&str> = command_template.split_whitespace().collect();
@@ -48,7 +49,7 @@ pub fn execute_new_notification_hook(
         .env("GH_NEWS_UNREAD", notification.unread.to_string());
 
     // Add optional fields
-    if let Some(url) = notification.web_url() {
+    if let Some(url) = notification.web_url(github_host) {
         child.env("GH_NEWS_URL", url);
     }
 
@@ -101,7 +102,7 @@ mod tests {
     #[test]
     fn test_empty_command_is_noop() {
         let notification = create_test_notification();
-        let result = execute_new_notification_hook("", &notification);
+        let result = execute_new_notification_hook("", &notification, "github.com");
         assert!(result.is_ok());
     }
 
@@ -109,7 +110,7 @@ mod tests {
     fn test_valid_command_spawns() {
         let notification = create_test_notification();
         // Use "true" command which exists on Unix systems and always succeeds
-        let result = execute_new_notification_hook("true", &notification);
+        let result = execute_new_notification_hook("true", &notification, "github.com");
         assert!(result.is_ok());
     }
 
@@ -119,6 +120,7 @@ mod tests {
         let result = execute_new_notification_hook(
             "this_command_definitely_does_not_exist_xyz",
             &notification,
+            "github.com",
         );
         assert!(result.is_err());
     }
@@ -127,7 +129,7 @@ mod tests {
     fn test_command_with_args() {
         let notification = create_test_notification();
         // "echo" with arguments should spawn successfully
-        let result = execute_new_notification_hook("echo test", &notification);
+        let result = execute_new_notification_hook("echo test", &notification, "github.com");
         assert!(result.is_ok());
     }
 }

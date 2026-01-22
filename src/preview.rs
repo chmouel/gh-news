@@ -1,9 +1,6 @@
-use crate::api::get_github_token;
 use crate::api::GitHubClient;
 use crate::error::Result;
 use crate::models::{Notification, NotificationType};
-use reqwest::blocking::Client as ReqwestClient;
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 use std::fmt;
 
 #[derive(Debug, Clone)]
@@ -28,7 +25,6 @@ pub enum PreviewData {
     Commit {
         sha: String,
         author: String,
-        message: String,
         body: String,
     },
     Release {
@@ -46,14 +42,70 @@ pub enum PreviewData {
     },
     Generic {
         title: String,
-        notification_type: NotificationType,
         body: String,
     },
 }
 
-impl fmt::Display for PreviewData {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PreviewHeaderKind {
+    Title,
+    Label,
+    Status,
+    Dim,
+    AccentPullRequest,
+    AccentIssue,
+    AccentCommit,
+    AccentRelease,
+    Warning,
+    Author,
+    Count,
+    Date,
+    PackageList,
+}
+
+#[derive(Debug, Clone)]
+pub struct PreviewHeaderPart {
+    pub text: String,
+    pub kind: PreviewHeaderKind,
+}
+
+#[derive(Debug, Clone)]
+pub struct PreviewHeaderLine {
+    pub parts: Vec<PreviewHeaderPart>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PreviewView {
+    pub header: Vec<PreviewHeaderLine>,
+    pub body: String,
+}
+
+impl PreviewHeaderLine {
+    pub fn text(&self) -> String {
+        self.parts
+            .iter()
+            .map(|part| part.text.as_str())
+            .collect::<Vec<_>>()
+            .join("")
+    }
+}
+
+impl PreviewView {
+    pub fn from(preview: &PreviewData) -> Self {
+        use PreviewHeaderKind::{
+            AccentCommit, AccentIssue, AccentPullRequest, AccentRelease, Author, Count, Date, Dim,
+            Label, PackageList, Status, Title, Warning,
+        };
+
+        fn part<T: Into<String>>(text: T, kind: PreviewHeaderKind) -> PreviewHeaderPart {
+            PreviewHeaderPart {
+                text: text.into(),
+                kind,
+            }
+        }
+        let line = |parts: Vec<PreviewHeaderPart>| PreviewHeaderLine { parts };
+
+        let header = match preview {
             PreviewData::PullRequest {
                 number,
                 title,
@@ -61,123 +113,143 @@ impl fmt::Display for PreviewData {
                 author,
                 comments,
                 mergeable,
-                body,
-            } => {
-                write!(
-                    f,
-                    "Pull Request #{} - {}\n\
-                    State: {} | Author: {} | Comments: {} | Mergeable: {}\n\
-                    {}\n\n\
-                    {}\n",
-                    number,
-                    title,
-                    state,
-                    author,
-                    comments,
-                    mergeable,
-                    "=".repeat(80),
-                    body
-                )
-            }
+                ..
+            } => vec![
+                line(vec![
+                    part("PR #", AccentPullRequest),
+                    part(number.clone(), AccentPullRequest),
+                    part(" - ", Dim),
+                    part(title.clone(), Title),
+                    part(" [", Dim),
+                    part(state.clone(), Status),
+                    part("]", Dim),
+                ]),
+                line(vec![
+                    part("Author: ", Label),
+                    part(author.clone(), Author),
+                    part(" | ", Dim),
+                    part("Comments: ", Label),
+                    part(comments.to_string(), Count),
+                    part(" | ", Dim),
+                    part("Mergeable: ", Label),
+                    part(mergeable.clone(), Status),
+                ]),
+            ],
             PreviewData::Issue {
                 number,
                 title,
                 state,
                 author,
                 comments,
-                body,
-            } => {
-                write!(
-                    f,
-                    "Issue #{} - {}\n\
-                    State: {} | Author: {} | Comments: {}\n\
-                    {}\n\n\
-                    {}\n",
-                    number,
-                    title,
-                    state,
-                    author,
-                    comments,
-                    "=".repeat(80),
-                    body
-                )
-            }
-            PreviewData::Commit {
-                sha,
-                author,
-                message,
-                body: _,
-            } => {
-                write!(
-                    f,
-                    "Commit {}\n\
-                    Author: {}\n\
-                    {}\n\n\
-                    {}\n",
-                    &sha[..12.min(sha.len())],
-                    author,
-                    "=".repeat(80),
-                    message
-                )
-            }
+                ..
+            } => vec![
+                line(vec![
+                    part("Issue #", AccentIssue),
+                    part(number.clone(), AccentIssue),
+                    part(" - ", Dim),
+                    part(title.clone(), Title),
+                    part(" [", Dim),
+                    part(state.clone(), Status),
+                    part("]", Dim),
+                ]),
+                line(vec![
+                    part("Author: ", Label),
+                    part(author.clone(), Author),
+                    part(" | ", Dim),
+                    part("Comments: ", Label),
+                    part(comments.to_string(), Count),
+                ]),
+            ],
+            PreviewData::Commit { sha, author, .. } => vec![
+                line(vec![
+                    part("Commit ", AccentCommit),
+                    part(sha.chars().take(12).collect::<String>(), AccentCommit),
+                ]),
+                line(vec![part("Author: ", Label), part(author.clone(), Author)]),
+            ],
             PreviewData::Release {
                 tag,
                 name,
                 published_at,
                 prerelease,
-                body,
-            } => {
-                write!(
-                    f,
-                    "Release {} - {}\n\
-                    Tag: {} | Published: {} | Pre-release: {}\n\
-                    {}\n\n\
-                    {}\n",
-                    name,
-                    tag,
-                    tag,
-                    published_at,
-                    if *prerelease { "Yes" } else { "No" },
-                    "=".repeat(80),
-                    body
-                )
-            }
+                ..
+            } => vec![
+                line(vec![
+                    part("Release ", AccentRelease),
+                    part(tag.clone(), AccentRelease),
+                    part(" - ", Dim),
+                    part(name.clone(), Title),
+                ]),
+                line(vec![
+                    part("Published: ", Label),
+                    part(published_at.clone(), Date),
+                    part(" | ", Dim),
+                    part("Pre-release: ", Label),
+                    part(if *prerelease { "Yes" } else { "No" }, Status),
+                ]),
+            ],
             PreviewData::SecurityAlert {
                 severity,
                 vulnerability_count,
                 affected_packages,
-                body,
+                ..
             } => {
-                let packages_list = if affected_packages.is_empty() {
+                let packages = if affected_packages.is_empty() {
                     "None specified".to_string()
                 } else {
                     affected_packages.join(", ")
                 };
-                write!(
-                    f,
-                    "Security Alert\n\
-                    Severity: {} | Vulnerabilities: {} | Affected Packages: {}\n\
-                    {}\n\n\
-                    {}\n",
-                    severity,
-                    vulnerability_count,
-                    packages_list,
-                    "=".repeat(80),
-                    body
-                )
+                vec![
+                    line(vec![part("⚠️  ", Warning), part("Security Alert", Warning)]),
+                    line(vec![
+                        part("Severity: ", Label),
+                        part(severity.clone(), Status),
+                        part(" | ", Dim),
+                        part("Vulnerabilities: ", Label),
+                        part(vulnerability_count.to_string(), Count),
+                    ]),
+                    line(vec![
+                        part("Affected Packages: ", Label),
+                        part(packages, PackageList),
+                    ]),
+                ]
             }
-            PreviewData::Generic {
-                title,
-                notification_type,
-                body,
-            } => {
-                write!(
-                    f,
-                    "Preview not supported for {} notifications\n\nTitle: {}\n\n{}",
-                    notification_type, title, body
-                )
-            }
+            PreviewData::Generic { title, .. } => vec![line(vec![part(title.clone(), Title)])],
+        };
+
+        Self {
+            header,
+            body: preview.body().to_string(),
         }
+    }
+
+    pub fn as_text(&self) -> String {
+        let mut lines: Vec<String> = self.header.iter().map(|line| line.text()).collect();
+        if !lines.is_empty() {
+            lines.push("=".repeat(80));
+        }
+        lines.push(self.body.clone());
+        lines.join("\n")
+    }
+}
+
+impl PreviewData {
+    pub fn body(&self) -> &str {
+        match self {
+            PreviewData::PullRequest { body, .. } => body,
+            PreviewData::Issue { body, .. } => body,
+            PreviewData::Commit { body, .. } => body,
+            PreviewData::Release { body, .. } => body,
+            PreviewData::SecurityAlert { body, .. } => body,
+            PreviewData::Generic { body, .. } => body,
+        }
+    }
+}
+
+impl fmt::Display for PreviewData {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let view = PreviewView::from(self);
+        write!(f, "{}", view.as_text())
     }
 }
 
@@ -219,7 +291,6 @@ impl PreviewFetcher {
                 } else {
                     PreviewData::Generic {
                         title: notification.title().to_string(),
-                        notification_type,
                         body: format!(
                             "Release preview unavailable - no URL\n\nRepository: {}",
                             repo_full_name
@@ -229,7 +300,6 @@ impl PreviewFetcher {
             }
             NotificationType::Discussion => PreviewData::Generic {
                 title: notification.title().to_string(),
-                notification_type,
                 body: format!(
                     "Discussion preview not yet implemented\n\nRepository: {}",
                     repo_full_name
@@ -241,7 +311,6 @@ impl PreviewFetcher {
                 } else {
                     PreviewData::Generic {
                         title: notification.title().to_string(),
-                        notification_type,
                         body: format!(
                             "Security alert preview unavailable - no URL\n\nRepository: {}",
                             repo_full_name
@@ -251,7 +320,6 @@ impl PreviewFetcher {
             }
             _ => PreviewData::Generic {
                 title: notification.title().to_string(),
-                notification_type,
                 body: format!("Repository: {}", repo_full_name),
             },
         };
@@ -425,54 +493,17 @@ impl PreviewFetcher {
             .unwrap_or("unknown")
             .to_string();
 
-        let message_clone = message.clone();
         Ok(PreviewData::Commit {
             sha: sha.to_string(),
             author,
-            message: message_clone.clone(),
-            body: message_clone,
+            body: message,
         })
     }
 
-    fn fetch_release_by_url(_client: &GitHubClient, url: &str) -> Result<PreviewData> {
+    fn fetch_release_by_url(client: &GitHubClient, url: &str) -> Result<PreviewData> {
         // Fetch release by API URL
         // URL format: https://api.github.com/repos/owner/repo/releases/{id}
-        let token = get_github_token()?;
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {}", token))
-                .map_err(|_| crate::error::Error::Config("Invalid token format".to_string()))?,
-        );
-        headers.insert(
-            "X-GitHub-Api-Version",
-            HeaderValue::from_str("2022-11-28")
-                .map_err(|_| crate::error::Error::Config("Invalid API version".to_string()))?,
-        );
-        headers.insert(
-            USER_AGENT,
-            HeaderValue::from_str("gh-news/0.1.0")
-                .map_err(|_| crate::error::Error::Config("Invalid user agent".to_string()))?,
-        );
-
-        let http_client = ReqwestClient::builder()
-            .default_headers(headers)
-            .build()
-            .map_err(crate::error::Error::Http)?;
-
-        let response = http_client
-            .get(url)
-            .send()
-            .map_err(crate::error::Error::Http)?;
-
-        if !response.status().is_success() {
-            return Err(crate::error::Error::Config(format!(
-                "Failed to fetch release: {}",
-                response.status()
-            )));
-        }
-
-        let release: serde_json::Value = response.json().map_err(crate::error::Error::Http)?;
+        let release = client.get_json_by_url(url)?;
 
         let tag = release
             .get("tag_name")

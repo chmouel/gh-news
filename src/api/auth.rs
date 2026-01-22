@@ -60,18 +60,16 @@ pub fn get_github_token() -> Result<String> {
     // Helper to find first non-empty token
     let find_token = |token: Option<&String>| token.filter(|t| !t.is_empty()).cloned();
 
-    // Try to get token from github.com host first
-    if let Some(host_config) = config.get("github.com") {
-        // Try top-level oauth_token first
+    let token_from_host = |host_config: &HostConfig| -> Option<String> {
         if let Some(token) = find_token(host_config.oauth_token.as_ref()) {
-            return Ok(token);
+            return Some(token);
         }
 
         // Try user-specific token if user is set
         if let (Some(user), Some(users)) = (&host_config.user, &host_config.users) {
             if let Some(user_config) = users.get(user) {
                 if let Some(token) = find_token(user_config.oauth_token.as_ref()) {
-                    return Ok(token);
+                    return Some(token);
                 }
             }
         }
@@ -80,15 +78,24 @@ pub fn get_github_token() -> Result<String> {
         if let Some(users) = &host_config.users {
             for user_config in users.values() {
                 if let Some(token) = find_token(user_config.oauth_token.as_ref()) {
-                    return Ok(token);
+                    return Some(token);
                 }
             }
+        }
+
+        None
+    };
+
+    // Try to get token from github.com host first
+    if let Some(host_config) = config.get("github.com") {
+        if let Some(token) = token_from_host(host_config) {
+            return Ok(token);
         }
     }
 
     // Try any host as last resort
     for host_config in config.values() {
-        if let Some(token) = find_token(host_config.oauth_token.as_ref()) {
+        if let Some(token) = token_from_host(host_config) {
             return Ok(token);
         }
     }

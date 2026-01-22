@@ -6,7 +6,9 @@ mod filter;
 mod hooks;
 mod markdown;
 mod models;
+mod notifications;
 mod preview;
+mod preview_manager;
 mod state;
 mod state_file;
 mod terminal;
@@ -17,6 +19,7 @@ use cli::Args;
 use config::Config;
 use error::Result;
 use filter::Filter;
+use notifications::{fetch_notifications, NotificationFetchOptions};
 use std::sync::mpsc::channel;
 use std::thread;
 use terminal::Terminal;
@@ -64,8 +67,15 @@ fn run() -> Result<()> {
         let client = api::GitHubClient::new(&config)?;
         let archive = args.mark_read_archive;
 
-        let notifications =
-            client.get_notifications(opts.show_all, opts.participating, None, None)?;
+        let notifications = fetch_notifications(
+            &client,
+            NotificationFetchOptions {
+                show_all: opts.show_all,
+                participating: opts.participating,
+                max_notifications: opts.max_notifications,
+                per_page: config.pagination_size,
+            },
+        )?;
 
         let to_process: Vec<_> = if let Some(ref pattern) = opts.filter_pattern {
             let filter = Filter::new(Some(pattern))?;
@@ -113,9 +123,6 @@ fn run() -> Result<()> {
     // Set API client in app for fetching previews
     app.set_api_client(client.clone());
 
-    // Start background preview worker thread
-    app.start_preview_worker();
-
     // Start auto-refresh if enabled
     app.start_auto_refresh(opts.show_all, opts.participating, opts.max_notifications);
 
@@ -152,7 +159,15 @@ fn run() -> Result<()> {
     let client_clone = client.clone();
     thread::spawn(move || {
         let result = (|| {
-            let mut notifications = fetch_notifications(&client_clone, &config_clone, &opts_clone)?;
+            let mut notifications = fetch_notifications(
+                &client_clone,
+                NotificationFetchOptions {
+                    show_all: opts_clone.show_all,
+                    participating: opts_clone.participating,
+                    max_notifications: opts_clone.max_notifications,
+                    per_page: config_clone.pagination_size,
+                },
+            )?;
             let pinned_notifications =
                 state_file::AppStateFile::load_pinned_notifications().unwrap_or_default();
             for pinned in &pinned_notifications {
@@ -176,49 +191,17 @@ fn run() -> Result<()> {
     Ok(())
 }
 
-fn fetch_notifications(
-    client: &api::GitHubClient,
-    config: &Config,
-    opts: &RuntimeOptions,
-) -> Result<Vec<models::Notification>> {
-    let max_notifications = opts.max_notifications.unwrap_or(usize::MAX);
-    let mut all_notifications = Vec::new();
-    let mut page = 1;
-    let per_page = config.pagination_size.min(max_notifications);
-
-    loop {
-        let notifications = client.get_notifications(
-            opts.show_all,
-            opts.participating,
-            Some(per_page),
-            Some(page),
-        )?;
-
-        if notifications.is_empty() {
-            break;
-        }
-
-        let remaining = max_notifications.saturating_sub(all_notifications.len());
-        if remaining == 0 {
-            break;
-        }
-
-        let to_take = remaining.min(notifications.len());
-        all_notifications.extend(notifications.into_iter().take(to_take));
-
-        if all_notifications.len() >= max_notifications {
-            break;
-        }
-
-        page += 1;
-    }
-
-    Ok(all_notifications)
-}
-
 fn handle_static_display(config: &Config, opts: &RuntimeOptions) -> Result<()> {
     let client = api::GitHubClient::new(config)?;
-    let notifications = fetch_notifications(&client, config, opts)?;
+    let notifications = fetch_notifications(
+        &client,
+        NotificationFetchOptions {
+            show_all: opts.show_all,
+            participating: opts.participating,
+            max_notifications: opts.max_notifications,
+            per_page: config.pagination_size,
+        },
+    )?;
 
     let filter = if opts.filter_pattern.is_some() {
         Some(Filter::new(opts.filter_pattern.as_deref())?)

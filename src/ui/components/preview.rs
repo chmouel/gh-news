@@ -1,5 +1,5 @@
 use crate::markdown::MarkdownRenderer;
-use crate::preview::PreviewData;
+use crate::preview::{PreviewData, PreviewHeaderKind, PreviewView};
 use crate::state::AppState;
 use crate::ui::theme::{Theme, TokyoNight};
 use ratatui::{
@@ -14,7 +14,7 @@ pub struct PreviewWidget {
     theme: Theme,
     scrollbar_state: ScrollbarState,
     cached_lines: Vec<Line<'static>>,
-    cached_body: Option<String>,
+    cached_signature: Option<String>,
 }
 
 impl PreviewWidget {
@@ -23,7 +23,7 @@ impl PreviewWidget {
             theme: Theme::default(),
             scrollbar_state: ScrollbarState::default(),
             cached_lines: Vec::new(),
-            cached_body: None,
+            cached_signature: None,
         }
     }
 
@@ -109,227 +109,66 @@ impl PreviewWidget {
 
     fn get_header_lines(
         &self,
-        preview_data: &PreviewData,
+        preview_view: &PreviewView,
         colors: &TokyoNight,
     ) -> Vec<Line<'static>> {
-        match preview_data {
-            PreviewData::PullRequest {
-                number,
-                title,
-                state,
-                author,
-                comments,
-                mergeable,
-                ..
-            } => {
-                let state_color = match state.as_str() {
-                    "open" => colors.green,
-                    "closed" => colors.red,
-                    _ => colors.fg_dim,
-                };
-
-                vec![
-                    Line::from(vec![
-                        Span::styled("PR #", Style::default().fg(colors.blue)),
-                        Span::styled(
-                            number.clone(),
-                            Style::default()
+        preview_view
+            .header
+            .iter()
+            .map(|line| {
+                let spans: Vec<Span> = line
+                    .parts
+                    .iter()
+                    .map(|part| {
+                        let style = match part.kind {
+                            PreviewHeaderKind::Title => {
+                                Style::default().fg(colors.fg).add_modifier(Modifier::BOLD)
+                            }
+                            PreviewHeaderKind::Label => Style::default().fg(colors.fg_dim),
+                            PreviewHeaderKind::Author => Style::default().fg(colors.cyan),
+                            PreviewHeaderKind::Count => Style::default()
+                                .fg(colors.yellow)
+                                .add_modifier(Modifier::BOLD),
+                            PreviewHeaderKind::Date => Style::default().fg(colors.fg_muted),
+                            PreviewHeaderKind::PackageList => Style::default().fg(colors.cyan),
+                            PreviewHeaderKind::Dim => Style::default().fg(colors.fg_dim),
+                            PreviewHeaderKind::AccentPullRequest => Style::default()
                                 .fg(colors.blue)
                                 .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::raw(" - "),
-                        Span::styled(
-                            title.clone(),
-                            Style::default().fg(colors.fg).add_modifier(Modifier::BOLD),
-                        ),
-                        Span::raw(" "),
-                        Span::styled(
-                            format!("[{}]", state),
-                            Style::default()
-                                .fg(state_color)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                    ]),
-                    Line::from(vec![
-                        Span::styled("Author: ", Style::default().fg(colors.fg_dim)),
-                        Span::styled(author.clone(), Style::default().fg(colors.cyan)),
-                        Span::raw(" | "),
-                        Span::styled("Comments: ", Style::default().fg(colors.fg_dim)),
-                        Span::styled(comments.to_string(), Style::default().fg(colors.yellow)),
-                        Span::raw(" | "),
-                        Span::styled("Mergeable: ", Style::default().fg(colors.fg_dim)),
-                        Span::styled(
-                            mergeable.clone(),
-                            Style::default().fg(if mergeable == "Yes" {
-                                colors.green
-                            } else {
-                                colors.red
-                            }),
-                        ),
-                    ]),
-                ]
-            }
-            PreviewData::Issue {
-                number,
-                title,
-                state,
-                author,
-                comments,
-                ..
-            } => {
-                let state_color = match state.as_str() {
-                    "open" => colors.green,
-                    "closed" => colors.red,
-                    _ => colors.fg_dim,
-                };
-
-                vec![
-                    Line::from(vec![
-                        Span::styled("Issue #", Style::default().fg(colors.magenta)),
-                        Span::styled(
-                            number.clone(),
-                            Style::default()
+                            PreviewHeaderKind::AccentIssue => Style::default()
                                 .fg(colors.magenta)
                                 .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::raw(" - "),
-                        Span::styled(
-                            title.clone(),
-                            Style::default().fg(colors.fg).add_modifier(Modifier::BOLD),
-                        ),
-                        Span::raw(" "),
-                        Span::styled(
-                            format!("[{}]", state),
-                            Style::default()
-                                .fg(state_color)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                    ]),
-                    Line::from(vec![
-                        Span::styled("Author: ", Style::default().fg(colors.fg_dim)),
-                        Span::styled(author.clone(), Style::default().fg(colors.cyan)),
-                        Span::raw(" | "),
-                        Span::styled("Comments: ", Style::default().fg(colors.fg_dim)),
-                        Span::styled(comments.to_string(), Style::default().fg(colors.yellow)),
-                    ]),
-                ]
-            }
-            PreviewData::Commit { sha, author, .. } => {
-                vec![
-                    Line::from(vec![
-                        Span::styled("Commit ", Style::default().fg(colors.yellow)),
-                        Span::styled(
-                            sha.chars().take(12).collect::<String>(),
-                            Style::default()
+                            PreviewHeaderKind::AccentCommit => Style::default()
                                 .fg(colors.yellow)
                                 .add_modifier(Modifier::BOLD),
-                        ),
-                    ]),
-                    Line::from(vec![
-                        Span::styled("Author: ", Style::default().fg(colors.fg_dim)),
-                        Span::styled(author.clone(), Style::default().fg(colors.cyan)),
-                    ]),
-                ]
-            }
-            PreviewData::Release {
-                tag,
-                name,
-                published_at,
-                prerelease,
-                ..
-            } => {
-                vec![
-                    Line::from(vec![
-                        Span::styled("Release ", Style::default().fg(colors.orange)),
-                        Span::styled(
-                            tag.clone(),
-                            Style::default()
+                            PreviewHeaderKind::AccentRelease => Style::default()
                                 .fg(colors.orange)
                                 .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::raw(" - "),
-                        Span::styled(
-                            name.clone(),
-                            Style::default().fg(colors.fg).add_modifier(Modifier::BOLD),
-                        ),
-                    ]),
-                    Line::from(vec![
-                        Span::styled("Published: ", Style::default().fg(colors.fg_dim)),
-                        Span::styled(published_at.clone(), Style::default().fg(colors.fg_muted)),
-                        Span::raw(" | "),
-                        Span::styled("Pre-release: ", Style::default().fg(colors.fg_dim)),
-                        Span::styled(
-                            if *prerelease { "Yes" } else { "No" },
-                            Style::default().fg(if *prerelease {
-                                colors.yellow
-                            } else {
-                                colors.green
-                            }),
-                        ),
-                    ]),
-                ]
-            }
-            PreviewData::SecurityAlert {
-                severity,
-                vulnerability_count,
-                affected_packages,
-                ..
-            } => {
-                let severity_color = match severity.to_lowercase().as_str() {
-                    "critical" | "high" => colors.red,
-                    "medium" => colors.yellow,
-                    "low" => colors.orange,
-                    _ => colors.fg_dim,
-                };
-
-                vec![
-                    Line::from(vec![
-                        Span::styled(
-                            "⚠️  ",
-                            Style::default().fg(colors.red).add_modifier(Modifier::BOLD),
-                        ),
-                        Span::styled(
-                            "Security Alert",
-                            Style::default().fg(colors.red).add_modifier(Modifier::BOLD),
-                        ),
-                    ]),
-                    Line::from(vec![
-                        Span::styled("Severity: ", Style::default().fg(colors.fg_dim)),
-                        Span::styled(
-                            severity.clone(),
-                            Style::default()
-                                .fg(severity_color)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::raw(" | "),
-                        Span::styled("Vulnerabilities: ", Style::default().fg(colors.fg_dim)),
-                        Span::styled(
-                            vulnerability_count.to_string(),
-                            Style::default()
-                                .fg(colors.yellow)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                    ]),
-                    Line::from(vec![
-                        Span::styled("Affected Packages: ", Style::default().fg(colors.fg_dim)),
-                        Span::styled(
-                            if affected_packages.is_empty() {
-                                "None specified".to_string()
-                            } else {
-                                affected_packages.join(", ")
-                            },
-                            Style::default().fg(colors.cyan),
-                        ),
-                    ]),
-                ]
-            }
-            PreviewData::Generic { title, .. } => {
-                vec![Line::from(vec![Span::styled(
-                    title.clone(),
-                    Style::default().fg(colors.fg).add_modifier(Modifier::BOLD),
-                )])]
-            }
-        }
+                            PreviewHeaderKind::Warning => {
+                                Style::default().fg(colors.red).add_modifier(Modifier::BOLD)
+                            }
+                            PreviewHeaderKind::Status => {
+                                let lower = part.text.to_lowercase();
+                                let status_color = match lower.as_str() {
+                                    "open" | "yes" => colors.green,
+                                    "closed" | "no" => colors.red,
+                                    "critical" | "high" => colors.red,
+                                    "medium" => colors.yellow,
+                                    "low" => colors.orange,
+                                    "unknown" => colors.fg_dim,
+                                    _ => colors.fg,
+                                };
+                                Style::default()
+                                    .fg(status_color)
+                                    .add_modifier(Modifier::BOLD)
+                            }
+                        };
+                        Span::styled(part.text.clone(), style)
+                    })
+                    .collect();
+                Line::from(spans)
+            })
+            .collect()
     }
 
     fn get_separator_line(&self, width: u16, colors: &TokyoNight) -> Line<'static> {
@@ -347,24 +186,26 @@ impl PreviewWidget {
         state: &AppState,
         colors: &TokyoNight,
     ) {
+        let preview_view = PreviewView::from(preview_data);
+
         // Get header lines (3 lines)
-        let header_lines = self.get_header_lines(preview_data, colors);
+        let header_lines = self.get_header_lines(&preview_view, colors);
 
         // Get separator line (1 line)
         let separator_line = self.get_separator_line(area.width, colors);
 
         // Get body content
-        let body = match preview_data {
-            PreviewData::PullRequest { body, .. } => body,
-            PreviewData::Issue { body, .. } => body,
-            PreviewData::Commit { body, .. } => body,
-            PreviewData::Release { body, .. } => body,
-            PreviewData::SecurityAlert { body, .. } => body,
-            PreviewData::Generic { body, .. } => body,
-        };
+        let body = preview_view.body.as_str();
+        let header_signature = preview_view
+            .header
+            .iter()
+            .map(|line| line.text())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let signature = format!("{header_signature}\n{body}");
 
-        // Only re-render markdown when body content changes
-        if self.cached_body.as_ref() != Some(body) {
+        // Only re-render markdown when content changes
+        if self.cached_signature.as_ref() != Some(&signature) {
             let body_lines = MarkdownRenderer::render_simple(body);
 
             let mut all_lines = Vec::new();
@@ -372,7 +213,7 @@ impl PreviewWidget {
             all_lines.push(separator_line);
             all_lines.extend(body_lines);
 
-            self.cached_body = Some(body.clone());
+            self.cached_signature = Some(signature);
             self.cached_lines = all_lines;
         }
 

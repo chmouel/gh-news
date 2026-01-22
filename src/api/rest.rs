@@ -2,8 +2,9 @@ use crate::api::get_github_token;
 use crate::config::Config;
 use crate::error::{ApiError, Error, Result};
 use crate::models::Notification;
-use reqwest::blocking::Client;
+use reqwest::blocking::{Client, RequestBuilder, Response};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 use std::time::Duration;
 
@@ -16,6 +17,35 @@ pub struct GitHubClient {
 }
 
 impl GitHubClient {
+    fn send(&self, request: RequestBuilder) -> Result<Response> {
+        let response = request.send().map_err(Error::from)?;
+        let status = response.status();
+        if !status.is_success() {
+            let message = response
+                .text()
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(ApiError::HttpStatus {
+                status: status.as_u16(),
+                message,
+            }
+            .into());
+        }
+        Ok(response)
+    }
+
+    fn send_json<T: DeserializeOwned>(&self, request: RequestBuilder) -> Result<T> {
+        let response = self.send(request)?;
+        response.json().map_err(Error::from)
+    }
+
+    fn send_no_content(&self, request: RequestBuilder) -> Result<()> {
+        self.send(request).map(|_| ())
+    }
+
+    fn get_json<T: DeserializeOwned>(&self, url: &str) -> Result<T> {
+        self.send_json(self.client.get(url))
+    }
+
     pub fn new(config: &Config) -> Result<Self> {
         let token = get_github_token()?;
         let mut headers = HeaderMap::new();
@@ -81,20 +111,7 @@ impl GitHubClient {
             request = request.query(&[("page", page.to_string())]);
         }
 
-        let response = request.send().map_err(Error::from)?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let message = response
-                .text()
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(ApiError::HttpStatus {
-                status: status.as_u16(),
-                message,
-            }
-            .into());
-        }
-
+        let response = self.send(request)?;
         response
             .json::<Vec<Notification>>()
             .map_err(|_| Error::Api(ApiError::InvalidResponse))
@@ -111,26 +128,7 @@ impl GitHubClient {
             serde_json::json!({ "read": true })
         };
 
-        let response = self
-            .client
-            .put(&url)
-            .json(&payload)
-            .send()
-            .map_err(Error::from)?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let message = response
-                .text()
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(ApiError::HttpStatus {
-                status: status.as_u16(),
-                message,
-            }
-            .into());
-        }
-
-        Ok(())
+        self.send_no_content(self.client.put(&url).json(&payload))
     }
 
     pub fn get_issue(&self, owner: &str, repo: &str, number: u64) -> Result<Value> {
@@ -138,21 +136,7 @@ impl GitHubClient {
             "{}/repos/{}/{}/issues/{}",
             self.api_base, owner, repo, number
         );
-        let response = self.client.get(&url).send().map_err(Error::from)?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let message = response
-                .text()
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(ApiError::HttpStatus {
-                status: status.as_u16(),
-                message,
-            }
-            .into());
-        }
-
-        response.json().map_err(Error::from)
+        self.get_json(&url)
     }
 
     pub fn get_pr(&self, owner: &str, repo: &str, number: u64) -> Result<Value> {
@@ -160,96 +144,29 @@ impl GitHubClient {
             "{}/repos/{}/{}/pulls/{}",
             self.api_base, owner, repo, number
         );
-        let response = self.client.get(&url).send().map_err(Error::from)?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let message = response
-                .text()
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(ApiError::HttpStatus {
-                status: status.as_u16(),
-                message,
-            }
-            .into());
-        }
-
-        response.json().map_err(Error::from)
+        self.get_json(&url)
     }
 
     pub fn get_commit(&self, owner: &str, repo: &str, sha: &str) -> Result<Value> {
         let url = format!("{}/repos/{}/{}/commits/{}", self.api_base, owner, repo, sha);
-        let response = self.client.get(&url).send().map_err(Error::from)?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let message = response
-                .text()
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(ApiError::HttpStatus {
-                status: status.as_u16(),
-                message,
-            }
-            .into());
-        }
-
-        response.json().map_err(Error::from)
+        self.get_json(&url)
     }
 
     pub fn mark_notification_read(&self, thread_id: &str) -> Result<()> {
         let url = format!("{}/notifications/threads/{}", self.api_base, thread_id);
-        let response = self.client.patch(&url).send().map_err(Error::from)?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let message = response
-                .text()
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(ApiError::HttpStatus {
-                status: status.as_u16(),
-                message,
-            }
-            .into());
-        }
-
-        Ok(())
+        self.send_no_content(self.client.patch(&url))
     }
 
     pub fn mark_thread_done(&self, thread_id: &str) -> Result<()> {
         let url = format!("{}/notifications/threads/{}", self.api_base, thread_id);
-        let response = self.client.delete(&url).send().map_err(Error::from)?;
-
-        // DELETE returns 204 No Content on success
-        if !response.status().is_success() {
-            let status = response.status();
-            let message = response
-                .text()
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(ApiError::HttpStatus {
-                status: status.as_u16(),
-                message,
-            }
-            .into());
-        }
-
-        Ok(())
+        self.send_no_content(self.client.delete(&url))
     }
 
     pub fn get_vulnerability_alert_by_url(&self, url: &str) -> Result<Value> {
-        let response = self.client.get(url).send().map_err(Error::from)?;
+        self.get_json(url)
+    }
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let message = response
-                .text()
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            return Err(ApiError::HttpStatus {
-                status: status.as_u16(),
-                message,
-            }
-            .into());
-        }
-
-        response.json().map_err(Error::from)
+    pub fn get_json_by_url(&self, url: &str) -> Result<Value> {
+        self.get_json(url)
     }
 }

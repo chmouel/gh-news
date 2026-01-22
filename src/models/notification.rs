@@ -86,23 +86,54 @@ impl Notification {
     }
 
     pub fn repo_abbreviated(&self) -> (String, String) {
-        let owner = if self.repository.owner.login.len() > 10 {
-            format!("{}…", &self.repository.owner.login[..9])
-        } else {
-            self.repository.owner.login.clone()
-        };
+        fn abbreviate(value: &str, max_chars: usize) -> String {
+            let total_chars = value.chars().count();
+            if total_chars > max_chars && max_chars > 0 {
+                let keep = max_chars.saturating_sub(1);
+                let prefix: String = value.chars().take(keep).collect();
+                format!("{}…", prefix)
+            } else {
+                value.to_string()
+            }
+        }
 
-        let name = if self.repository.name.len() > 13 {
-            format!("{}…", &self.repository.name[..12])
-        } else {
-            self.repository.name.clone()
-        };
+        let owner = abbreviate(&self.repository.owner.login, 10);
+        let name = abbreviate(&self.repository.name, 13);
 
         (owner, name)
     }
 
     /// Convert API URL to web URL and return it
-    pub fn web_url(&self) -> Option<String> {
+    pub fn web_url(&self, github_host: &str) -> Option<String> {
+        let api_base = if github_host == "github.com" {
+            "https://api.github.com".to_string()
+        } else {
+            format!("https://{}/api/v3", github_host)
+        };
+        let web_base = format!("https://{}", github_host);
+
+        let parse_subject_url = |subject_url: &str| -> Option<(String, String, String, String)> {
+            let prefix = format!("{}/repos/", api_base);
+            if !subject_url.starts_with(&prefix) {
+                return None;
+            }
+
+            let remainder = subject_url.strip_prefix(&prefix)?;
+            let mut parts = remainder.split('/');
+            let owner = parts.next()?.to_string();
+            let repo = parts.next()?.to_string();
+            let resource_type = parts.next()?;
+            let number = parts.next()?.to_string();
+
+            let web_type = if resource_type == "pulls" {
+                "pull".to_string()
+            } else {
+                "issues".to_string()
+            };
+
+            Some((owner, repo, web_type, number))
+        };
+
         // Prefer latest_comment_url if available (goes directly to the comment)
         if let Some(comment_url) = &self.latest_comment_url {
             // Convert API URL to web URL
@@ -113,22 +144,15 @@ impl Notification {
                     // Extract repo and issue/PR number from subject URL
                     // subject_url: https://api.github.com/repos/owner/repo/issues/123
                     // or: https://api.github.com/repos/owner/repo/pulls/456
-                    let parts: Vec<&str> = subject_url.split('/').collect();
-                    if parts.len() >= 8 {
-                        let owner = parts[4];
-                        let repo = parts[5];
-                        let resource_type = parts[6]; // "issues" or "pulls"
-                        let number = parts[7];
-
-                        // Determine if it's an issue or PR
-                        let web_type = if resource_type == "pulls" {
-                            "pull"
+                    if let Some((owner, repo, web_type, number)) = parse_subject_url(subject_url) {
+                        let anchor = if comment_url.contains("/pulls/comments/") {
+                            format!("#discussion_r{}", comment_id)
                         } else {
-                            "issues"
+                            format!("#issuecomment-{}", comment_id)
                         };
                         return Some(format!(
-                            "https://github.com/{}/{}/{}/{}#issuecomment-{}",
-                            owner, repo, web_type, number, comment_id
+                            "{}/{}/{}/{}/{}{}",
+                            web_base, owner, repo, web_type, number, anchor
                         ));
                     }
                 }
@@ -144,17 +168,21 @@ impl Notification {
             // Web: https://github.com/owner/repo/pull/456
             // API: https://api.github.com/repos/owner/repo/commits/abc123
             // Web: https://github.com/owner/repo/commit/abc123
-            if api_url.starts_with("https://api.github.com/repos/") {
+            let prefix = format!("{}/repos/", api_base);
+            if api_url.starts_with(&prefix) {
                 let web_url = api_url
-                    .replace("https://api.github.com/repos/", "https://github.com/")
+                    .replacen(&prefix, &format!("{}/", web_base), 1)
                     .replace("/pulls/", "/pull/") // PRs use /pull/ not /pulls/
                     .replace("/commits/", "/commit/"); // Commits use /commit/ not /commits/
                 return Some(web_url);
             }
+            if api_url.starts_with(&web_base) {
+                return Some(api_url.to_string());
+            }
         }
 
         // If no URL available, construct a basic repo URL
-        Some(format!("https://github.com/{}", self.repo_full_name()))
+        Some(format!("{}/{}", web_base, self.repo_full_name()))
     }
 }
 
