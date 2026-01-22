@@ -153,6 +153,10 @@ impl HelpWidget {
                         desc: "Toggle selection (auto-advance)",
                     },
                     HelpLine {
+                        key: "Ctrl+Alt+A",
+                        desc: "Select all notifications in repo",
+                    },
+                    HelpLine {
                         key: "Esc",
                         desc: "Clear selection",
                     },

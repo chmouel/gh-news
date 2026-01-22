@@ -419,4 +419,13 @@ impl AppState {
     pub fn get_selected_notification_ids(&self) -> Vec<String> {
         self.selected_notification_ids.iter().cloned().collect()
     }
+
+    pub fn select_all_in_repo(&mut self, repo_name: &str) {
+        for notification in &self.notifications {
+            if notification.repo_full_name() == repo_name {
+                self.selected_notification_ids
+                    .insert(notification.id.clone());
+            }
+        }
+    }
 }

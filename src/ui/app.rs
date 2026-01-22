@@ -1531,6 +1531,24 @@ impl App {
                 self.state.search_query.clear();
                 self.state.input_mode = InputMode::Search;
             }
+            KeyCode::Char('a')
+                if key
+                    .modifiers
+                    .contains(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                if let Some(repo_name) = self.state.parent_repo_for_selected() {
+                    let repo_name = repo_name.to_string();
+                    self.state.select_all_in_repo(&repo_name);
+
+                    let count = self.state.selection_count();
+                    self.state.status_message = Some(format!(
+                        "Selected {} notification{} in {}",
+                        count,
+                        if count == 1 { "" } else { "s" },
+                        repo_name
+                    ));
+                }
+            }
             _ => {}
         }
         Ok(())
