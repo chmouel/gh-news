@@ -1007,50 +1007,9 @@ impl App {
                         marked_count
                     ));
                 } else if let Some(repo_name) = self.state.selected_repo() {
-                    // If selected item is a repository header, expand it and select first notification
+                    // If selected item is a repository header, toggle expansion
                     let repo_name = repo_name.to_string();
-
-                    // Expand the repo if it's collapsed
-                    let was_expanded = self
-                        .state
-                        .expanded_repos
-                        .get(&repo_name)
-                        .copied()
-                        .unwrap_or(true);
-                    if !was_expanded {
-                        self.state.toggle_repo_expansion(&repo_name);
-                    }
-
-                    // After expansion, tree_items is rebuilt, so find the first notification now
-                    if let Some(first_notif_idx) = self
-                        .state
-                        .tree_items
-                        .iter()
-                        .enumerate()
-                        .find_map(|(idx, item)| {
-                            if let crate::state::TreeItem::Notification(notif_idx) = item {
-                                if let Some(notif) = self.state.notifications.get(*notif_idx) {
-                                    if notif.repo_full_name() == repo_name {
-                                        return Some(idx);
-                                    }
-                                }
-                            }
-                            None
-                        })
-                    {
-                        // Select the first notification
-                        self.state.selected_index = first_notif_idx;
-                        self.state.preview_scroll = 0;
-
-                        // Ensure preview is shown
-                        if self.state.preview_mode == PreviewMode::Off {
-                            self.state.preview_mode = PreviewMode::Horizontal;
-                        }
-
-                        // Fetch preview for the selected notification
-                        self.fetch_preview_for_selected_notification();
-                        self.prefetch_next_preview();
-                    }
+                    self.state.toggle_repo_expansion(&repo_name);
                 } else if let Some(notification) = self.state.selected_notification() {
                     // Open the notification URL in the browser
                     if let Some(url) = notification.web_url(&self.config.github_host) {

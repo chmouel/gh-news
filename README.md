@@ -61,12 +61,12 @@ gh news --static-display | grep "something" # List notifications without TUI
 ## Keybindings
 
 ### Navigation
-- `↑`/`↓` or `j`/`k` - Navigate notifications
+- `↑`/`↓` or `j`/`k` - Navigate notifications, or repository headers when repositories are collapsed
 - `Home`/`End` - Jump to first/last notification
 - `PageUp`/`PageDown` - Page navigation (or scroll preview if shown)
 
 ### Actions
-- `Enter` - Open notification in browser and mark as read
+- `Enter` - Open notification in browser and mark as read, or toggle repository collapse on headers
 - `o` - Open notification in browser without marking as read
 - `.` - Toggle read/unread status
 - `!` - Pin/unpin notification (pinned appear at top)

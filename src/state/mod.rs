@@ -296,6 +296,15 @@ impl AppState {
             return;
         }
 
+        // If we're on a header, move to the previous visible item.
+        if matches!(
+            self.tree_items.get(self.selected_index),
+            Some(TreeItem::RepositoryHeader(_) | TreeItem::PinnedHeader)
+        ) {
+            self.selected_index -= 1;
+            return;
+        }
+
         // Find the previous notification, skipping folders
         for i in (0..self.selected_index).rev() {
             if matches!(self.tree_items.get(i), Some(TreeItem::Notification(_))) {
@@ -303,19 +312,9 @@ impl AppState {
                 return;
             }
         }
-        // If no previous notification found, stay at current position
-        // But if currently on a folder, move to first notification
-        if matches!(
-            self.tree_items.get(self.selected_index),
-            Some(TreeItem::RepositoryHeader(_))
-        ) {
-            if let Some(first_notif_idx) = self
-                .tree_items
-                .iter()
-                .position(|item| matches!(item, TreeItem::Notification(_)))
-            {
-                self.selected_index = first_notif_idx;
-            }
+        // If no previous notification found, move to the previous visible item.
+        if self.selected_index > 0 {
+            self.selected_index -= 1;
         }
     }
 
@@ -329,6 +328,15 @@ impl AppState {
             return;
         }
 
+        // If we're on a header, move to the next visible item.
+        if matches!(
+            self.tree_items.get(self.selected_index),
+            Some(TreeItem::RepositoryHeader(_) | TreeItem::PinnedHeader)
+        ) {
+            self.selected_index += 1;
+            return;
+        }
+
         // Find the next notification, skipping folders
         for i in (self.selected_index + 1)..self.tree_items.len() {
             if matches!(self.tree_items.get(i), Some(TreeItem::Notification(_))) {
@@ -336,19 +344,9 @@ impl AppState {
                 return;
             }
         }
-        // If no next notification found, stay at current position
-        // But if currently on a folder, move to last notification
-        if matches!(
-            self.tree_items.get(self.selected_index),
-            Some(TreeItem::RepositoryHeader(_))
-        ) {
-            if let Some(last_notif_idx) = self
-                .tree_items
-                .iter()
-                .rposition(|item| matches!(item, TreeItem::Notification(_)))
-            {
-                self.selected_index = last_notif_idx;
-            }
+        // If no next notification found, move to the next visible item.
+        if self.selected_index + 1 < self.tree_items.len() {
+            self.selected_index += 1;
         }
     }
 

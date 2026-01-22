@@ -90,7 +90,7 @@ impl HelpWidget {
             Line::from(""),
             make_key_line(
                 "Enter",
-                "Open in browser (or all selected)",
+                "Open in browser (or all selected, toggle repo header)",
                 colors.green,
                 colors.fg_muted,
             ),
