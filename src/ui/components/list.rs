@@ -14,7 +14,7 @@ pub struct ListWidget {
 impl ListWidget {
     pub fn new() -> Self {
         let mut state = ListState::default();
-        state.select(Some(0)); // Initialize with first item selected
+        state.select(Some(0));
         Self {
             state,
             theme: Theme::default(),
@@ -82,7 +82,6 @@ impl ListWidget {
                         let colors = TokyoNight::colors();
                         let mut line = vec![];
 
-                        // Pin icon
                         line.push(Span::styled(
                             "󰐃 ",
                             if is_selected {
@@ -92,7 +91,6 @@ impl ListWidget {
                             },
                         ));
 
-                        // "Pinned" text
                         line.push(Span::styled(
                             "Pinned",
                             if is_selected {
@@ -107,14 +105,12 @@ impl ListWidget {
                         ListItem::new(Line::from(line))
                     }
                     crate::state::TreeItem::RepositoryHeader(repo_name) => {
-                        // Check if this repo is expanded
                         let is_expanded = app_state
                             .expanded_repos
                             .get(repo_name)
                             .copied()
                             .unwrap_or(true);
 
-                        // Count notifications for this repo
                         let notif_count = app_state
                             .filtered_notifications
                             .iter()
@@ -132,7 +128,6 @@ impl ListWidget {
 
                         let mut line = vec![];
 
-                        // Repository icon
                         let colors = TokyoNight::colors();
                         line.push(Span::styled(
                             "",
@@ -143,8 +138,6 @@ impl ListWidget {
                             },
                         ));
 
-                        // Expand/collapse indicator using nerd-font icons
-                        // 󰅂 = chevron_down (expanded), 󰅀 = chevron_right (collapsed)
                         let indicator = if is_expanded { " " } else { " " };
                         line.push(Span::styled(
                             indicator,
@@ -155,7 +148,6 @@ impl ListWidget {
                             },
                         ));
 
-                        // Repository name
                         line.push(Span::styled(
                             format!("{} ", repo_name),
                             if is_selected {
@@ -167,7 +159,6 @@ impl ListWidget {
                             },
                         ));
 
-                        // Notification count as badge
                         let count_style = if is_selected {
                             Style::default()
                                 .fg(self.theme.highlight_fg)
@@ -188,10 +179,8 @@ impl ListWidget {
                             let is_pinned = app_state.is_pinned(&notif.id);
                             let is_multi_selected = app_state.is_selected(&notif.id);
 
-                            // Build styled line with spans
                             let mut line = vec![];
 
-                            // Multi-select checkmark indicator
                             let colors = TokyoNight::colors();
                             if is_multi_selected {
                                 line.push(Span::styled(
@@ -204,11 +193,8 @@ impl ListWidget {
                                 line.push(Span::styled("  ", Style::default()));
                             }
 
-                            // Indentation for tree structure with nerd-font icon
-                            // 󰆍 = subdirectory_arrow_right
                             line.push(Span::styled("󰆍 ", Style::default().fg(Color::DarkGray)));
 
-                            // Unread/pinned indicator - enhanced styling
                             let colors = TokyoNight::colors();
                             if is_pinned {
                                 line.push(Span::styled(
@@ -227,13 +213,11 @@ impl ListWidget {
                                 ));
                             }
 
-                            // Time with clock icon
                             line.push(Span::styled(
                                 format!("{time} "),
                                 Style::default().fg(colors.fg_dim),
                             ));
 
-                            // Type with icon and type-specific coloring
                             let notification_type = notif.notification_type();
                             let type_icon = Self::get_notification_type_icon(notification_type);
                             let type_style =
@@ -244,7 +228,6 @@ impl ListWidget {
                                 type_style,
                             ));
 
-                            // Reason with icon and reason-specific coloring
                             let reason = notif.reason_enum();
                             let reason_icon = Self::get_notification_reason_icon(reason);
                             let reason_style = Self::get_notification_reason_style(reason, &colors);
@@ -254,7 +237,6 @@ impl ListWidget {
                                 reason_style,
                             ));
 
-                            // Title - red if pinned, italic and dimmed if read
                             let title_style = if is_pinned {
                                 Style::default().fg(colors.red)
                             } else if notif.is_unread() {
@@ -276,8 +258,6 @@ impl ListWidget {
             })
             .collect();
 
-        // Update ListState to match app_state selection
-        // Ensure selected_index is within bounds
         if !items.is_empty() {
             let max_idx = items.len().saturating_sub(1);
             let selected_idx = app_state.selected_index.min(max_idx);
@@ -307,7 +287,6 @@ impl ListWidget {
         let colors = crate::ui::theme::TokyoNight::colors();
         let selection_count = app_state.selection_count();
 
-        // Build title spans for right side
         let mut title_spans = vec![
             Span::styled(
                 format!("󰞏{count} "),
@@ -327,7 +306,6 @@ impl ListWidget {
             ),
         ];
 
-        // Add selection count if any items are selected
         if selection_count > 0 {
             title_spans.insert(
                 0,
@@ -368,7 +346,6 @@ impl ListWidget {
         frame.render_stateful_widget(list, area, &mut self.state);
     }
 
-    /// Scroll up using ratatui's native ListState - decrement selection
     pub fn scroll_up(&mut self, max_items: usize) {
         if max_items > 0 {
             let current = self.state.selected().unwrap_or(0);
@@ -377,7 +354,6 @@ impl ListWidget {
         }
     }
 
-    /// Scroll down using ratatui's native ListState - increment selection
     pub fn scroll_down(&mut self, max_items: usize) {
         if max_items > 0 {
             let current = self.state.selected().unwrap_or(0);
@@ -386,12 +362,10 @@ impl ListWidget {
         }
     }
 
-    /// Get the currently selected index from ListState
     pub fn selected(&self) -> Option<usize> {
         self.state.selected()
     }
 
-    /// Get icon for notification type
     fn get_notification_type_icon(nt: NotificationType) -> &'static str {
         match nt {
             NotificationType::PullRequest => "",
@@ -405,7 +379,6 @@ impl ListWidget {
         }
     }
 
-    /// Get style for notification type
     fn get_notification_type_style(nt: NotificationType, colors: &TokyoNight) -> Style {
         match nt {
             NotificationType::PullRequest => Style::default()
@@ -435,7 +408,6 @@ impl ListWidget {
         }
     }
 
-    /// Get icon for notification reason
     fn get_notification_reason_icon(reason: NotificationReason) -> &'static str {
         match reason {
             NotificationReason::Assign => "󰀄",
@@ -454,7 +426,6 @@ impl ListWidget {
         }
     }
 
-    /// Get style for notification reason
     fn get_notification_reason_style(reason: NotificationReason, colors: &TokyoNight) -> Style {
         match reason {
             NotificationReason::ReviewRequested => Style::default()

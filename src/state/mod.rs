@@ -390,8 +390,6 @@ impl AppState {
         }
     }
 
-    // Multi-select helper methods
-
     pub fn is_selected(&self, notification_id: &str) -> bool {
         self.selected_notification_ids.contains(notification_id)
     }
