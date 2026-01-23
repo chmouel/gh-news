@@ -1,6 +1,9 @@
 # gh-news
+<img width="150" height="150" src="https://github.com/user-attachments/assets/5f01123f-a597-4ba1-b378-b0f72176e89b" align="right" />
 
 GitHub notifications TUI built with Rust and ratatui.
+
+## Screenshot
 
 <img width="1865" height="1242" alt="Screenshot 2026-01-20 at 14 58 15" src="https://github.com/user-attachments/assets/dae19973-afdc-4b67-abdf-d63ff8f1446a" />
 
