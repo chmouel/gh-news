@@ -14,14 +14,12 @@ GitHub notifications TUI built with Rust and ratatui.
 - Installs as a native gh CLI extension
 - Vim-style navigation with j/k keys
 - Multi-select for batch operations on notifications
-- Preview pane with horizontal and vertical modes
-- Regex filtering to find specific notifications
-- Pin important notifications to keep them at top
+- Auto-refresh with configurable interva
+- Preview notifications
+- Regex filtering to filter specific notifications
+- Pin important notifications
 - Repository grouping with collapsible headers
-- Auto-refresh with configurable interval
-- Notification hooks for custom commands (desktop alerts, sounds)
-- GitHub Enterprise support
-- Configurable via TOML file
+- Notification hooks for custom commands
 - Mark notifications read/unread individually or in bulk
 - Static display mode for scripting and pipelines
 
