@@ -154,7 +154,7 @@ impl HelpWidget {
                     },
                     HelpLine {
                         key: "Ctrl+Alt+A",
-                        desc: "Select all notifications in repo",
+                        desc: "Toggle select all notifications in repo",
                     },
                     HelpLine {
                         key: "Esc",

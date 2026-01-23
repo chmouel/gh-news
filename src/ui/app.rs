@@ -1508,6 +1508,27 @@ impl App {
                 }
                 self.queue_blocking_action(BlockingAction::Refresh, "Refreshing notifications...");
             }
+            KeyCode::Char('a')
+                if key
+                    .modifiers
+                    .contains(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+            {
+                if let Some(repo_name) = self.state.parent_repo_for_selected() {
+                    let repo_name = repo_name.to_string();
+                    let repo_selected = self.state.toggle_select_all_in_repo(&repo_name);
+                    if repo_selected == 0 {
+                        self.state.status_message =
+                            Some(format!("Cleared selection in {}", repo_name));
+                    } else {
+                        self.state.status_message = Some(format!(
+                            "Selected {} notification{} in {}",
+                            repo_selected,
+                            if repo_selected == 1 { "" } else { "s" },
+                            repo_name
+                        ));
+                    }
+                }
+            }
             KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if self.state.has_selection() {
                     // Archive selected notifications
@@ -1530,24 +1551,6 @@ impl App {
                 self.state.clear_selection();
                 self.state.search_query.clear();
                 self.state.input_mode = InputMode::Search;
-            }
-            KeyCode::Char('a')
-                if key
-                    .modifiers
-                    .contains(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-            {
-                if let Some(repo_name) = self.state.parent_repo_for_selected() {
-                    let repo_name = repo_name.to_string();
-                    self.state.select_all_in_repo(&repo_name);
-
-                    let count = self.state.selection_count();
-                    self.state.status_message = Some(format!(
-                        "Selected {} notification{} in {}",
-                        count,
-                        if count == 1 { "" } else { "s" },
-                        repo_name
-                    ));
-                }
             }
             _ => {}
         }

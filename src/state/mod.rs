@@ -420,12 +420,38 @@ impl AppState {
         self.selected_notification_ids.iter().cloned().collect()
     }
 
-    pub fn select_all_in_repo(&mut self, repo_name: &str) {
+    pub fn toggle_select_all_in_repo(&mut self, repo_name: &str) -> usize {
+        let mut total_in_repo = 0;
+        let mut all_selected = true;
+
         for notification in &self.notifications {
             if notification.repo_full_name() == repo_name {
-                self.selected_notification_ids
-                    .insert(notification.id.clone());
+                total_in_repo += 1;
+                if !self.selected_notification_ids.contains(&notification.id) {
+                    all_selected = false;
+                }
             }
+        }
+
+        if total_in_repo == 0 {
+            return 0;
+        }
+
+        if all_selected {
+            for notification in &self.notifications {
+                if notification.repo_full_name() == repo_name {
+                    self.selected_notification_ids.remove(&notification.id);
+                }
+            }
+            0
+        } else {
+            for notification in &self.notifications {
+                if notification.repo_full_name() == repo_name {
+                    self.selected_notification_ids
+                        .insert(notification.id.clone());
+                }
+            }
+            total_in_repo
         }
     }
 }

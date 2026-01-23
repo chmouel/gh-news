@@ -79,7 +79,7 @@ gh news --static-display | grep "something" # List notifications without TUI
 - `o` - Open all selected without marking as read
 - `.` - Mark all selected as read
 - `Ctrl+A` - Archive selected (or all if none selected)
-- `Ctrl+Alt+A` - Select all notifications in current repository
+- `Ctrl+Alt+A` - Toggle select all notifications in current repository
 
 ### View & Filter
 - `A` - Toggle showing read notifications
