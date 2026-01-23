@@ -36,7 +36,13 @@ pub struct PendingStateSettings {
 
 enum BlockingAction {
     Refresh,
-    MarkAllRead { selected: MarkAllOption },
+    MarkAllRead {
+        selected: MarkAllOption,
+    },
+    ArchiveSelected {
+        notification_ids: Vec<String>,
+        option: MarkAllOption,
+    },
 }
 
 /// Dwell time before auto-marking a notification as read (ms)
@@ -240,33 +246,122 @@ impl App {
         self.pending_blocking_action = Some(action);
     }
 
-    fn perform_blocking_action(&mut self, action: BlockingAction) -> Result<()> {
+    fn perform_blocking_action(
+        &mut self,
+        action: BlockingAction,
+        terminal: &mut Terminal,
+    ) -> Result<Option<String>> {
         match action {
-            BlockingAction::Refresh => self.refresh_notifications(),
+            BlockingAction::Refresh => {
+                self.refresh_notifications()?;
+                Ok(None)
+            }
             BlockingAction::MarkAllRead { selected } => {
-                if let Some(ref client) = self.api_client {
-                    match selected {
-                        MarkAllOption::MarkReadAndArchive => {
-                            for &idx in &self.state.filtered_notifications {
-                                let notif = &self.state.notifications[idx];
-                                if !self.state.is_pinned(&notif.id) {
-                                    let _ = client.mark_thread_done(&notif.id);
-                                }
-                            }
+                // Count non-pinned filtered notifications before action
+                let to_process: Vec<String> = self
+                    .state
+                    .filtered_notifications
+                    .iter()
+                    .filter_map(|&idx| {
+                        let notif = &self.state.notifications[idx];
+                        if !self.state.is_pinned(&notif.id) {
+                            Some(notif.id.clone())
+                        } else {
+                            None
                         }
-                        MarkAllOption::MarkReadOnly => {
-                            for &idx in &self.state.filtered_notifications {
-                                let notif = &self.state.notifications[idx];
-                                if !self.state.is_pinned(&notif.id) {
-                                    let _ = client.mark_notification_read(&notif.id);
-                                }
+                    })
+                    .collect();
+                let total = to_process.len();
+                let is_filtered = self.state.filter.is_some();
+
+                // Take the client temporarily to avoid borrow conflicts during render
+                if let Some(client) = self.api_client.take() {
+                    for (i, notification_id) in to_process.iter().enumerate() {
+                        // Update progress
+                        self.state.loading_progress = Some((i + 1, total));
+
+                        // Re-render every 5 items to show progress
+                        if i % 5 == 0 || i == total - 1 {
+                            terminal.draw(|frame| self.render(frame))?;
+                        }
+
+                        // Make the API call
+                        match selected {
+                            MarkAllOption::MarkReadAndArchive => {
+                                let _ = client.mark_thread_done(notification_id);
+                            }
+                            MarkAllOption::MarkReadOnly => {
+                                let _ = client.mark_notification_read(notification_id);
                             }
                         }
                     }
 
+                    // Clear progress and restore client
+                    self.state.loading_progress = None;
+                    self.api_client = Some(client);
+
                     self.refresh_notifications()?;
                 }
-                Ok(())
+                let msg = match (selected, is_filtered) {
+                    (MarkAllOption::MarkReadAndArchive, true) => {
+                        format!("Archived {} filtered notifications", total)
+                    }
+                    (MarkAllOption::MarkReadAndArchive, false) => {
+                        format!("Archived {} notifications", total)
+                    }
+                    (MarkAllOption::MarkReadOnly, true) => {
+                        format!("Marked {} filtered notifications as read", total)
+                    }
+                    (MarkAllOption::MarkReadOnly, false) => format!("Marked {} as read", total),
+                };
+                Ok(Some(msg))
+            }
+            BlockingAction::ArchiveSelected {
+                notification_ids,
+                option,
+            } => {
+                let total = notification_ids.len();
+                // Take the client temporarily to avoid borrow conflicts during render
+                if let Some(client) = self.api_client.take() {
+                    for (i, notification_id) in notification_ids.iter().enumerate() {
+                        // Update progress
+                        self.state.loading_progress = Some((i + 1, total));
+
+                        // Re-render every 5 items to show progress
+                        if i % 5 == 0 || i == total - 1 {
+                            terminal.draw(|frame| self.render(frame))?;
+                        }
+
+                        // Make the API call
+                        let result = match option {
+                            MarkAllOption::MarkReadAndArchive => {
+                                client.mark_thread_done(notification_id)
+                            }
+                            MarkAllOption::MarkReadOnly => {
+                                client.mark_notification_read(notification_id)
+                            }
+                        };
+
+                        if let Err(e) = result {
+                            eprintln!("Failed to process notification {}: {}", notification_id, e);
+                        }
+                    }
+
+                    // Clear progress and restore client
+                    self.state.loading_progress = None;
+                    self.api_client = Some(client);
+
+                    self.refresh_notifications()?;
+                }
+                let msg = match option {
+                    MarkAllOption::MarkReadAndArchive => {
+                        format!("Archived {} selected notifications", total)
+                    }
+                    MarkAllOption::MarkReadOnly => {
+                        format!("Marked {} selected notifications as read", total)
+                    }
+                };
+                Ok(Some(msg))
             }
         }
     }
@@ -502,9 +597,13 @@ impl App {
 
             if self.initial_load_rx.is_none() {
                 if let Some(action) = self.pending_blocking_action.take() {
-                    self.perform_blocking_action(action)?;
+                    let status_message = self.perform_blocking_action(action, terminal)?;
                     self.state.loading = false;
                     self.state.loading_message.clear();
+                    self.state.loading_progress = None;
+                    if status_message.is_some() {
+                        self.state.status_message = status_message;
+                    }
                 }
             }
 
@@ -643,8 +742,12 @@ impl App {
         }
 
         if self.state.loading {
-            self.loading_widget
-                .render(frame, size, &self.state.loading_message);
+            self.loading_widget.render(
+                frame,
+                size,
+                &self.state.loading_message,
+                self.state.loading_progress,
+            );
             return;
         }
 
@@ -919,71 +1022,30 @@ impl App {
     fn execute_confirmed_action(&mut self, action: ConfirmAction) -> Result<()> {
         match action {
             ConfirmAction::MarkAllRead { selected } => {
-                // Count non-pinned filtered notifications before action
-                let count = self
-                    .state
-                    .filtered_notifications
-                    .iter()
-                    .filter(|&&idx| !self.state.is_pinned(&self.state.notifications[idx].id))
-                    .count();
-
-                let is_filtered = self.state.filter.is_some();
-
-                // Execute directly (blocking, no progress bar)
-                self.perform_blocking_action(BlockingAction::MarkAllRead { selected })?;
-
-                // Set status message (indicate "filtered" when a filter is active)
-                let msg = match (selected, is_filtered) {
-                    (MarkAllOption::MarkReadAndArchive, true) => {
-                        format!("Archived {} filtered notifications", count)
-                    }
-                    (MarkAllOption::MarkReadAndArchive, false) => {
-                        format!("Archived {} notifications", count)
-                    }
-                    (MarkAllOption::MarkReadOnly, true) => {
-                        format!("Marked {} filtered notifications as read", count)
-                    }
-                    (MarkAllOption::MarkReadOnly, false) => {
-                        format!("Marked {} as read", count)
-                    }
+                // Queue the blocking action to be handled by the main loop with progress
+                let msg = match selected {
+                    MarkAllOption::MarkReadAndArchive => "Archiving notifications",
+                    MarkAllOption::MarkReadOnly => "Marking notifications as read",
                 };
-                self.state.status_message = Some(msg);
+                self.queue_blocking_action(BlockingAction::MarkAllRead { selected }, msg);
             }
-            ConfirmAction::ArchiveSelected { count, option } => {
-                // Process selected notifications
+            ConfirmAction::ArchiveSelected { count: _, option } => {
+                // Get selected notification IDs and clear selection
                 let selected_ids = self.state.get_selected_notification_ids();
-
-                if let Some(ref client) = self.api_client {
-                    for notification_id in &selected_ids {
-                        let result = match option {
-                            MarkAllOption::MarkReadAndArchive => {
-                                client.mark_thread_done(notification_id)
-                            }
-                            MarkAllOption::MarkReadOnly => {
-                                client.mark_notification_read(notification_id)
-                            }
-                        };
-
-                        if let Err(e) = result {
-                            eprintln!("Failed to process notification {}: {}", notification_id, e);
-                        }
-                    }
-                }
-
                 self.state.clear_selection();
 
-                // Refresh to reflect changes
-                self.queue_blocking_action(BlockingAction::Refresh, "Refreshing notifications...");
-
+                // Queue the blocking action to be handled by the main loop with progress
                 let msg = match option {
-                    MarkAllOption::MarkReadAndArchive => {
-                        format!("Archived {} selected notifications", count)
-                    }
-                    MarkAllOption::MarkReadOnly => {
-                        format!("Marked {} selected notifications as read", count)
-                    }
+                    MarkAllOption::MarkReadAndArchive => "Archiving selected notifications",
+                    MarkAllOption::MarkReadOnly => "Marking selected notifications as read",
                 };
-                self.state.status_message = Some(msg);
+                self.queue_blocking_action(
+                    BlockingAction::ArchiveSelected {
+                        notification_ids: selected_ids,
+                        option,
+                    },
+                    msg,
+                );
             }
         }
         Ok(())

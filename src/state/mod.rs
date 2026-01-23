@@ -46,6 +46,8 @@ pub struct AppState {
     pub status_message: Option<String>,
     // Multi-select: notification IDs that are currently selected
     pub selected_notification_ids: HashSet<String>,
+    // Progress for batch operations: (current, total)
+    pub loading_progress: Option<(usize, usize)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,6 +114,7 @@ impl AppState {
             pinned_notifications: Vec::new(),
             status_message: None,
             selected_notification_ids: HashSet::new(),
+            loading_progress: None,
         }
     }
 

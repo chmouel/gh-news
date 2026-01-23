@@ -15,7 +15,13 @@ impl LoadingWidget {
         }
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect, message: &str) {
+    pub fn render(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        message: &str,
+        progress: Option<(usize, usize)>,
+    ) {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default();
@@ -53,7 +59,11 @@ impl LoadingWidget {
         let title_style = Style::default()
             .fg(self.theme.highlight_fg)
             .add_modifier(Modifier::BOLD);
-        let message_line = format!("{message}{dots}");
+        let message_line = if let Some((current, total)) = progress {
+            format!("{message} ({current}/{total}){dots}")
+        } else {
+            format!("{message}{dots}")
+        };
         let hint_style = Style::default()
             .fg(self.theme.highlight_fg)
             .add_modifier(Modifier::DIM);
@@ -69,7 +79,15 @@ impl LoadingWidget {
         let paragraph = Paragraph::new(text).alignment(Alignment::Center);
         frame.render_widget(paragraph, chunks[0]);
 
-        let progress = ((tick / 90) % 100) as u16;
+        let progress_percent = if let Some((current, total)) = progress {
+            if total > 0 {
+                ((current * 100) / total) as u16
+            } else {
+                0
+            }
+        } else {
+            ((tick / 90) % 100) as u16
+        };
         let gauge = Gauge::default()
             .block(Block::default().borders(Borders::NONE))
             .gauge_style(
@@ -77,7 +95,7 @@ impl LoadingWidget {
                     .fg(self.theme.highlight_fg)
                     .bg(self.theme.highlight_bg),
             )
-            .percent(progress);
+            .percent(progress_percent);
 
         frame.render_widget(gauge, chunks[1]);
     }
