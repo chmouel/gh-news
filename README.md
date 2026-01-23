@@ -1,4 +1,5 @@
 # gh-news
+
 <img width="150" height="150" src="https://github.com/user-attachments/assets/5f01123f-a597-4ba1-b378-b0f72176e89b" align="right" />
 
 GitHub notifications TUI built with Rust and ratatui.
@@ -6,6 +7,23 @@ GitHub notifications TUI built with Rust and ratatui.
 ## Screenshot
 
 <img width="1865" height="1242" alt="Screenshot 2026-01-20 at 14 58 15" src="https://github.com/user-attachments/assets/dae19973-afdc-4b67-abdf-d63ff8f1446a" />
+
+## Features
+
+- Terminal-based UI for GitHub notifications using Ratatui
+- Installs as a native gh CLI extension
+- Vim-style navigation with j/k keys
+- Multi-select for batch operations on notifications
+- Preview pane with horizontal and vertical modes
+- Regex filtering to find specific notifications
+- Pin important notifications to keep them at top
+- Repository grouping with collapsible headers
+- Auto-refresh with configurable interval
+- Notification hooks for custom commands (desktop alerts, sounds)
+- GitHub Enterprise support
+- Configurable via TOML file
+- Mark notifications read/unread individually or in bulk
+- Static display mode for scripting and pipelines
 
 ## Installation
 
@@ -64,11 +82,13 @@ gh news --static-display | grep "something" # List notifications without TUI
 ## Keybindings
 
 ### Navigation
+
 - `↑`/`↓` or `j`/`k` - Navigate notifications, or repository headers when repositories are collapsed
 - `Home`/`End` - Jump to first/last notification
 - `PageUp`/`PageDown` - Page navigation (or scroll preview if shown)
 
 ### Actions
+
 - `Enter` - Open notification in browser and mark as read, or toggle repository collapse on headers
 - `o` - Open notification in browser without marking as read
 - `.` - Toggle read/unread status
@@ -76,6 +96,7 @@ gh news --static-display | grep "something" # List notifications without TUI
 - `h` - Collapse current repository
 
 ### Multi-select
+
 - `Space` - Toggle selection on notification (magenta checkmark)
 - `Esc` - Clear selection (or quit if no selection)
 - `Enter` - Open all selected + mark as read
@@ -85,6 +106,7 @@ gh news --static-display | grep "something" # List notifications without TUI
 - `Ctrl+Alt+A` - Toggle select all notifications in current repository
 
 ### View & Filter
+
 - `A` - Toggle showing read notifications
 - `E` - Expunge read notifications
 - `/` - Filter notifications (type to search, Enter to keep, Esc to clear)
@@ -96,10 +118,12 @@ gh news --static-display | grep "something" # List notifications without TUI
 - `M` - Toggle auto-mark-read on scroll
 
 ### General
+
 - `Esc` or `q` or `Ctrl+C` - Quit application
 - `?` - Show help
 
 ### Help
+
 - `↑`/`↓` or `j`/`k` - Scroll help
 - `PageUp`/`PageDown` - Page scroll help
 - `Home`/`End` - Jump to top/bottom of help
