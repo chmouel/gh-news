@@ -153,3 +153,14 @@ auto_mark_read = true
 # Default: "github.com"
 # CLI flag: (not available as flag, set via env or config)
 github_host = "github.com"
+
+# ==============================================================================
+# STATE FILE
+# ==============================================================================
+
+# Path to state file for persisting runtime settings.
+# The state file stores preview mode, auto_mark_read toggle, and pinned notifications.
+# If not set, defaults to ~/.cache/gh-news/state.toml (XDG-compliant).
+# Default: (use XDG cache directory)
+# CLI flag: --state-file <PATH>
+# state_file = "/path/to/custom/state.toml"

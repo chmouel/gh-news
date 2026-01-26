@@ -40,4 +40,8 @@ pub struct Args {
     /// Disable auto-marking notifications as read when navigating
     #[arg(long)]
     pub no_auto_mark_read: bool,
+
+    /// Path to state file (overrides config and default)
+    #[arg(long)]
+    pub state_file: Option<PathBuf>,
 }

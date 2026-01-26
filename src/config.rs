@@ -35,6 +35,9 @@ pub struct Config {
 
     // GitHub Enterprise support
     pub github_host: String,
+
+    // State file path (optional override)
+    pub state_file: Option<String>,
 }
 
 impl Default for Config {
@@ -53,6 +56,7 @@ impl Default for Config {
             browser_command: None,
             on_new_notification_command: None,
             github_host: "github.com".to_string(),
+            state_file: None,
         }
     }
 }

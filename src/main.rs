@@ -20,6 +20,7 @@ use config::Config;
 use error::Result;
 use filter::Filter;
 use notifications::{fetch_notifications, NotificationFetchOptions};
+use std::path::PathBuf;
 use std::sync::mpsc::channel;
 use std::thread;
 use terminal::Terminal;
@@ -61,6 +62,12 @@ fn run() -> Result<()> {
     let args = Args::parse();
     let config = Config::load(args.config.as_deref());
     let opts = RuntimeOptions::from_args_and_config(&args, &config);
+
+    // Initialise state file path: CLI > config > default
+    let state_path = args
+        .state_file
+        .or_else(|| config.state_file.as_ref().map(PathBuf::from));
+    state_file::init_state_path(state_path)?;
 
     // Handle non-interactive modes first
     if args.mark_read || args.mark_read_archive {

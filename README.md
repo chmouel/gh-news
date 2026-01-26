@@ -67,6 +67,7 @@ gh-news shows a loading screen while fetching notifications during start-up and 
 - `-r, --mark-read` - Mark all notifications as read (non-interactive)
 - `-s, --static-display` - Print notifications and exit (for scripts)
 - `--no-auto-mark-read` - Disable auto-marking notifications as read when navigating
+- `--state-file <PATH>` - Use a custom state file path (overrides config and default)
 
 ### Examples
 
