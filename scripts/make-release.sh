@@ -8,7 +8,7 @@ clean() { rm -f ${TMP_RLNOTE}; }
 trap clean EXIT
 
 # Make sure we are clean git state
-[[ -z ${FORCE} && -n $(git status --porcelain) ]] && {
+[[ -z ${FORCE:-} && -n $(git status --porcelain) ]] && {
   echo "you have uncommitted changes, please commit or stash them first"
   exit 1
 }
