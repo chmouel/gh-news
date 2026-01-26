@@ -23,12 +23,12 @@ bumpversion() {
   local current major minor patch mode
   current=$(git describe --tags $(git rev-list --tags --max-count=1) || echo 0.0.0)
   current=${current#v}
-  echo "Current tag version is ${current}"
-
   major=$(uv run --with semver python3 -c "import semver,sys;print(str(semver.VersionInfo.parse(sys.argv[1]).bump_major()))" ${current})
   minor=$(uv run --with semver python3 -c "import semver,sys;print(str(semver.VersionInfo.parse(sys.argv[1]).bump_minor()))" ${current})
   patch=$(uv run --with semver python3 -c "import semver,sys;print(str(semver.VersionInfo.parse(sys.argv[1]).bump_patch()))" ${current})
 
+  echo "Change from ${current} to HEAD"
+  git log $(git tag | tail -1)..HEAD --pretty=format:"- %s"
   echo "If we bump we get, Major: ${major} Minor: ${minor} Patch: ${patch}"
   read -p "To which version you would like to bump [M]ajor, Mi[n]or, [P]atch or Manua[l]: " ANSWER
   if [[ ${ANSWER,,} == "m" ]]; then
