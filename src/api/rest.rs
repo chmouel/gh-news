@@ -9,6 +9,53 @@ use serde_json::Value;
 use std::time::Duration;
 
 const API_VERSION: &str = "2022-11-28";
+const DEFAULT_PER_PAGE: usize = 50;
+const USER_AGENT_VALUE: &str = "gh-news/0.1.0";
+
+struct NotificationQuery {
+    all: bool,
+    participating: bool,
+    per_page: Option<usize>,
+    page: Option<usize>,
+}
+
+impl NotificationQuery {
+    fn apply(self, request: RequestBuilder) -> RequestBuilder {
+        let per_page = self.per_page.unwrap_or(DEFAULT_PER_PAGE);
+        let mut request = request.query(&[
+            ("all", self.all.to_string()),
+            ("participating", self.participating.to_string()),
+            ("per_page", per_page.to_string()),
+        ]);
+
+        if let Some(page) = self.page {
+            request = request.query(&[("page", page.to_string())]);
+        }
+
+        request
+    }
+}
+
+fn bearer_header_value(token: &str) -> Result<HeaderValue> {
+    HeaderValue::from_str(&format!("Bearer {}", token)).map_err(|_| {
+        ApiError::HttpStatus {
+            status: 0,
+            message: "Invalid token format".to_string(),
+        }
+        .into()
+    })
+}
+
+fn default_headers(token: &str) -> Result<HeaderMap> {
+    let mut headers = HeaderMap::new();
+    headers.insert(AUTHORIZATION, bearer_header_value(token)?);
+    headers.insert(
+        "X-GitHub-Api-Version",
+        HeaderValue::from_static(API_VERSION),
+    );
+    headers.insert(USER_AGENT, HeaderValue::from_static(USER_AGENT_VALUE));
+    Ok(headers)
+}
 
 #[derive(Clone)]
 pub struct GitHubClient {
@@ -48,31 +95,7 @@ impl GitHubClient {
 
     pub fn new(config: &Config) -> Result<Self> {
         let token = get_github_token()?;
-        let mut headers = HeaderMap::new();
-
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {}", token)).map_err(|_| {
-                ApiError::HttpStatus {
-                    status: 0,
-                    message: "Invalid token format".to_string(),
-                }
-            })?,
-        );
-        headers.insert(
-            "X-GitHub-Api-Version",
-            HeaderValue::from_str(API_VERSION).map_err(|e| ApiError::HttpStatus {
-                status: 0,
-                message: format!("Invalid API version header: {}", e),
-            })?,
-        );
-        headers.insert(
-            USER_AGENT,
-            HeaderValue::from_str("gh-news/0.1.0").map_err(|e| ApiError::HttpStatus {
-                status: 0,
-                message: format!("Invalid user agent: {}", e),
-            })?,
-        );
+        let headers = default_headers(&token)?;
 
         let client = Client::builder()
             .default_headers(headers)
@@ -96,21 +119,13 @@ impl GitHubClient {
     ) -> Result<Vec<Notification>> {
         let url = format!("{}/notifications", self.api_base);
 
-        let mut request = self.client.get(&url).query(&[
-            ("all", all.to_string()),
-            ("participating", participating.to_string()),
-        ]);
-
-        if let Some(per_page) = per_page {
-            request = request.query(&[("per_page", per_page.to_string())]);
-        } else {
-            request = request.query(&[("per_page", "50")]);
+        let request = NotificationQuery {
+            all,
+            participating,
+            per_page,
+            page,
         }
-
-        if let Some(page) = page {
-            request = request.query(&[("page", page.to_string())]);
-        }
-
+        .apply(self.client.get(&url));
         let response = self.send(request)?;
         response
             .json::<Vec<Notification>>()

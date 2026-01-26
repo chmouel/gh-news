@@ -22,41 +22,52 @@ pub fn fetch_notifications(
     client: &GitHubClient,
     options: NotificationFetchOptions,
 ) -> Result<Vec<Notification>> {
-    let max_notifications = options.max_notifications.unwrap_or(usize::MAX);
-    if max_notifications == 0 {
-        return Ok(Vec::new());
+    NotificationFetcher::new(client, options).fetch()
+}
+
+struct NotificationFetcher<'a> {
+    client: &'a GitHubClient,
+    options: NotificationFetchOptions,
+}
+
+impl<'a> NotificationFetcher<'a> {
+    fn new(client: &'a GitHubClient, options: NotificationFetchOptions) -> Self {
+        Self { client, options }
     }
 
-    let per_page = options.effective_per_page();
-    let mut all_notifications = Vec::new();
-    let mut page = 1;
-
-    loop {
-        let notifications = client.get_notifications(
-            options.show_all,
-            options.participating,
-            Some(per_page),
-            Some(page),
-        )?;
-
-        if notifications.is_empty() {
-            break;
+    fn fetch(&self) -> Result<Vec<Notification>> {
+        let max_notifications = self.options.max_notifications.unwrap_or(usize::MAX);
+        if max_notifications == 0 {
+            return Ok(Vec::new());
         }
 
-        let remaining = max_notifications.saturating_sub(all_notifications.len());
-        if remaining == 0 {
-            break;
+        let per_page = self.options.effective_per_page();
+        let mut all_notifications = Vec::new();
+
+        for page in 1.. {
+            let notifications = self.client.get_notifications(
+                self.options.show_all,
+                self.options.participating,
+                Some(per_page),
+                Some(page),
+            )?;
+
+            if notifications.is_empty() {
+                break;
+            }
+
+            let remaining = max_notifications.saturating_sub(all_notifications.len());
+            if remaining == 0 {
+                break;
+            }
+
+            all_notifications.extend(notifications.into_iter().take(remaining));
+
+            if all_notifications.len() >= max_notifications {
+                break;
+            }
         }
 
-        let to_take = remaining.min(notifications.len());
-        all_notifications.extend(notifications.into_iter().take(to_take));
-
-        if all_notifications.len() >= max_notifications {
-            break;
-        }
-
-        page += 1;
+        Ok(all_notifications)
     }
-
-    Ok(all_notifications)
 }

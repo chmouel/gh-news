@@ -69,12 +69,23 @@ impl AppStateFile {
         Ok(())
     }
 
-    pub fn save(preview_mode: PreviewMode) -> Result<()> {
-        // Load existing state to preserve other fields
-        let mut state =
-            Self::load_full().unwrap_or_else(|_| Self::new(preview_mode, default_auto_mark_read()));
-        state.preview_mode = preview_mode_to_string(preview_mode);
+    fn load_or_default(preview_mode: PreviewMode, auto_mark_read: bool) -> AppStateFile {
+        Self::load_full().unwrap_or_else(|_| Self::new(preview_mode, auto_mark_read))
+    }
+
+    fn update_with<F>(preview_mode: PreviewMode, auto_mark_read: bool, mut update: F) -> Result<()>
+    where
+        F: FnMut(&mut AppStateFile),
+    {
+        let mut state = Self::load_or_default(preview_mode, auto_mark_read);
+        update(&mut state);
         state.save_full()
+    }
+
+    pub fn save(preview_mode: PreviewMode) -> Result<()> {
+        Self::update_with(preview_mode, default_auto_mark_read(), |state| {
+            state.preview_mode = preview_mode_to_string(preview_mode);
+        })
     }
 
     pub fn load() -> Result<PreviewMode> {
@@ -83,11 +94,9 @@ impl AppStateFile {
     }
 
     pub fn save_auto_mark_read(auto_mark_read: bool) -> Result<()> {
-        // Load existing state to preserve other fields
-        let mut state =
-            Self::load_full().unwrap_or_else(|_| Self::new(PreviewMode::Vertical, auto_mark_read));
-        state.auto_mark_read = auto_mark_read;
-        state.save_full()
+        Self::update_with(PreviewMode::Vertical, auto_mark_read, |state| {
+            state.auto_mark_read = auto_mark_read;
+        })
     }
 
     pub fn load_auto_mark_read() -> Result<bool> {
@@ -96,11 +105,9 @@ impl AppStateFile {
     }
 
     pub fn save_pinned_notifications(pinned: &[Notification]) -> Result<()> {
-        // Load existing state to preserve other fields
-        let mut state = Self::load_full()
-            .unwrap_or_else(|_| Self::new(PreviewMode::Vertical, default_auto_mark_read()));
-        state.pinned_notifications = pinned.to_vec();
-        state.save_full()
+        Self::update_with(PreviewMode::Vertical, default_auto_mark_read(), |state| {
+            state.pinned_notifications = pinned.to_vec();
+        })
     }
 
     pub fn load_pinned_notifications() -> Result<Vec<Notification>> {
