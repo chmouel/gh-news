@@ -77,11 +77,10 @@ fn run() -> Result<()> {
             },
         )?;
 
-        let to_process: Vec<_> = if let Some(ref pattern) = opts.filter_pattern {
-            let filter = Filter::new(Some(pattern))?;
-            notifications.iter().filter(|n| filter.matches(n)).collect()
-        } else {
-            notifications.iter().collect()
+        let filter = build_filter(&opts.filter_pattern)?;
+        let to_process: Vec<_> = match filter {
+            Some(ref filter) => notifications.iter().filter(|n| filter.matches(n)).collect(),
+            None => notifications.iter().collect(),
         };
 
         // Use bulk API when marking all as read (no filter, no archive)
@@ -127,11 +126,7 @@ fn run() -> Result<()> {
     app.start_auto_refresh(opts.show_all, opts.participating, opts.max_notifications);
 
     // Apply filters
-    let filter = if opts.filter_pattern.is_some() {
-        Some(Filter::new(opts.filter_pattern.as_deref())?)
-    } else {
-        None
-    };
+    let filter = build_filter(&opts.filter_pattern)?;
 
     // Try to load saved preview mode from state file, fallback to config default
     let preview_mode = match state_file::AppStateFile::load() {
@@ -203,11 +198,7 @@ fn handle_static_display(config: &Config, opts: &RuntimeOptions) -> Result<()> {
         },
     )?;
 
-    let filter = if opts.filter_pattern.is_some() {
-        Some(Filter::new(opts.filter_pattern.as_deref())?)
-    } else {
-        None
-    };
+    let filter = build_filter(&opts.filter_pattern)?;
 
     for notification in &notifications {
         if let Some(ref filter) = filter {
@@ -237,4 +228,11 @@ fn handle_static_display(config: &Config, opts: &RuntimeOptions) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn build_filter(pattern: &Option<String>) -> Result<Option<Filter>> {
+    match pattern.as_deref() {
+        Some(value) => Ok(Some(Filter::new(Some(value))?)),
+        None => Ok(None),
+    }
 }
