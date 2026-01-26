@@ -3,11 +3,20 @@ set -euf
 VERSION=${1-""}
 CARGO_VERSION=$(grep '^version = "' Cargo.toml | grep -Eo '[0-9]+\.[0-9]+\.[0-9]+')
 PKGNAME=$(grep '^name = "' Cargo.toml | sed -E 's/.*"([^"]*)"/\1/')
+TMP_RLNOTE=$(mktemp /tmp/.mm.XXXXXX)
+clean() { rm -f ${TMP_RLNOTE}; }
+trap clean EXIT
 
 # Make sure we are clean git state
-[[ -n $(git status --porcelain) ]] && {
+[[ -z ${FORCE} && -n $(git status --porcelain) ]] && {
   echo "you have uncommitted changes, please commit or stash them first"
   exit 1
+}
+
+generate_release_note() {
+  git log v${CARGO_VERSION}..HEAD | aichat "Generate release notes for version ${VERSION} from version ${CARGO_VERSION} in markdown,
+  this will be used for Github release. Categorize changes into Features, Fixes, Misc. If there sib reaking changes, highlight them at the top.
+  If there is no changes then don't say there is no changes provided."
 }
 
 bumpversion() {
@@ -52,9 +61,10 @@ bumpversion() {
 vfile=Cargo.toml
 sed -i "s/^version = .*/version = \"${VERSION}\"/" ${vfile}
 cargo build --release
-git commit -S -m "Release ${VERSION} 🥳" ${vfile} Cargo.lock || true
+RELEASE_NOTE="$(generate_release_note)"
+git commit -S -m "Release ${VERSION} 🥳" -m "${RELEASE_NOTE}" ${vfile} Cargo.lock || true
 [[ ${VERSION} != v* ]] && VERSION="v${VERSION}"
-git tag -s ${VERSION} -m "Releasing version ${VERSION}"
+git tag -s ${VERSION} -m "${RELEASE_NOTE}"
 git push --tags origin ${VERSION}
 git push origin main --no-verify
 [[ -n ${NO_PUBLISH:-""} ]] && exit
