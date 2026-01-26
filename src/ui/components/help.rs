@@ -311,26 +311,6 @@ impl HelpWidget {
             lines.push(Line::from(""));
         }
 
-        let footer_line = Line::from(vec![
-            Span::styled("  Press ", Style::default().fg(colors.fg_muted)),
-            Span::styled(
-                "?",
-                Style::default()
-                    .fg(colors.yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" or ", Style::default().fg(colors.fg_muted)),
-            Span::styled(
-                "q",
-                Style::default()
-                    .fg(colors.yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" to close", Style::default().fg(colors.fg_muted)),
-        ]);
-
-        lines.push(footer_line);
-
         HelpContent {
             lines,
             match_count,
@@ -348,6 +328,32 @@ impl HelpWidget {
         let colors = crate::ui::theme::TokyoNight::colors();
         let scroll = scroll.min(u16::MAX as usize) as u16;
 
+        let footer = Line::from(vec![
+            Span::styled(" Press ", Style::default().fg(colors.fg_muted)),
+            Span::styled(
+                "?",
+                Style::default()
+                    .fg(colors.yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" or ", Style::default().fg(colors.fg_muted)),
+            Span::styled(
+                "q",
+                Style::default()
+                    .fg(colors.yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" to close ", Style::default().fg(colors.fg_muted)),
+            Span::styled("•", Style::default().fg(colors.fg_muted)),
+            Span::styled(
+                " j/k",
+                Style::default()
+                    .fg(colors.yellow)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" to scroll ", Style::default().fg(colors.fg_muted)),
+        ]);
+
         let block = Block::default()
             .borders(Borders::ALL)
             .title(vec![
@@ -361,6 +367,7 @@ impl HelpWidget {
                 Span::styled(" ", Style::default()),
             ])
             .title_alignment(Alignment::Center)
+            .title_bottom(footer)
             .border_style(Style::default().fg(colors.cyan))
             .border_type(ratatui::widgets::BorderType::Rounded)
             .padding(ratatui::widgets::Padding::new(2, 2, 2, 2));
