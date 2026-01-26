@@ -11,4 +11,4 @@ fi
 
 rustup target add ${CARGO_BUILD_TARGET:-}
 cargo build --release && mkdir -p dist &&
-  cp target/${CARGO_BUILD_TARGET}/release/gh-news"$ext" dist/gh-news"$1"_"${TARGET}""$ext"
+  cp "target/${CARGO_BUILD_TARGET}/release/gh-news${ext}" "dist/gh-news${1}_${TARGET}${ext}"

@@ -46,10 +46,10 @@ jobs:
         with:
           build_script_override: "scripts/build_dist.sh"
       - name: Update release notes
-        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)
+        if: (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run)) && matrix.target == 'linux-amd64'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          git fetch origin refs/tags/${{ github.ref_name }}:refs/tags/${{ github.ref_name }}
-          NOTES=$(git tag -l --format='%(contents:subject)%0a%0a%(contents:body)' ${{ github.ref_name }})
-          gh release edit ${{ github.ref_name }} --notes "$NOTES"
+          git fetch -f origin refs/tags/${{ github.ref_name }}:refs/tags/${{ github.ref_name }}
+          NOTES=$(git tag -l --format='%(contents:subject)%0a%0a%(contents:body)' '${{ github.ref_name }}')
+          gh release edit '${{ github.ref_name }}' --notes "$NOTES"
