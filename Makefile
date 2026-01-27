@@ -3,7 +3,7 @@ CARGO := cargo
 all: build clippy test
 
 build:
-	@echo -n "Building project... " && \
+	@echo "Building project... " && \
 		$(CARGO) build --release -q && \
 		echo "done." || echo "Failed."
 
@@ -11,8 +11,8 @@ test:
 	@$(CARGO) test -q
 
 clippy:
-	@echo -n "Running clippy... " && \
-	@$(CARGO) clippy -q --color=always && \
+	@echo "Running clippy... " && \
+	$(CARGO) clippy -q --color=always && \
 	echo "done." || echo "Failed."
 
 
