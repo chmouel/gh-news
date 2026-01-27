@@ -78,13 +78,12 @@ impl Config {
         config
     }
 
-    /// Get the default config file path (XDG-compliant).
+    /// Get the default config file path (~/.config/gh-news/config.toml).
     pub fn get_config_path() -> Result<PathBuf> {
-        let config_dir = dirs::config_dir()
-            .ok_or_else(|| Error::Config("Could not determine config directory".to_string()))?;
+        let home = dirs::home_dir()
+            .ok_or_else(|| Error::Config("Could not determine home directory".to_string()))?;
 
-        let app_config_dir = config_dir.join("gh-news");
-        Ok(app_config_dir.join("config.toml"))
+        Ok(home.join(".config").join("gh-news").join("config.toml"))
     }
 
     /// Load configuration from the TOML config file.
