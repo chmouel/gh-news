@@ -13,12 +13,6 @@ trap clean EXIT
   exit 1
 }
 
-generate_release_note() {
-  git log v${CARGO_VERSION}..HEAD | aichat "Generate release notes for version ${VERSION} from version ${CARGO_VERSION} in markdown,
-  this will be used for Github release. Categorize changes into Features, Fixes, Misc. If there sib reaking changes, highlight them at the top.
-  If there is no changes then don't say there is no changes provided."
-}
-
 bumpversion() {
   local current major minor patch mode
   current=$(git describe --tags $(git rev-list --tags --max-count=1) || echo 0.0.0)
@@ -61,10 +55,9 @@ bumpversion() {
 vfile=Cargo.toml
 sed -i "s/^version = .*/version = \"${VERSION}\"/" ${vfile}
 cargo build --release
-RELEASE_NOTE="$(generate_release_note)"
-git commit -S -m "Release ${VERSION} 🥳" -m "${RELEASE_NOTE}" ${vfile} Cargo.lock || true
+git commit -S -m "Release ${VERSION} 🥳" ${vfile} Cargo.lock || true
 [[ ${VERSION} != v* ]] && VERSION="v${VERSION}"
-git tag -s ${VERSION} -m "${RELEASE_NOTE}"
+git tag -s ${VERSION}
 git push --tags origin ${VERSION}
 git push origin main --no-verify
 [[ -n ${NO_PUBLISH:-""} ]] && exit
