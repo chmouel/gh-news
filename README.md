@@ -250,6 +250,32 @@ Actions support placeholder substitution:
 | `{reason}` | Notification reason (mention, review_requested, etc.) |
 | `{unread}` | Read status (true/false) |
 
+**Batch Placeholders (plural forms):**
+
+Use plural placeholders to run a single command with all selected notifications:
+
+| Placeholder | Description |
+|-------------|-------------|
+| `{ids}` | All notification IDs, space-separated |
+| `{titles}` | All notification titles, space-separated |
+| `{urls}` | All web URLs, space-separated |
+| `{repos}` | All repository names, space-separated |
+| `{owners}` | All repository owners, space-separated |
+| `{full_names}` | All full repository names, space-separated |
+| `{types}` | All notification types, space-separated |
+| `{reasons}` | All notification reasons, space-separated |
+
+Example batch action:
+
+```toml
+[[actions]]
+name = "Open all in browser"
+command = "firefox {urls}"
+interactive = true
+```
+
+When you select multiple notifications and run this action, it executes once as `firefox 'url1' 'url2' 'url3'`.
+
 **Action Options:**
 
 | Option | Default | Description |
@@ -258,7 +284,7 @@ Actions support placeholder substitution:
 | `command` | required | Command template with placeholders |
 | `interactive` | `false` | Suspend TUI and run command with full terminal access (for TUI tools like fzf, vim) |
 
-Actions work with multi-select: select multiple notifications with `Space`, then press `x` to run an action on all of them. Interactive actions only run on the first selected notification.
+Actions work with multi-select: select multiple notifications with `Space`, then press `x` to run an action on all of them. With singular placeholders, the command runs once per notification. With plural placeholders (e.g., `{urls}`), the command runs once with all values.
 
 ## Environment Variables
 

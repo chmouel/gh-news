@@ -18,6 +18,75 @@ pub enum ActionResult {
     Failed(String),
 }
 
+/// Batch (plural) placeholder names that collect values from multiple notifications.
+const BATCH_PLACEHOLDERS: &[&str] = &[
+    "{ids}",
+    "{titles}",
+    "{urls}",
+    "{repos}",
+    "{owners}",
+    "{full_names}",
+    "{types}",
+    "{reasons}",
+];
+
+/// Check if a command contains any batch/plural placeholders.
+pub fn has_batch_placeholders(command: &str) -> bool {
+    BATCH_PLACEHOLDERS.iter().any(|p| command.contains(p))
+}
+
+/// Substitute batch/plural placeholders with values from multiple notifications.
+///
+/// Supported plural placeholders:
+/// - {ids} - All notification IDs, space-separated
+/// - {titles} - All notification titles, space-separated
+/// - {urls} - All web URLs, space-separated
+/// - {repos} - All repository names, space-separated
+/// - {owners} - All repository owners, space-separated
+/// - {full_names} - All full repository names, space-separated
+/// - {types} - All notification types, space-separated
+/// - {reasons} - All notification reasons, space-separated
+pub fn substitute_batch_placeholders(
+    command: &str,
+    notifications: &[&Notification],
+    github_host: &str,
+) -> String {
+    let collect_escaped = |f: fn(&Notification, &str) -> String| -> String {
+        notifications
+            .iter()
+            .map(|n| f(n, github_host))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+
+    let ids = collect_escaped(|n, _| shell_escape(&n.id));
+    let titles = collect_escaped(|n, _| shell_escape(n.title()));
+    let urls = collect_escaped(|n, host| shell_escape(&n.web_url(host).unwrap_or_default()));
+    let repos = collect_escaped(|n, _| {
+        let full = n.repo_full_name();
+        let (_, repo) = full.split_once('/').unwrap_or(("", full));
+        shell_escape(repo)
+    });
+    let owners = collect_escaped(|n, _| {
+        let full = n.repo_full_name();
+        let (owner, _) = full.split_once('/').unwrap_or(("", full));
+        shell_escape(owner)
+    });
+    let full_names = collect_escaped(|n, _| shell_escape(n.repo_full_name()));
+    let types = collect_escaped(|n, _| shell_escape(&n.notification_type().to_string()));
+    let reasons = collect_escaped(|n, _| shell_escape(&n.reason_enum().to_string()));
+
+    command
+        .replace("{ids}", &ids)
+        .replace("{titles}", &titles)
+        .replace("{urls}", &urls)
+        .replace("{repos}", &repos)
+        .replace("{owners}", &owners)
+        .replace("{full_names}", &full_names)
+        .replace("{types}", &types)
+        .replace("{reasons}", &reasons)
+}
+
 /// Substitute placeholders in a command template with notification data.
 ///
 /// Supported placeholders:
@@ -80,6 +149,32 @@ pub fn execute_action(
 /// Used for interactive actions where the caller handles execution.
 pub fn prepare_command(action: &Action, notification: &Notification, github_host: &str) -> String {
     substitute_placeholders(&action.command, notification, github_host)
+}
+
+/// Prepare a batch command string with plural placeholder substitution.
+/// Used for actions that operate on multiple notifications at once.
+pub fn prepare_batch_command(
+    action: &Action,
+    notifications: &[Notification],
+    github_host: &str,
+) -> String {
+    let refs: Vec<&Notification> = notifications.iter().collect();
+    substitute_batch_placeholders(&action.command, &refs, github_host)
+}
+
+/// Execute a batch action on multiple notifications (spawns single command in background).
+pub fn execute_batch_action(
+    action: &Action,
+    notifications: &[Notification],
+    github_host: &str,
+) -> ActionResult {
+    let command = prepare_batch_command(action, notifications, github_host);
+
+    if command.trim().is_empty() {
+        return ActionResult::Failed("Empty command".to_string());
+    }
+
+    execute_background(&command)
 }
 
 /// Execute command in background (non-blocking).
@@ -423,5 +518,183 @@ mod tests {
         let command = "open {url}";
         let result = substitute_placeholders(command, &notification, "github.com");
         assert!(result.contains("github.com/org/other-repo/pull/123"));
+    }
+
+    // ============ Batch/Plural Placeholder Tests ============
+
+    #[test]
+    fn test_has_batch_placeholders_urls() {
+        assert!(has_batch_placeholders("firefox {urls}"));
+        assert!(has_batch_placeholders("echo {ids} | wc -l"));
+        assert!(!has_batch_placeholders("echo {url}"));
+        assert!(!has_batch_placeholders("echo {id}"));
+    }
+
+    #[test]
+    fn test_substitute_batch_urls() {
+        let notif1 = create_test_notification();
+        let notif2 = create_pr_notification();
+        let notifications = vec![&notif1, &notif2];
+
+        let command = "firefox {urls}";
+        let result = substitute_batch_placeholders(command, &notifications, "github.com");
+
+        // Should have both URLs space-separated
+        assert!(result.contains("github.com/chmouel/gh-news/issues/42"));
+        assert!(result.contains("github.com/org/other-repo/pull/123"));
+        assert!(result.starts_with("firefox "));
+    }
+
+    #[test]
+    fn test_substitute_batch_ids() {
+        let notif1 = create_test_notification();
+        let notif2 = create_pr_notification();
+        let notifications = vec![&notif1, &notif2];
+
+        let command = "echo {ids}";
+        let result = substitute_batch_placeholders(command, &notifications, "github.com");
+
+        assert_eq!(result, "echo '12345' '99999'");
+    }
+
+    #[test]
+    fn test_substitute_batch_titles() {
+        let notif1 = create_test_notification();
+        let notif2 = create_pr_notification();
+        let notifications = vec![&notif1, &notif2];
+
+        let command = "echo {titles}";
+        let result = substitute_batch_placeholders(command, &notifications, "github.com");
+
+        assert_eq!(result, "echo 'Test Issue Title' 'Add new feature'");
+    }
+
+    #[test]
+    fn test_substitute_batch_repos() {
+        let notif1 = create_test_notification();
+        let notif2 = create_pr_notification();
+        let notifications = vec![&notif1, &notif2];
+
+        let command = "echo {repos}";
+        let result = substitute_batch_placeholders(command, &notifications, "github.com");
+
+        assert_eq!(result, "echo 'gh-news' 'other-repo'");
+    }
+
+    #[test]
+    fn test_substitute_batch_full_names() {
+        let notif1 = create_test_notification();
+        let notif2 = create_pr_notification();
+        let notifications = vec![&notif1, &notif2];
+
+        let command = "echo {full_names}";
+        let result = substitute_batch_placeholders(command, &notifications, "github.com");
+
+        assert_eq!(result, "echo 'chmouel/gh-news' 'org/other-repo'");
+    }
+
+    #[test]
+    fn test_substitute_batch_mixed_with_static() {
+        let notif1 = create_test_notification();
+        let notif2 = create_pr_notification();
+        let notifications = vec![&notif1, &notif2];
+
+        let command = "notify-send 'Opening' && firefox {urls}";
+        let result = substitute_batch_placeholders(command, &notifications, "github.com");
+
+        assert!(result.starts_with("notify-send 'Opening' && firefox "));
+        assert!(result.contains("github.com/chmouel/gh-news/issues/42"));
+        assert!(result.contains("github.com/org/other-repo/pull/123"));
+    }
+
+    #[test]
+    fn test_substitute_batch_single_notification() {
+        let notif = create_test_notification();
+        let notifications = vec![&notif];
+
+        let command = "firefox {urls}";
+        let result = substitute_batch_placeholders(command, &notifications, "github.com");
+
+        assert!(result.contains("github.com/chmouel/gh-news/issues/42"));
+    }
+
+    #[test]
+    fn test_substitute_batch_empty_notifications() {
+        let notifications: Vec<&Notification> = vec![];
+
+        let command = "firefox {urls}";
+        let result = substitute_batch_placeholders(command, &notifications, "github.com");
+
+        // With no notifications, plural placeholders become empty
+        assert_eq!(result, "firefox ");
+    }
+
+    #[test]
+    fn test_substitute_batch_owners() {
+        let notif1 = create_test_notification();
+        let notif2 = create_pr_notification();
+        let notifications = vec![&notif1, &notif2];
+
+        let command = "echo {owners}";
+        let result = substitute_batch_placeholders(command, &notifications, "github.com");
+
+        assert_eq!(result, "echo 'chmouel' 'org'");
+    }
+
+    #[test]
+    fn test_substitute_batch_types() {
+        let notif1 = create_test_notification();
+        let notif2 = create_pr_notification();
+        let notifications = vec![&notif1, &notif2];
+
+        let command = "echo {types}";
+        let result = substitute_batch_placeholders(command, &notifications, "github.com");
+
+        assert_eq!(result, "echo 'Issue' 'PR'");
+    }
+
+    #[test]
+    fn test_substitute_batch_reasons() {
+        let notif1 = create_test_notification();
+        let notif2 = create_pr_notification();
+        let notifications = vec![&notif1, &notif2];
+
+        let command = "echo {reasons}";
+        let result = substitute_batch_placeholders(command, &notifications, "github.com");
+
+        assert_eq!(result, "echo 'mention' 'review_requested'");
+    }
+
+    #[test]
+    fn test_prepare_batch_command() {
+        let action = Action {
+            name: "Open all".to_string(),
+            command: "firefox {urls}".to_string(),
+            interactive: true,
+        };
+        let notif1 = create_test_notification();
+        let notif2 = create_pr_notification();
+        let notifications = vec![notif1, notif2];
+
+        let result = prepare_batch_command(&action, &notifications, "github.com");
+
+        assert!(result.starts_with("firefox "));
+        assert!(result.contains("github.com/chmouel/gh-news/issues/42"));
+        assert!(result.contains("github.com/org/other-repo/pull/123"));
+    }
+
+    #[test]
+    fn test_execute_batch_action() {
+        let action = Action {
+            name: "Echo".to_string(),
+            command: "true {ids}".to_string(),
+            interactive: false,
+        };
+        let notif1 = create_test_notification();
+        let notif2 = create_pr_notification();
+        let notifications = vec![notif1, notif2];
+
+        let result = execute_batch_action(&action, &notifications, "github.com");
+        assert!(matches!(result, ActionResult::Spawned));
     }
 }
