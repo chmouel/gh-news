@@ -1,6 +1,6 @@
 [package]
 name = "gh-news"
-version = "0.6.1"
+version = "0.7.0"
 edition = "2021"
 authors = ["Chmouel Boudjnah <chmouel@chmouel.com>"]
 description = "Terminal UI for GitHub notifications with filtering, preview, and auto-refresh"
