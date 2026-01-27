@@ -48,6 +48,8 @@ pub struct AppState {
     pub selected_notification_ids: HashSet<String>,
     // Progress for batch operations: (current, total)
     pub loading_progress: Option<(usize, usize)>,
+    // Action menu: index of selected action
+    pub action_menu_index: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +60,7 @@ pub enum InputMode {
     HelpSearch,
     Search,
     Confirm,
+    ActionMenu,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -115,6 +118,7 @@ impl AppState {
             status_message: None,
             selected_notification_ids: HashSet::new(),
             loading_progress: None,
+            action_menu_index: 0,
         }
     }
 

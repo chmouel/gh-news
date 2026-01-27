@@ -1,3 +1,4 @@
+use crate::actions::{self, ActionResult};
 use crate::config::Config;
 use crate::error::Result;
 use crate::filter::Filter;
@@ -8,7 +9,9 @@ use crate::preview::PreviewData;
 use crate::preview_manager::PreviewManager;
 use crate::state::{AppState, ConfirmAction, InputMode, MarkAllOption, PaneFocus, PreviewMode};
 use crate::terminal::Terminal;
-use crate::ui::components::{confirm, filter, help, help_search, list, loading, preview, status};
+use crate::ui::components::{
+    action_menu, confirm, filter, help, help_search, list, loading, preview, status,
+};
 use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
     MouseEventKind,
@@ -45,6 +48,14 @@ enum BlockingAction {
     },
 }
 
+/// Pending interactive action to be executed with terminal access.
+struct PendingInteractiveAction {
+    /// The shell command to execute.
+    command: String,
+    /// Action name for status message.
+    action_name: String,
+}
+
 /// Dwell time before auto-marking a notification as read (ms)
 const AUTO_MARK_READ_DWELL_MS: u64 = 400;
 
@@ -60,6 +71,7 @@ pub struct App {
     confirm_widget: confirm::ConfirmWidget,
     loading_widget: loading::LoadingWidget,
     filter_widget: filter::FilterWidget,
+    action_menu_widget: action_menu::ActionMenuWidget,
     api_client: Option<crate::api::GitHubClient>,
     last_refresh: Instant,
     refresh_args: Option<(bool, bool, Option<usize>)>, // (all, participating, max_notifications)
@@ -68,6 +80,7 @@ pub struct App {
     initial_load_rx: Option<Receiver<crate::error::Result<InitialLoadData>>>,
     pending_state_settings: Option<PendingStateSettings>,
     pending_blocking_action: Option<BlockingAction>,
+    pending_interactive_action: Option<PendingInteractiveAction>,
     // Auto-mark-read state
     auto_mark_read_enabled: bool,
     pending_mark_read: Option<(String, Instant)>, // (notification_id, timestamp)
@@ -90,6 +103,7 @@ impl App {
             confirm_widget: confirm::ConfirmWidget::new(),
             loading_widget: loading::LoadingWidget::new(),
             filter_widget: filter::FilterWidget::new(),
+            action_menu_widget: action_menu::ActionMenuWidget::new(),
             api_client: None,
             last_refresh: Instant::now(),
             refresh_args: None,
@@ -98,6 +112,7 @@ impl App {
             initial_load_rx: None,
             pending_state_settings: None,
             pending_blocking_action: None,
+            pending_interactive_action: None,
             auto_mark_read_enabled: auto_mark_read,
             pending_mark_read: None,
             pinned_state_dirty: false,
@@ -607,6 +622,25 @@ impl App {
                 }
             }
 
+            // Handle pending interactive action (requires terminal suspend/resume)
+            if let Some(interactive_action) = self.pending_interactive_action.take() {
+                // Suspend TUI for interactive command
+                terminal.suspend()?;
+
+                // Execute the command with full terminal access
+                let result = actions::execute_interactive(&interactive_action.command);
+
+                // Resume TUI
+                terminal.resume()?;
+
+                // Set status message based on result
+                self.state.status_message = Some(match result {
+                    Ok(true) => format!("{}: done", interactive_action.action_name),
+                    Ok(false) => format!("{}: exited with error", interactive_action.action_name),
+                    Err(e) => format!("{}: {}", interactive_action.action_name, e),
+                });
+            }
+
             // Check for auto-refresh signal (non-blocking)
             if self.config.auto_refresh_interval > 0 && !self.state.loading {
                 let elapsed = self.last_refresh.elapsed();
@@ -846,6 +880,22 @@ impl App {
                     .render(frame, size, action, count, is_filtered);
             }
         }
+
+        // Render action menu as overlay (if active)
+        if self.state.input_mode == InputMode::ActionMenu {
+            let notification_count = if self.state.has_selection() {
+                self.state.selection_count()
+            } else {
+                1
+            };
+            self.action_menu_widget.render(
+                frame,
+                size,
+                &self.config.actions,
+                self.state.action_menu_index,
+                notification_count,
+            );
+        }
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
@@ -855,6 +905,7 @@ impl App {
             InputMode::Help => self.handle_help_key(key),
             InputMode::HelpSearch => self.handle_help_search_key(key),
             InputMode::Confirm => self.handle_confirm_key(key),
+            InputMode::ActionMenu => self.handle_action_menu_key(key),
         }
     }
 
@@ -891,6 +942,118 @@ impl App {
             _ => {}
         }
         Ok(())
+    }
+
+    fn handle_action_menu_key(&mut self, key: KeyEvent) -> Result<()> {
+        let action_count = self.config.actions.len();
+        if action_count == 0 {
+            self.state.input_mode = InputMode::Normal;
+            return Ok(());
+        }
+
+        match key.code {
+            KeyCode::Esc => {
+                self.state.input_mode = InputMode::Normal;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.state.action_menu_index > 0 {
+                    self.state.action_menu_index -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.state.action_menu_index < action_count - 1 {
+                    self.state.action_menu_index += 1;
+                }
+            }
+            KeyCode::Enter => {
+                self.execute_selected_action();
+                self.state.input_mode = InputMode::Normal;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn execute_selected_action(&mut self) {
+        let action_index = self.state.action_menu_index;
+        let action = match self.config.actions.get(action_index) {
+            Some(a) => a.clone(),
+            None => return,
+        };
+
+        // Collect notifications to run action on
+        let notifications: Vec<Notification> = if self.state.has_selection() {
+            let selected_ids = self.state.get_selected_notification_ids();
+            self.state
+                .notifications
+                .iter()
+                .filter(|n| selected_ids.contains(&n.id))
+                .cloned()
+                .collect()
+        } else if let Some(notif) = self.state.selected_notification() {
+            vec![notif.clone()]
+        } else {
+            return;
+        };
+
+        if notifications.is_empty() {
+            return;
+        }
+
+        let count = notifications.len();
+        let github_host = self.config.github_host.clone();
+        let action_name = action.name.clone();
+
+        // Interactive actions: prepare command and defer execution to main loop
+        // (requires terminal access for suspend/resume)
+        if action.interactive {
+            // For interactive actions, only run on first notification
+            // (interactive commands can't reasonably batch)
+            if let Some(notification) = notifications.first() {
+                let command = actions::prepare_command(&action, notification, &github_host);
+                if !command.trim().is_empty() {
+                    self.pending_interactive_action = Some(PendingInteractiveAction {
+                        command,
+                        action_name,
+                    });
+                }
+            }
+            // Clear selection
+            if self.state.has_selection() {
+                self.state.clear_selection();
+            }
+            return;
+        }
+
+        // Non-interactive actions: spawn in background
+        let mut success_count = 0;
+        let mut last_error = String::new();
+
+        for notification in &notifications {
+            match actions::execute_action(&action, notification, &github_host) {
+                ActionResult::Spawned => {
+                    success_count += 1;
+                }
+                ActionResult::Failed(error) => {
+                    last_error = error;
+                }
+            }
+        }
+
+        // Clear selection after executing action
+        if self.state.has_selection() {
+            self.state.clear_selection();
+        }
+
+        // Build status message
+        let msg = if !last_error.is_empty() {
+            format!("{}: {}", action_name, last_error)
+        } else if count > 1 {
+            format!("{}: ran on {} notifications", action_name, success_count)
+        } else {
+            format!("{}: done", action_name)
+        };
+        self.state.status_message = Some(msg);
     }
 
     fn handle_help_key(&mut self, key: KeyEvent) -> Result<()> {
@@ -1607,6 +1770,19 @@ impl App {
                 self.state.clear_selection();
                 self.state.search_query.clear();
                 self.state.input_mode = InputMode::Search;
+            }
+            KeyCode::Char('x') => {
+                // Open action menu if there are configured actions
+                if !self.config.actions.is_empty() {
+                    // Only open if there's a notification selected or multi-select is active
+                    if self.state.has_selection() || self.state.selected_notification().is_some() {
+                        self.state.action_menu_index = 0;
+                        self.state.input_mode = InputMode::ActionMenu;
+                    }
+                } else {
+                    self.state.status_message =
+                        Some("No actions configured. Add [[actions]] to config.toml".to_string());
+                }
             }
             _ => {}
         }

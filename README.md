@@ -20,6 +20,7 @@ GitHub notifications TUI built with Rust and ratatui.
 - Pin important notifications
 - Repository grouping with collapsible headers
 - Notification hooks for custom commands
+- Custom actions with command templates
 - Mark notifications read/unread individually or in bulk
 - Static display mode for scripting and pipelines
 
@@ -93,6 +94,7 @@ gh news --static-display | grep "something" # List notifications without TUI
 - `.` - Toggle read/unread status
 - `!` - Pin/unpin notification (pinned appear at top)
 - `h` - Collapse current repository
+- `x` - Open action menu (run custom commands on notifications)
 
 ### Multi-select
 
@@ -210,6 +212,53 @@ fi
 ```
 
 **Note:** For commands with complex arguments or shell features, use a wrapper script.
+
+### Custom Actions
+
+Define custom actions that can be run on notifications via the action menu (press `x`):
+
+```toml
+[[actions]]
+name = "Copy URL"
+command = "echo {url} | xclip -selection clipboard"
+
+[[actions]]
+name = "Open in editor"
+command = "code --goto {url}"
+
+[[actions]]
+name = "Add to TODO"
+command = "echo '* TODO {title}' >> ~/todo.org"
+
+[[actions]]
+name = "Browse with fzf"
+command = "echo {url} | fzf --preview 'curl -s {}'"
+interactive = true  # Suspend TUI for interactive commands
+```
+
+Actions support placeholder substitution:
+
+| Placeholder | Description |
+|-------------|-------------|
+| `{id}` | Notification ID |
+| `{title}` | Notification title |
+| `{url}` | Web URL for the notification |
+| `{repo}` | Repository name (without owner) |
+| `{owner}` | Repository owner |
+| `{full_name}` | Full repository name (owner/repo) |
+| `{type}` | Notification type (Issue, PullRequest, etc.) |
+| `{reason}` | Notification reason (mention, review_requested, etc.) |
+| `{unread}` | Read status (true/false) |
+
+**Action Options:**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `name` | required | Display name in the action menu |
+| `command` | required | Command template with placeholders |
+| `interactive` | `false` | Suspend TUI and run command with full terminal access (for TUI tools like fzf, vim) |
+
+Actions work with multi-select: select multiple notifications with `Space`, then press `x` to run an action on all of them. Interactive actions only run on the first selected notification.
 
 ## Environment Variables
 

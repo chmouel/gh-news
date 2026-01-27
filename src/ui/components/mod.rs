@@ -1,3 +1,4 @@
+pub mod action_menu;
 pub mod confirm;
 pub mod filter;
 pub mod help;

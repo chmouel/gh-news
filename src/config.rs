@@ -5,6 +5,19 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// A user-defined action that can be executed on notifications.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Action {
+    /// Display name shown in the action menu.
+    pub name: String,
+    /// Command template with placeholders like {url}, {title}, {repo}, etc.
+    pub command: String,
+    /// If true, suspend TUI and run command interactively with full terminal access.
+    /// This allows running TUI-based tools like fzf, vim, etc. Default: false.
+    #[serde(default)]
+    pub interactive: bool,
+}
+
 /// Application configuration loaded from config file and environment variables.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -38,6 +51,10 @@ pub struct Config {
 
     // State file path (optional override)
     pub state_file: Option<String>,
+
+    // User-defined actions for notifications
+    #[serde(default)]
+    pub actions: Vec<Action>,
 }
 
 impl Default for Config {
@@ -57,6 +74,7 @@ impl Default for Config {
             on_new_notification_command: None,
             github_host: "github.com".to_string(),
             state_file: None,
+            actions: Vec::new(),
         }
     }
 }
@@ -178,5 +196,70 @@ mod tests {
             config.get_default_preview_mode(),
             PreviewMode::Horizontal
         ));
+    }
+
+    #[test]
+    fn test_default_actions_empty() {
+        let config = Config::default();
+        assert!(config.actions.is_empty());
+    }
+
+    #[test]
+    fn test_parse_actions_from_toml() {
+        let toml_str = r#"
+[[actions]]
+name = "Copy URL"
+command = "echo {url}"
+
+[[actions]]
+name = "Interactive action"
+command = "vim {title}"
+interactive = true
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.actions.len(), 2);
+
+        assert_eq!(config.actions[0].name, "Copy URL");
+        assert_eq!(config.actions[0].command, "echo {url}");
+        assert!(!config.actions[0].interactive);
+
+        assert_eq!(config.actions[1].name, "Interactive action");
+        assert_eq!(config.actions[1].command, "vim {title}");
+        assert!(config.actions[1].interactive);
+    }
+
+    #[test]
+    fn test_action_interactive_defaults_to_false() {
+        let toml_str = r#"
+[[actions]]
+name = "Test"
+command = "echo test"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(!config.actions[0].interactive);
+    }
+
+    #[test]
+    fn test_parse_single_action() {
+        let toml_str = r#"
+[[actions]]
+name = "Single"
+command = "true"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.actions.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_action_with_placeholders() {
+        let toml_str = r#"
+[[actions]]
+name = "Full"
+command = "{id} {title} {url} {repo} {owner}"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(config.actions[0].command.contains("{id}"));
+        assert!(config.actions[0].command.contains("{title}"));
+        assert!(config.actions[0].command.contains("{url}"));
     }
 }
