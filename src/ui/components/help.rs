@@ -134,6 +134,10 @@ impl HelpWidget {
                         desc: "Collapse current repository",
                     },
                     HelpLine {
+                        key: "x",
+                        desc: "Run custom action on notification(s)",
+                    },
+                    HelpLine {
                         key: "Ctrl+A",
                         desc: "Archive selected (or mark all read)",
                     },

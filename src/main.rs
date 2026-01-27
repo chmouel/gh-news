@@ -1,3 +1,4 @@
+mod actions;
 mod api;
 mod cli;
 mod config;

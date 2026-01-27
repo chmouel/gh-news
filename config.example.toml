@@ -154,6 +154,58 @@ auto_mark_read = true
 github_host = "github.com"
 
 # ==============================================================================
+# CUSTOM ACTIONS
+# ==============================================================================
+
+# Define custom actions that can be executed on notifications via the action
+# menu (press 'x'). Actions run shell commands with placeholder substitution.
+#
+# Available placeholders:
+#   - {id}        Notification ID
+#   - {title}     Notification title
+#   - {url}       Web URL for the notification
+#   - {repo}      Repository name (without owner)
+#   - {owner}     Repository owner
+#   - {full_name} Full repository name (owner/repo)
+#   - {type}      Notification type (Issue, PullRequest, etc.)
+#   - {reason}    Notification reason (mention, review_requested, etc.)
+#   - {unread}    Read status (true/false)
+#
+# Options:
+#   - name:        Display name in the action menu (required)
+#   - command:     Command template with placeholders (required)
+#   - interactive: Suspend TUI and run with full terminal access for interactive
+#                  tools like vim, fzf, etc. (default: false)
+#
+# Examples:
+
+# Copy notification URL to clipboard (Linux with xclip)
+# [[actions]]
+# name = "Copy URL"
+# command = "echo {url} | xclip -selection clipboard"
+
+# Copy notification URL to clipboard (macOS)
+# [[actions]]
+# name = "Copy URL"
+# command = "echo {url} | pbcopy"
+
+# Open in VS Code
+# [[actions]]
+# name = "Open in VS Code"
+# command = "code --goto {url}"
+
+# Add to TODO list
+# [[actions]]
+# name = "Add to TODO"
+# command = "echo '* TODO {title}' >> ~/todo.org"
+
+# Open in vim (interactive - suspends TUI)
+# [[actions]]
+# name = "Open in Vim"
+# command = "gh pr view {url} | vim -"
+# interactive = true
+
+# ==============================================================================
 # STATE FILE
 # ==============================================================================
 
