@@ -1,6 +1,5 @@
 use crate::error::{Error, Result};
 use crate::models::Notification;
-use crate::state::PreviewMode;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -50,7 +49,6 @@ fn get_state_path() -> Result<PathBuf> {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppStateFile {
-    pub preview_mode: String,
     #[serde(default = "default_auto_mark_read")]
     pub auto_mark_read: bool,
     #[serde(default)]
@@ -62,16 +60,11 @@ fn default_auto_mark_read() -> bool {
 }
 
 impl AppStateFile {
-    pub fn new(preview_mode: PreviewMode, auto_mark_read: bool) -> Self {
+    pub fn new(auto_mark_read: bool) -> Self {
         Self {
-            preview_mode: preview_mode_to_string(preview_mode),
             auto_mark_read,
             pinned_notifications: Vec::new(),
         }
-    }
-
-    pub fn get_preview_mode(&self) -> PreviewMode {
-        string_to_preview_mode(&self.preview_mode)
     }
 
     fn load_full() -> Result<AppStateFile> {
@@ -100,32 +93,21 @@ impl AppStateFile {
         Ok(())
     }
 
-    fn load_or_default(preview_mode: PreviewMode, auto_mark_read: bool) -> AppStateFile {
-        Self::load_full().unwrap_or_else(|_| Self::new(preview_mode, auto_mark_read))
+    fn load_or_default(auto_mark_read: bool) -> AppStateFile {
+        Self::load_full().unwrap_or_else(|_| Self::new(auto_mark_read))
     }
 
-    fn update_with<F>(preview_mode: PreviewMode, auto_mark_read: bool, mut update: F) -> Result<()>
+    fn update_with<F>(auto_mark_read: bool, mut update: F) -> Result<()>
     where
         F: FnMut(&mut AppStateFile),
     {
-        let mut state = Self::load_or_default(preview_mode, auto_mark_read);
+        let mut state = Self::load_or_default(auto_mark_read);
         update(&mut state);
         state.save_full()
     }
 
-    pub fn save(preview_mode: PreviewMode) -> Result<()> {
-        Self::update_with(preview_mode, default_auto_mark_read(), |state| {
-            state.preview_mode = preview_mode_to_string(preview_mode);
-        })
-    }
-
-    pub fn load() -> Result<PreviewMode> {
-        let state = Self::load_full()?;
-        Ok(state.get_preview_mode())
-    }
-
     pub fn save_auto_mark_read(auto_mark_read: bool) -> Result<()> {
-        Self::update_with(PreviewMode::Vertical, auto_mark_read, |state| {
+        Self::update_with(auto_mark_read, |state| {
             state.auto_mark_read = auto_mark_read;
         })
     }
@@ -136,7 +118,7 @@ impl AppStateFile {
     }
 
     pub fn save_pinned_notifications(pinned: &[Notification]) -> Result<()> {
-        Self::update_with(PreviewMode::Vertical, default_auto_mark_read(), |state| {
+        Self::update_with(default_auto_mark_read(), |state| {
             state.pinned_notifications = pinned.to_vec();
         })
     }
@@ -144,22 +126,5 @@ impl AppStateFile {
     pub fn load_pinned_notifications() -> Result<Vec<Notification>> {
         let state = Self::load_full()?;
         Ok(state.pinned_notifications)
-    }
-}
-
-fn preview_mode_to_string(mode: PreviewMode) -> String {
-    match mode {
-        PreviewMode::Off => "off".to_string(),
-        PreviewMode::Horizontal => "horizontal".to_string(),
-        PreviewMode::Vertical => "vertical".to_string(),
-    }
-}
-
-fn string_to_preview_mode(s: &str) -> PreviewMode {
-    match s {
-        "off" => PreviewMode::Off,
-        "horizontal" => PreviewMode::Horizontal,
-        "vertical" => PreviewMode::Vertical,
-        _ => PreviewMode::Horizontal, // Default fallback
     }
 }

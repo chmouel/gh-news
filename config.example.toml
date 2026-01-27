@@ -18,7 +18,6 @@
 #
 # Some settings are also persisted in state file (~/.cache/gh-news/state.toml)
 # and will override config file values when present:
-#   - preview_mode (user's preferred layout)
 #   - auto_mark_read (user's toggle)
 #
 # ==============================================================================
@@ -74,13 +73,13 @@ participating_only = false
 # DISPLAY SETTINGS
 # ==============================================================================
 
-# Default preview mode for notification details.
+# Default preview mode for notification details (applied on every startup).
 # Options: "off", "horizontal", "vertical"
 #   - off:        Don't show preview pane (more space for notification list)
 #   - horizontal: Preview appears below the notification list
 #   - vertical:   Preview appears to the right of the notification list
 # Default: "vertical"
-# Note: This can be toggled at runtime and will be saved to state file.
+# Note: Can be toggled at runtime with Tab, but resets on restart.
 # CLI flag: (not available as flag, set via env or config)
 default_preview_mode = "vertical"
 
@@ -159,7 +158,7 @@ github_host = "github.com"
 # ==============================================================================
 
 # Path to state file for persisting runtime settings.
-# The state file stores preview mode, auto_mark_read toggle, and pinned notifications.
+# The state file stores auto_mark_read toggle and pinned notifications.
 # If not set, defaults to ~/.cache/gh-news/state.toml (XDG-compliant).
 # Default: (use XDG cache directory)
 # CLI flag: --state-file <PATH>

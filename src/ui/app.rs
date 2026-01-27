@@ -1492,12 +1492,6 @@ impl App {
                 };
                 self.state.preview_scroll = 0;
 
-                // Save the new preview mode to state file
-                if let Err(e) = crate::state_file::AppStateFile::save(self.state.preview_mode) {
-                    // Log error but don't disrupt UI - state saving is best effort
-                    let _ = e;
-                }
-
                 // If showing preview and no content loaded, fetch it (uses cache)
                 if self.state.show_preview() && self.state.preview_content.is_none() {
                     self.fetch_preview_for_selected_notification();

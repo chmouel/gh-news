@@ -135,11 +135,8 @@ fn run() -> Result<()> {
     // Apply filters
     let filter = build_filter(&opts.filter_pattern)?;
 
-    // Try to load saved preview mode from state file, fallback to config default
-    let preview_mode = match state_file::AppStateFile::load() {
-        Ok(saved_mode) => saved_mode,
-        Err(_) => config.get_default_preview_mode(),
-    };
+    // Always use config's default preview mode on startup
+    let preview_mode = config.get_default_preview_mode();
 
     // Try to load saved auto_mark_read from state file, fallback to runtime option
     match state_file::AppStateFile::load_auto_mark_read() {
