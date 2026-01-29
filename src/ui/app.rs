@@ -1003,21 +1003,29 @@ impl App {
         let count = notifications.len();
         let github_host = self.config.github_host.clone();
         let action_name = action.name.clone();
+        let is_batch = actions::has_batch_placeholders(&action.command);
 
         // Interactive actions: prepare command and defer execution to main loop
         // (requires terminal access for suspend/resume)
         if action.interactive {
-            // For interactive actions, only run on first notification
-            // (interactive commands can't reasonably batch)
-            if let Some(notification) = notifications.first() {
-                let command = actions::prepare_command(&action, notification, &github_host);
-                if !command.trim().is_empty() {
-                    self.pending_interactive_action = Some(PendingInteractiveAction {
-                        command,
-                        action_name,
-                    });
-                }
+            let command = if is_batch {
+                // Batch mode: run single command with all notifications
+                actions::prepare_batch_command(&action, &notifications, &github_host)
+            } else {
+                // Non-batch: only run on first notification
+                notifications
+                    .first()
+                    .map(|n| actions::prepare_command(&action, n, &github_host))
+                    .unwrap_or_default()
+            };
+
+            if !command.trim().is_empty() {
+                self.pending_interactive_action = Some(PendingInteractiveAction {
+                    command,
+                    action_name,
+                });
             }
+
             // Clear selection
             if self.state.has_selection() {
                 self.state.clear_selection();
@@ -1026,33 +1034,46 @@ impl App {
         }
 
         // Non-interactive actions: spawn in background
-        let mut success_count = 0;
-        let mut last_error = String::new();
+        let msg = if is_batch {
+            // Batch mode: single command with all notifications
+            match actions::execute_batch_action(&action, &notifications, &github_host) {
+                ActionResult::Spawned => format!(
+                    "{}: ran on {} notifications",
+                    action_name,
+                    notifications.len()
+                ),
+                ActionResult::Failed(error) => format!("{}: {}", action_name, error),
+            }
+        } else {
+            // Non-batch: one command per notification
+            let mut success_count = 0;
+            let mut last_error = String::new();
 
-        for notification in &notifications {
-            match actions::execute_action(&action, notification, &github_host) {
-                ActionResult::Spawned => {
-                    success_count += 1;
-                }
-                ActionResult::Failed(error) => {
-                    last_error = error;
+            for notification in &notifications {
+                match actions::execute_action(&action, notification, &github_host) {
+                    ActionResult::Spawned => {
+                        success_count += 1;
+                    }
+                    ActionResult::Failed(error) => {
+                        last_error = error;
+                    }
                 }
             }
-        }
+
+            if !last_error.is_empty() {
+                format!("{}: {}", action_name, last_error)
+            } else if count > 1 {
+                format!("{}: ran on {} notifications", action_name, success_count)
+            } else {
+                format!("{}: done", action_name)
+            }
+        };
 
         // Clear selection after executing action
         if self.state.has_selection() {
             self.state.clear_selection();
         }
 
-        // Build status message
-        let msg = if !last_error.is_empty() {
-            format!("{}: {}", action_name, last_error)
-        } else if count > 1 {
-            format!("{}: ran on {} notifications", action_name, success_count)
-        } else {
-            format!("{}: done", action_name)
-        };
         self.state.status_message = Some(msg);
     }
 
