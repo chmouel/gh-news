@@ -46,6 +46,9 @@ pub fn has_batch_placeholders(command: &str) -> bool {
 /// - {full_names} - All full repository names, space-separated
 /// - {types} - All notification types, space-separated
 /// - {reasons} - All notification reasons, space-separated
+///
+/// Also expands singular placeholders ({id}, {title}, etc.) using the first
+/// notification, allowing mixed usage like `echo {title} && firefox {urls}`.
 pub fn substitute_batch_placeholders(
     command: &str,
     notifications: &[&Notification],
@@ -76,7 +79,7 @@ pub fn substitute_batch_placeholders(
     let types = collect_escaped(|n, _| shell_escape(&n.notification_type().to_string()));
     let reasons = collect_escaped(|n, _| shell_escape(&n.reason_enum().to_string()));
 
-    command
+    let result = command
         .replace("{ids}", &ids)
         .replace("{titles}", &titles)
         .replace("{urls}", &urls)
@@ -84,7 +87,14 @@ pub fn substitute_batch_placeholders(
         .replace("{owners}", &owners)
         .replace("{full_names}", &full_names)
         .replace("{types}", &types)
-        .replace("{reasons}", &reasons)
+        .replace("{reasons}", &reasons);
+
+    // Also expand singular placeholders using the first notification
+    if let Some(first) = notifications.first() {
+        substitute_placeholders(&result, first, github_host)
+    } else {
+        result
+    }
 }
 
 /// Substitute placeholders in a command template with notification data.
@@ -696,5 +706,41 @@ mod tests {
 
         let result = execute_batch_action(&action, &notifications, "github.com");
         assert!(matches!(result, ActionResult::Spawned));
+    }
+
+    #[test]
+    fn test_substitute_batch_with_singular_placeholders() {
+        // Test mixing singular and plural placeholders
+        let notif1 = create_test_notification();
+        let notif2 = create_pr_notification();
+        let notifications = vec![&notif1, &notif2];
+
+        // Command with both singular {title} and plural {urls}
+        let command = "notify-send {title} && firefox {urls}";
+        let result = substitute_batch_placeholders(command, &notifications, "github.com");
+
+        // Singular {title} should use first notification
+        assert!(result.contains("'Test Issue Title'"));
+        // Plural {urls} should have both URLs
+        assert!(result.contains("github.com/chmouel/gh-news/issues/42"));
+        assert!(result.contains("github.com/org/other-repo/pull/123"));
+    }
+
+    #[test]
+    fn test_substitute_batch_with_multiple_singular_placeholders() {
+        let notif1 = create_test_notification();
+        let notif2 = create_pr_notification();
+        let notifications = vec![&notif1, &notif2];
+
+        // Multiple singular placeholders with plural
+        let command = "echo {repo} {owner} {ids}";
+        let result = substitute_batch_placeholders(command, &notifications, "github.com");
+
+        // Singular placeholders use first notification
+        assert!(result.contains("'gh-news'")); // {repo} from first
+        assert!(result.contains("'chmouel'")); // {owner} from first
+                                               // Plural {ids} has both
+        assert!(result.contains("'12345'"));
+        assert!(result.contains("'99999'"));
     }
 }
