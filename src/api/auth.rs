@@ -43,7 +43,7 @@ pub fn get_github_token(github_host: &str) -> Result<String> {
         }
     }
 
-    if let Some(token) = token_from_gh_config() {
+    if let Some(token) = token_from_gh_config(github_host) {
         return Ok(token);
     }
 
@@ -54,15 +54,18 @@ pub fn get_github_token(github_host: &str) -> Result<String> {
     Err(AuthError::TokenNotFound.into())
 }
 
-fn token_from_gh_config() -> Option<String> {
+fn token_from_gh_config(github_host: &str) -> Option<String> {
     let config_path = get_gh_config_path().ok()?;
-    if !config_path.exists() {
-        return None;
-    }
-
     let config_content = std::fs::read_to_string(&config_path).ok()?;
     let config: HashMap<String, HostConfig> = serde_yaml::from_str(&config_content).ok()?;
 
+    resolve_token_from_hosts(&config, github_host)
+}
+
+fn resolve_token_from_hosts(
+    config: &HashMap<String, HostConfig>,
+    github_host: &str,
+) -> Option<String> {
     let find_token = |token: Option<&String>| token.filter(|t| !t.is_empty()).cloned();
 
     let token_from_host = |host_config: &HostConfig| -> Option<String> {
@@ -89,19 +92,7 @@ fn token_from_gh_config() -> Option<String> {
         None
     };
 
-    if let Some(host_config) = config.get("github.com") {
-        if let Some(token) = token_from_host(host_config) {
-            return Some(token);
-        }
-    }
-
-    for host_config in config.values() {
-        if let Some(token) = token_from_host(host_config) {
-            return Some(token);
-        }
-    }
-
-    None
+    config.get(github_host).and_then(token_from_host)
 }
 
 /// Retrieve a token via `gh auth token`, which reads from the system keyring
@@ -157,7 +148,11 @@ mod tests {
 
     #[test]
     fn test_gh_cli_token_fallback() {
-        // Only meaningful when gh is installed and authenticated
+        // Clear env vars before the guard so `gh auth token` reflects stored
+        // credentials rather than a GH_TOKEN leaked from a parallel test.
+        std::env::remove_var("GH_TOKEN");
+        std::env::remove_var("GITHUB_TOKEN");
+
         let has_gh = Command::new("gh")
             .arg("auth")
             .arg("token")
@@ -168,8 +163,6 @@ mod tests {
             return;
         }
 
-        std::env::remove_var("GH_TOKEN");
-        std::env::remove_var("GITHUB_TOKEN");
         let token = token_from_gh_cli("github.com");
         assert!(token.is_some(), "gh auth token should return a token");
         assert!(!token.unwrap().is_empty());
@@ -179,5 +172,29 @@ mod tests {
     fn test_gh_cli_with_unknown_host() {
         let token = token_from_gh_cli("nonexistent.example.com");
         assert!(token.is_none());
+    }
+
+    #[test]
+    fn test_resolve_token_from_hosts() {
+        let yaml = r#"
+github.com:
+  oauth_token: public-token
+ghe.corp.example.com:
+  oauth_token: enterprise-token
+"#;
+        let config: HashMap<String, HostConfig> = serde_yaml::from_str(yaml).unwrap();
+
+        assert_eq!(
+            resolve_token_from_hosts(&config, "github.com"),
+            Some("public-token".to_string())
+        );
+        assert_eq!(
+            resolve_token_from_hosts(&config, "ghe.corp.example.com"),
+            Some("enterprise-token".to_string())
+        );
+        assert_eq!(
+            resolve_token_from_hosts(&config, "unknown.example.com"),
+            None
+        );
     }
 }
