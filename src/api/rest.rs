@@ -94,7 +94,7 @@ impl GitHubClient {
     }
 
     pub fn new(config: &Config) -> Result<Self> {
-        let token = get_github_token()?;
+        let token = get_github_token(&config.github_host)?;
         let headers = default_headers(&token)?;
 
         let client = Client::builder()

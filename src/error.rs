@@ -46,9 +46,6 @@ pub enum AuthError {
 
     #[error("Failed to read config file: {0}")]
     ConfigReadFailed(String),
-
-    #[error("Failed to parse config file: {0}")]
-    ConfigParseFailed(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
