@@ -43,8 +43,9 @@ gh news
 You need a GitHub token. The app looks for it in this order:
 
 1. `GH_TOKEN` env var
-2. `GITHUB_TOKEN` env var  
+2. `GITHUB_TOKEN` env var
 3. Your `gh` CLI config at `~/.config/gh/hosts.yml` (or `$XDG_CONFIG_HOME/gh/hosts.yml`)
+4. `gh auth token` (queries the `gh` CLI, which reads from the system keyring on modern versions)
 
 Easiest way is to just run `gh auth login` if you have the GitHub CLI installed. Otherwise set `GH_TOKEN` to your personal access token.
 
