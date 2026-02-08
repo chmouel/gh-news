@@ -439,11 +439,7 @@ impl PreviewFetcher {
             .and_then(|v| v.as_str())
             .unwrap_or("No description")
             .to_string();
-        let state = pr
-            .get("state")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-            .to_string();
+        let state = pr_state(&pr);
         let author = pr
             .get("user")
             .and_then(|v| v.get("login"))
@@ -649,5 +645,51 @@ impl PreviewFetcher {
             affected_packages,
             body,
         })
+    }
+}
+
+/// Derives the display state for a pull request by combining the `state` and
+/// `merged` fields from the GitHub API response. The API models these as
+/// separate fields — `state` is always `"open"` or `"closed"`, and `merged`
+/// is a boolean — so a closed+merged PR must be detected explicitly.
+fn pr_state(pr: &serde_json::Value) -> String {
+    let merged = pr.get("merged").and_then(|v| v.as_bool()).unwrap_or(false);
+    if merged {
+        "merged".to_string()
+    } else {
+        pr.get("state")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_pr_state_open() {
+        let pr = json!({"state": "open", "merged": false});
+        assert_eq!(pr_state(&pr), "open");
+    }
+
+    #[test]
+    fn test_pr_state_closed_not_merged() {
+        let pr = json!({"state": "closed", "merged": false});
+        assert_eq!(pr_state(&pr), "closed");
+    }
+
+    #[test]
+    fn test_pr_state_merged() {
+        let pr = json!({"state": "closed", "merged": true});
+        assert_eq!(pr_state(&pr), "merged");
+    }
+
+    #[test]
+    fn test_pr_state_missing_fields() {
+        let pr = json!({});
+        assert_eq!(pr_state(&pr), "unknown");
     }
 }
