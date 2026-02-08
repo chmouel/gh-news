@@ -151,6 +151,7 @@ impl PreviewWidget {
                                 let lower = part.text.to_lowercase();
                                 let status_color = match lower.as_str() {
                                     "open" | "yes" => colors.green,
+                                    "merged" => colors.magenta,
                                     "closed" | "no" => colors.red,
                                     "critical" | "high" => colors.red,
                                     "medium" => colors.yellow,
