@@ -654,14 +654,14 @@ impl PreviewFetcher {
 /// is a boolean — so a closed+merged PR must be detected explicitly.
 fn pr_state(pr: &serde_json::Value) -> String {
     let merged = pr.get("merged").and_then(|v| v.as_bool()).unwrap_or(false);
-    if merged {
-        "merged".to_string()
+    let state_str = if merged {
+        "merged"
     } else {
         pr.get("state")
             .and_then(|v| v.as_str())
             .unwrap_or("unknown")
-            .to_string()
-    }
+    };
+    state_str.to_string()
 }
 
 #[cfg(test)]
