@@ -1,6 +1,7 @@
 use crate::models::{NotificationReason, NotificationType};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use url::Url;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Notification {
@@ -168,14 +169,36 @@ impl Notification {
                 // API: https://api.github.com/repos/owner/repo/releases/12345
                 // Web: https://github.com/owner/repo/releases/tag/v1.0.0
                 if let Some(remainder) = api_url.strip_prefix(&prefix) {
-                    let parts: Vec<&str> = remainder.splitn(4, '/').collect();
-                    if parts.len() >= 3 && parts[2] == "releases" {
-                        let (owner, repo) = (parts[0], parts[1]);
-                        let tag = &self.subject.title;
-                        return Some(format!(
-                            "{}/{}/{}/releases/tag/{}",
-                            web_base, owner, repo, tag
-                        ));
+                    let mut parts = remainder.split('/');
+                    let owner = parts.next();
+                    let repo = parts.next();
+                    let resource = parts.next();
+                    let release_id = parts.next();
+                    let trailing = parts.next();
+
+                    if let (Some(owner), Some(repo), Some("releases"), Some(release_id), None) =
+                        (owner, repo, resource, release_id, trailing)
+                    {
+                        if !matches!(self.notification_type(), NotificationType::Release)
+                            || release_id.parse::<u64>().is_err()
+                        {
+                            // Not a release-by-id subject URL; continue with generic conversion below.
+                            // This avoids rewriting paths such as /releases/assets/{id}.
+                        } else {
+                            let mut release_url = Url::parse(&format!(
+                                "{}/{}/{}/releases/tag/",
+                                web_base, owner, repo
+                            ))
+                            .ok()?;
+
+                            {
+                                let mut path = release_url.path_segments_mut().ok()?;
+                                path.pop_if_empty();
+                                path.push(&self.subject.title);
+                            }
+
+                            return Some(release_url.into());
+                        }
                     }
                 }
 
@@ -302,6 +325,30 @@ mod tests {
         assert_eq!(
             n.web_url("git.example.com"),
             Some("https://git.example.com/org/proj/releases/tag/v2.0.0".to_string())
+        );
+    }
+
+    #[test]
+    fn web_url_release_encodes_tag_segment() {
+        let n = make_notification(
+            Some("https://api.github.com/repos/owner/repo/releases/12345"),
+            "release/v1.2.3",
+        );
+        assert_eq!(
+            n.web_url("github.com"),
+            Some("https://github.com/owner/repo/releases/tag/release%2Fv1.2.3".to_string())
+        );
+    }
+
+    #[test]
+    fn web_url_release_assets_not_rewritten_to_tag() {
+        let n = make_notification(
+            Some("https://api.github.com/repos/owner/repo/releases/assets/42"),
+            "v1.2.3",
+        );
+        assert_eq!(
+            n.web_url("github.com"),
+            Some("https://github.com/owner/repo/releases/assets/42".to_string())
         );
     }
 }
