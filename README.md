@@ -69,6 +69,7 @@ gh-news shows a loading screen while fetching notifications during start-up and 
 - `-r, --mark-read` - Mark all notifications as read (non-interactive)
 - `-s, --static-display` - Print notifications and exit (for scripts)
 - `--no-auto-mark-read` - Disable auto-marking notifications as read when navigating
+- `--no-auto-archive` - Disable auto-archiving notifications when navigating
 - `--state-file <PATH>` - Use a custom state file path (overrides config and default)
 
 ### Examples
@@ -117,7 +118,7 @@ gh news --static-display | grep "something" # List notifications without TUI
 - `Shift+U`/`Shift+D` - Scroll preview (5 lines)
 - `Ctrl+U`/`Ctrl+D` - Scroll preview (page)
 - `1`/`2` - Focus pane 1 (list) / pane 2 (preview)
-- `M` - Toggle auto-mark-read on scroll
+- `M` - Cycle auto-scroll mode (off/read/archive)
 
 ### General
 
@@ -157,6 +158,7 @@ repos_collapsed = false              # start with repos collapsed
 
 # Behaviour
 auto_mark_read = true                # mark notifications read when navigating to them
+auto_archive = false                 # archive notifications when navigating away (implies auto_mark_read)
 
 # External commands
 browser_command = ""         # custom browser, e.g. "firefox" (uses system default if empty)

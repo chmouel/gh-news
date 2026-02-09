@@ -17,7 +17,15 @@ impl StatusWidget {
         }
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect, state: &AppState, config: &Config) {
+    pub fn render(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        state: &AppState,
+        config: &Config,
+        auto_mark_read: bool,
+        auto_archive: bool,
+    ) {
         let colors = crate::ui::theme::TokyoNight::colors();
 
         let interval_text = if config.auto_refresh_interval > 0 {
@@ -93,6 +101,28 @@ impl StatusWidget {
                 Style::default().fg(colors.red).add_modifier(Modifier::BOLD),
             ));
         }
+
+        // Show auto-scroll mode indicator
+        let mode_label = if auto_archive {
+            "M:archive"
+        } else if auto_mark_read {
+            "M:read"
+        } else {
+            "M:off"
+        };
+        status_line.spans.push(Span::raw(" · "));
+        status_line.spans.push(Span::styled(
+            mode_label,
+            if auto_archive {
+                Style::default()
+                    .fg(colors.orange)
+                    .add_modifier(Modifier::BOLD)
+            } else if auto_mark_read {
+                Style::default().fg(colors.green)
+            } else {
+                Style::default().fg(colors.fg_muted)
+            },
+        ));
 
         let paragraph = Paragraph::new(status_line)
             .block(

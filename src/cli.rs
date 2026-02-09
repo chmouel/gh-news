@@ -41,6 +41,10 @@ pub struct Args {
     #[arg(long)]
     pub no_auto_mark_read: bool,
 
+    /// Disable auto-archiving notifications when navigating
+    #[arg(long)]
+    pub no_auto_archive: bool,
+
     /// Path to state file (overrides config and default)
     #[arg(long)]
     pub state_file: Option<PathBuf>,

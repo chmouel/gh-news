@@ -39,6 +39,7 @@ pub struct Config {
 
     // Behaviour
     pub auto_mark_read: bool,
+    pub auto_archive: bool,
 
     // External commands
     pub browser_command: Option<String>,
@@ -70,6 +71,7 @@ impl Default for Config {
             default_preview_mode: "vertical".to_string(),
             repos_collapsed: false,
             auto_mark_read: true,
+            auto_archive: false,
             browser_command: None,
             on_new_notification_command: None,
             github_host: "github.com".to_string(),

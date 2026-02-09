@@ -42,10 +42,14 @@ struct RuntimeOptions {
     max_notifications: Option<usize>,
     filter_pattern: Option<String>,
     auto_mark_read: bool,
+    auto_archive: bool,
 }
 
 impl RuntimeOptions {
     fn from_args_and_config(args: &Args, config: &Config) -> Self {
+        let auto_archive = !args.no_auto_archive && config.auto_archive;
+        // When auto_archive is enabled, auto_mark_read is implicitly forced on
+        let auto_mark_read = auto_archive || (!args.no_auto_mark_read && config.auto_mark_read);
         Self {
             // CLI flags override config (for booleans, CLI true wins)
             show_all: args.all || config.show_read,
@@ -53,8 +57,8 @@ impl RuntimeOptions {
             // CLI takes precedence if provided
             max_notifications: args.max_notifications.or(config.max_notifications),
             filter_pattern: args.filter.clone().or(config.default_filter.clone()),
-            // CLI --no-auto-mark-read overrides config
-            auto_mark_read: !args.no_auto_mark_read && config.auto_mark_read,
+            auto_mark_read,
+            auto_archive,
         }
     }
 }
@@ -139,11 +143,14 @@ fn run() -> Result<()> {
     // Always use config's default preview mode on startup
     let preview_mode = config.get_default_preview_mode();
 
-    // Try to load saved auto_mark_read from state file, fallback to runtime option
-    match state_file::AppStateFile::load_auto_mark_read() {
-        Ok(saved_auto_mark_read) => app.set_auto_mark_read(saved_auto_mark_read),
-        Err(_) => app.set_auto_mark_read(opts.auto_mark_read),
-    }
+    // Load auto-mark-read and auto-archive settings, with persisted state taking precedence.
+    let auto_mark_read =
+        state_file::AppStateFile::load_auto_mark_read().unwrap_or(opts.auto_mark_read);
+    let auto_archive = state_file::AppStateFile::load_auto_archive().unwrap_or(opts.auto_archive);
+
+    // Set initial values. `set_auto_archive` will correctly enforce `auto_mark_read` if needed.
+    app.set_auto_mark_read(auto_mark_read);
+    app.set_auto_archive(auto_archive);
 
     let settings = PendingStateSettings {
         filter,
