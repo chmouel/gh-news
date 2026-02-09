@@ -161,19 +161,35 @@ impl Notification {
 
         // Fall back to subject URL conversion
         if let Some(api_url) = self.subject_url() {
-            // Convert API URL to web URL
-            // API: https://api.github.com/repos/owner/repo/issues/123
-            // Web: https://github.com/owner/repo/issues/123
-            // API: https://api.github.com/repos/owner/repo/pulls/456
-            // Web: https://github.com/owner/repo/pull/456
-            // API: https://api.github.com/repos/owner/repo/commits/abc123
-            // Web: https://github.com/owner/repo/commit/abc123
             let prefix = format!("{}/repos/", api_base);
             if api_url.starts_with(&prefix) {
+                // Release API URLs use a numeric ID that doesn't work on the web.
+                // Use the subject title (which is the tag name) to build the correct URL.
+                // API: https://api.github.com/repos/owner/repo/releases/12345
+                // Web: https://github.com/owner/repo/releases/tag/v1.0.0
+                if let Some(remainder) = api_url.strip_prefix(&prefix) {
+                    let parts: Vec<&str> = remainder.splitn(4, '/').collect();
+                    if parts.len() >= 3 && parts[2] == "releases" {
+                        let (owner, repo) = (parts[0], parts[1]);
+                        let tag = &self.subject.title;
+                        return Some(format!(
+                            "{}/{}/{}/releases/tag/{}",
+                            web_base, owner, repo, tag
+                        ));
+                    }
+                }
+
+                // Convert API URL to web URL
+                // API: https://api.github.com/repos/owner/repo/issues/123
+                // Web: https://github.com/owner/repo/issues/123
+                // API: https://api.github.com/repos/owner/repo/pulls/456
+                // Web: https://github.com/owner/repo/pull/456
+                // API: https://api.github.com/repos/owner/repo/commits/abc123
+                // Web: https://github.com/owner/repo/commit/abc123
                 let web_url = api_url
                     .replacen(&prefix, &format!("{}/", web_base), 1)
-                    .replace("/pulls/", "/pull/") // PRs use /pull/ not /pulls/
-                    .replace("/commits/", "/commit/"); // Commits use /commit/ not /commits/
+                    .replace("/pulls/", "/pull/")
+                    .replace("/commits/", "/commit/");
                 return Some(web_url);
             }
             if api_url.starts_with(&web_base) {
@@ -205,5 +221,87 @@ impl std::str::FromStr for NotificationReason {
             "ci_activity" => NotificationReason::CiActivity,
             _ => NotificationReason::Unknown,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{Owner, Repository, Subject};
+
+    fn make_notification(subject_url: Option<&str>, title: &str) -> Notification {
+        Notification {
+            id: "1".to_string(),
+            unread: true,
+            last_read_at: None,
+            updated_at: None,
+            reason: "subscribed".to_string(),
+            repository: Repository {
+                id: 1,
+                name: "repo".to_string(),
+                full_name: "owner/repo".to_string(),
+                owner: Owner {
+                    login: "owner".to_string(),
+                    id: 1,
+                    owner_type: "User".to_string(),
+                },
+                private: false,
+            },
+            subject: Subject {
+                title: title.to_string(),
+                subject_type: NotificationType::Release,
+                url: subject_url.map(String::from),
+                latest_comment_url: None,
+            },
+            latest_comment_url: None,
+        }
+    }
+
+    #[test]
+    fn web_url_release_uses_tag_name() {
+        let n = make_notification(
+            Some("https://api.github.com/repos/owner/repo/releases/12345"),
+            "v1.2.3",
+        );
+        assert_eq!(
+            n.web_url("github.com"),
+            Some("https://github.com/owner/repo/releases/tag/v1.2.3".to_string())
+        );
+    }
+
+    #[test]
+    fn web_url_issue_unchanged() {
+        let n = make_notification(
+            Some("https://api.github.com/repos/owner/repo/issues/42"),
+            "Some issue",
+        );
+        assert_eq!(
+            n.web_url("github.com"),
+            Some("https://github.com/owner/repo/issues/42".to_string())
+        );
+    }
+
+    #[test]
+    fn web_url_pull_request_unchanged() {
+        let n = make_notification(
+            Some("https://api.github.com/repos/owner/repo/pulls/99"),
+            "Some PR",
+        );
+        assert_eq!(
+            n.web_url("github.com"),
+            Some("https://github.com/owner/repo/pull/99".to_string())
+        );
+    }
+
+    #[test]
+    fn web_url_release_ghes() {
+        let n = make_notification(
+            Some("https://git.example.com/api/v3/repos/org/proj/releases/789"),
+            "v2.0.0",
+        );
+        assert_eq!(
+            n.web_url("git.example.com"),
+            Some("https://git.example.com/org/proj/releases/tag/v2.0.0".to_string())
+        );
     }
 }
