@@ -52,6 +52,8 @@ pub struct AppStateFile {
     #[serde(default = "default_auto_mark_read")]
     pub auto_mark_read: bool,
     #[serde(default)]
+    pub auto_archive: bool,
+    #[serde(default)]
     pub pinned_notifications: Vec<Notification>,
 }
 
@@ -63,6 +65,7 @@ impl AppStateFile {
     pub fn new(auto_mark_read: bool) -> Self {
         Self {
             auto_mark_read,
+            auto_archive: false,
             pinned_notifications: Vec::new(),
         }
     }
@@ -115,6 +118,17 @@ impl AppStateFile {
     pub fn load_auto_mark_read() -> Result<bool> {
         let state = Self::load_full()?;
         Ok(state.auto_mark_read)
+    }
+
+    pub fn save_auto_archive(auto_archive: bool) -> Result<()> {
+        Self::update_with(default_auto_mark_read(), |state| {
+            state.auto_archive = auto_archive;
+        })
+    }
+
+    pub fn load_auto_archive() -> Result<bool> {
+        let state = Self::load_full()?;
+        Ok(state.auto_archive)
     }
 
     pub fn save_pinned_notifications(pinned: &[Notification]) -> Result<()> {

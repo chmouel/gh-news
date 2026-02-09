@@ -19,6 +19,7 @@
 # Some settings are also persisted in state file (~/.cache/gh-news/state.toml)
 # and will override config file values when present:
 #   - auto_mark_read (user's toggle)
+#   - auto_archive (user's toggle)
 #
 # ==============================================================================
 # NETWORK & API SETTINGS
@@ -95,8 +96,16 @@ repos_collapsed = false
 # Automatically mark notifications as read when you navigate away from them.
 # Default: true
 # CLI flag: --no-auto-mark-read
-# Note: Can be toggled at runtime and will be saved to state file.
+# Note: Can be toggled at runtime with M key and saved to state file.
 auto_mark_read = true
+
+# Automatically archive (mark as done) notifications when navigating away.
+# When enabled, auto_mark_read is also forced on.
+# Default: false
+# CLI flag: --no-auto-archive
+# Note: Can be toggled at runtime with M key (cycles off/read/archive)
+#       and saved to state file.
+auto_archive = false
 
 # ==============================================================================
 # EXTERNAL COMMANDS & HOOKS
