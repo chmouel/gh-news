@@ -137,9 +137,15 @@ fn get_gh_config_path() -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use once_cell::sync::Lazy;
+    use parking_lot::Mutex;
+
+    /// Serialise tests that modify process-wide environment variables.
+    static ENV_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
     #[test]
     fn test_env_token() {
+        let _guard = ENV_LOCK.lock();
         std::env::set_var("GH_TOKEN", "test_token_123");
         let token = get_github_token("github.com").unwrap();
         assert_eq!(token, "test_token_123");
@@ -148,8 +154,9 @@ mod tests {
 
     #[test]
     fn test_gh_cli_token_fallback() {
-        // Clear env vars before the guard so `gh auth token` reflects stored
-        // credentials rather than a GH_TOKEN leaked from a parallel test.
+        let _guard = ENV_LOCK.lock();
+        // Clear env vars so `gh auth token` reflects stored credentials
+        // rather than a GH_TOKEN leaked from a parallel test.
         std::env::remove_var("GH_TOKEN");
         std::env::remove_var("GITHUB_TOKEN");
 
