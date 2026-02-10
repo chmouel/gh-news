@@ -198,7 +198,7 @@ The command runs once per new notification with these environment variables:
 
 ```bash
 #!/bin/bash
-notify-send "GitHub: $GH_NOTIFY_TYPE" "$GH_NOTIFY_TITLE"
+notify-send "GitHub: $GH_NEWS_TYPE" "$GH_NEWS_TITLE"
 ```
 
 **Example: Sound alert**
@@ -211,8 +211,8 @@ on_new_notification_command = "paplay /usr/share/sounds/freedesktop/stereo/messa
 
 ```bash
 #!/bin/bash
-if [ "$GH_NOTIFY_REASON" = "review_requested" ]; then
-    notify-send -u critical "Review Requested" "$GH_NOTIFY_TITLE"
+if [ "$GH_NEWS_REASON" = "review_requested" ]; then
+    notify-send -u critical "Review Requested" "$GH_NEWS_TITLE"
 fi
 ```
 

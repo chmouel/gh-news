@@ -165,8 +165,10 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.github_api_base(), "https://api.github.com");
 
-        let mut enterprise_config = Config::default();
-        enterprise_config.github_host = "github.example.com".to_string();
+        let enterprise_config = Config {
+            github_host: "github.example.com".to_string(),
+            ..Default::default()
+        };
         assert_eq!(
             enterprise_config.github_api_base(),
             "https://github.example.com/api/v3"
@@ -175,9 +177,10 @@ mod tests {
 
     #[test]
     fn test_preview_mode_parsing() {
-        let mut config = Config::default();
-
-        config.default_preview_mode = "off".to_string();
+        let mut config = Config {
+            default_preview_mode: "off".to_string(),
+            ..Default::default()
+        };
         assert!(matches!(
             config.get_default_preview_mode(),
             PreviewMode::Off
