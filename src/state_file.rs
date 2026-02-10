@@ -100,17 +100,17 @@ impl AppStateFile {
         Self::load_full().unwrap_or_else(|_| Self::new(auto_mark_read))
     }
 
-    fn update_with<F>(auto_mark_read: bool, mut update: F) -> Result<()>
+    fn update_with<F>(mut update: F) -> Result<()>
     where
         F: FnMut(&mut AppStateFile),
     {
-        let mut state = Self::load_or_default(auto_mark_read);
+        let mut state = Self::load_or_default(default_auto_mark_read());
         update(&mut state);
         state.save_full()
     }
 
     pub fn save_auto_mark_read(auto_mark_read: bool) -> Result<()> {
-        Self::update_with(auto_mark_read, |state| {
+        Self::update_with(|state| {
             state.auto_mark_read = auto_mark_read;
         })
     }
@@ -121,7 +121,7 @@ impl AppStateFile {
     }
 
     pub fn save_auto_archive(auto_archive: bool) -> Result<()> {
-        Self::update_with(true, |state| {
+        Self::update_with(|state| {
             state.auto_archive = auto_archive;
         })
     }
@@ -132,7 +132,7 @@ impl AppStateFile {
     }
 
     pub fn save_pinned_notifications(pinned: &[Notification]) -> Result<()> {
-        Self::update_with(true, |state| {
+        Self::update_with(|state| {
             state.pinned_notifications = pinned.to_vec();
         })
     }
