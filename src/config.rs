@@ -1,5 +1,5 @@
 use crate::error::{Error, Result};
-use crate::state::PreviewMode;
+use crate::state::{OrgGroupingMode, PreviewMode};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
@@ -36,6 +36,7 @@ pub struct Config {
     // Display defaults
     pub default_preview_mode: String,
     pub repos_collapsed: bool,
+    pub org_grouping: OrgGroupingMode,
 
     // Behaviour
     pub auto_mark_read: bool,
@@ -70,6 +71,7 @@ impl Default for Config {
             default_filter: None,
             default_preview_mode: "vertical".to_string(),
             repos_collapsed: false,
+            org_grouping: OrgGroupingMode::default(),
             auto_mark_read: true,
             auto_archive: false,
             browser_command: None,
@@ -154,6 +156,7 @@ mod tests {
         assert_eq!(config.pagination_size, 50);
         assert!(!config.show_read);
         assert!(!config.participating_only);
+        assert!(matches!(config.org_grouping, OrgGroupingMode::Auto));
         assert_eq!(config.github_host, "github.com");
     }
 

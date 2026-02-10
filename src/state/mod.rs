@@ -1,17 +1,41 @@
 use crate::filter::Filter;
 use crate::models::Notification;
 use crate::preview::PreviewData;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 mod tree;
 
 use tree::TreeBuilder;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum OrgGroupingMode {
+    Off,
+    #[default]
+    Auto,
+    Always,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrgHeaderInfo {
+    pub login: String,
+    pub notification_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepoHeaderInfo {
+    pub full_name: String,
+    pub display_name: String,
+    pub notification_count: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TreeItem {
-    PinnedHeader,             // Header for pinned notifications section
-    RepositoryHeader(String), // Repository full name
-    Notification(usize),      // Index into notifications
+    PinnedHeader,                     // Header for pinned notifications section
+    OrgHeader(OrgHeaderInfo),         // Organisation header with metadata
+    RepositoryHeader(RepoHeaderInfo), // Repository header with metadata
+    Notification(usize),              // Index into notifications
 }
 
 pub struct AppState {
@@ -19,6 +43,7 @@ pub struct AppState {
     pub filtered_notifications: Vec<usize>, // Indices into notifications
     pub tree_items: Vec<TreeItem>,          // Tree structure for display
     pub expanded_repos: HashMap<String, bool>, // Track which repos are expanded
+    pub org_grouping: OrgGroupingMode,
     pub selected_index: usize,
     pub filter: Option<Filter>,
     pub preview_mode: PreviewMode,
@@ -96,6 +121,7 @@ impl AppState {
             filtered_notifications: Vec::new(),
             tree_items: Vec::new(),
             expanded_repos: HashMap::new(),
+            org_grouping: OrgGroupingMode::default(),
             selected_index: 0,
             filter: None,
             preview_mode: PreviewMode::Vertical, // Preview open by default
@@ -194,6 +220,7 @@ impl AppState {
             &self.filtered_notifications,
             &self.expanded_repos,
             &pinned_ids,
+            self.org_grouping,
         )
         .build();
     }
@@ -230,7 +257,9 @@ impl AppState {
             .get(self.selected_index)
             .and_then(|item| match item {
                 TreeItem::Notification(idx) => self.notifications.get(*idx),
-                TreeItem::RepositoryHeader(_) | TreeItem::PinnedHeader => None,
+                TreeItem::RepositoryHeader(_) | TreeItem::OrgHeader(_) | TreeItem::PinnedHeader => {
+                    None
+                }
             })
     }
 
@@ -238,15 +267,18 @@ impl AppState {
         self.tree_items
             .get(self.selected_index)
             .and_then(|item| match item {
-                TreeItem::RepositoryHeader(repo) => Some(repo.as_str()),
-                TreeItem::Notification(_) | TreeItem::PinnedHeader => None,
+                TreeItem::RepositoryHeader(repo_info) => Some(repo_info.full_name.as_str()),
+                TreeItem::OrgHeader(_) | TreeItem::Notification(_) | TreeItem::PinnedHeader => None,
             })
     }
 
     pub fn parent_repo_for_selected(&self) -> Option<&str> {
-        // If the selected item is a RepositoryHeader, return it directly
-        if let Some(TreeItem::RepositoryHeader(repo)) = self.tree_items.get(self.selected_index) {
-            return Some(repo.as_str());
+        match self.tree_items.get(self.selected_index) {
+            Some(TreeItem::RepositoryHeader(repo_info)) => {
+                return Some(repo_info.full_name.as_str())
+            }
+            Some(TreeItem::OrgHeader(_) | TreeItem::PinnedHeader) => return None,
+            _ => {}
         }
 
         if let Some(TreeItem::Notification(idx)) = self.tree_items.get(self.selected_index) {
@@ -258,8 +290,8 @@ impl AppState {
 
         // Fallback for headers without a direct notification (keeps behaviour for legacy layouts).
         for i in (0..self.selected_index).rev() {
-            if let Some(TreeItem::RepositoryHeader(repo)) = self.tree_items.get(i) {
-                return Some(repo.as_str());
+            if let Some(TreeItem::RepositoryHeader(repo_info)) = self.tree_items.get(i) {
+                return Some(repo_info.full_name.as_str());
             }
         }
 
@@ -315,7 +347,7 @@ impl AppState {
         // If we're on a header, move to the previous visible item.
         if matches!(
             self.tree_items.get(self.selected_index),
-            Some(TreeItem::RepositoryHeader(_) | TreeItem::PinnedHeader)
+            Some(TreeItem::RepositoryHeader(_) | TreeItem::OrgHeader(_) | TreeItem::PinnedHeader)
         ) {
             self.selected_index -= 1;
             return;
@@ -347,7 +379,7 @@ impl AppState {
         // If we're on a header, move to the next visible item.
         if matches!(
             self.tree_items.get(self.selected_index),
-            Some(TreeItem::RepositoryHeader(_) | TreeItem::PinnedHeader)
+            Some(TreeItem::RepositoryHeader(_) | TreeItem::OrgHeader(_) | TreeItem::PinnedHeader)
         ) {
             self.selected_index += 1;
             return;
