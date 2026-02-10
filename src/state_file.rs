@@ -121,7 +121,7 @@ impl AppStateFile {
     }
 
     pub fn save_auto_archive(auto_archive: bool) -> Result<()> {
-        Self::update_with(default_auto_mark_read(), |state| {
+        Self::update_with(true, |state| {
             state.auto_archive = auto_archive;
         })
     }
@@ -132,7 +132,7 @@ impl AppStateFile {
     }
 
     pub fn save_pinned_notifications(pinned: &[Notification]) -> Result<()> {
-        Self::update_with(default_auto_mark_read(), |state| {
+        Self::update_with(true, |state| {
             state.pinned_notifications = pinned.to_vec();
         })
     }

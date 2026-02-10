@@ -259,6 +259,17 @@ impl App {
         webbrowser::open(url).map_err(std::io::Error::other)
     }
 
+    /// Open notification URL in browser, handling errors with user-friendly messages.
+    fn open_notification_url(&self, notification: &Notification) {
+        if let Some(url) = notification.web_url(&self.config.github_host) {
+            if let Err(e) = self.open_url(&url) {
+                eprintln!("Failed to open URL {}: {}", url, e);
+            }
+        } else {
+            eprintln!("No URL available for this notification");
+        }
+    }
+
     pub fn start_auto_refresh(
         &mut self,
         all: bool,
@@ -268,7 +279,7 @@ impl App {
         // Always store refresh args for manual refresh (Ctrl+R)
         self.refresh_args = Some((all, participating, max_notifications));
 
-        if self.config.auto_refresh_interval == 0 {// Auto-refresh disabled, but manual refresh still works
+        if self.config.auto_refresh_interval == 0 { // Auto-refresh disabled, but manual refresh still works
         }
 
         // Store refresh args - we'll check the timer in the main loop
@@ -1433,13 +1444,7 @@ impl App {
                     self.state.toggle_repo_expansion(&repo_name);
                 } else if let Some(notification) = self.state.selected_notification() {
                     // Open the notification URL in the browser
-                    if let Some(url) = notification.web_url(&self.config.github_host) {
-                        if let Err(e) = self.open_url(&url) {
-                            eprintln!("Failed to open URL {}: {}", url, e);
-                        }
-                    } else {
-                        eprintln!("No URL available for this notification");
-                    }
+                    self.open_notification_url(notification);
 
                     // Mark notification as read if it's unread
                     if notification.is_unread() {
@@ -1485,13 +1490,7 @@ impl App {
                         Some(format!("Opened {} notifications", opened_count));
                 } else if let Some(notification) = self.state.selected_notification() {
                     // Open notification URL without marking as read
-                    if let Some(url) = notification.web_url(&self.config.github_host) {
-                        if let Err(e) = self.open_url(&url) {
-                            eprintln!("Failed to open URL {}: {}", url, e);
-                        }
-                    } else {
-                        eprintln!("No URL available for this notification");
-                    }
+                    self.open_notification_url(notification);
                 }
             }
             KeyCode::Char(' ') => {
