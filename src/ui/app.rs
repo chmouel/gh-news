@@ -279,9 +279,7 @@ impl App {
         // Always store refresh args for manual refresh (Ctrl+R)
         self.refresh_args = Some((all, participating, max_notifications));
 
-        if self.config.auto_refresh_interval == 0 { // Auto-refresh disabled, but manual refresh still works
-        }
-
+        // Auto-refresh disabled if interval is 0, but manual refresh still works
         // Store refresh args - we'll check the timer in the main loop
         // No need for a separate thread since we're already polling events
     }
