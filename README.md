@@ -6,7 +6,8 @@ GitHub notifications TUI built with Rust and ratatui.
 
 ## Screenshot
 
-<img width="1865" height="1242" alt="Screenshot 2026-01-20 at 14 58 15" src="https://github.com/user-attachments/assets/dae19973-afdc-4b67-abdf-d63ff8f1446a" />
+<img width="1920" height="1279" alt="ghnews" src="https://github.com/user-attachments/assets/db148540-26b7-4ddf-bc11-d83b16e0744f" />
+
 
 ## Features
 
