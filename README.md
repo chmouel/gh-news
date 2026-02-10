@@ -155,6 +155,7 @@ default_filter = ""          # regex filter always applied
 # Display
 default_preview_mode = "vertical"    # "off", "horizontal", or "vertical"
 repos_collapsed = false              # start with repos collapsed
+org_grouping = "auto"               # "off", "auto", or "always"
 
 # Behaviour
 auto_mark_read = true                # mark notifications read when navigating to them

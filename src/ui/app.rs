@@ -92,8 +92,11 @@ pub struct App {
 impl App {
     pub fn new(config: Config) -> Self {
         let auto_mark_read = config.auto_mark_read;
+        let org_grouping = config.org_grouping;
+        let mut state = AppState::new();
+        state.org_grouping = org_grouping;
         Self {
-            state: AppState::new(),
+            state,
             config,
             should_quit: false,
             list_widget: list::ListWidget::new(),
@@ -210,6 +213,7 @@ impl App {
             });
 
         let mut app_state = AppState::new();
+        app_state.org_grouping = self.config.org_grouping;
         app_state.set_notifications(data.notifications);
         app_state.set_filter(settings.filter);
         app_state.set_filter_pattern(settings.filter_pattern);
@@ -1074,7 +1078,7 @@ impl App {
             let mut success_count = 0;
             let mut last_error = String::new();
 
-            for notification in &notifications {
+            for notification in notifications.iter() {
                 match actions::execute_action(&action, notification, &github_host) {
                     ActionResult::Spawned => {
                         success_count += 1;
@@ -2209,11 +2213,15 @@ impl App {
                                 self.prefetch_next_preview();
                             }
                             self.queue_auto_mark_read();
-                        } else if let Some(crate::state::TreeItem::RepositoryHeader(repo_name)) =
+                        } else if let Some(crate::state::TreeItem::OrgHeader(_)) =
+                            self.state.tree_items.get(clicked_item_idx)
+                        {
+                            // Organisation header - no action
+                        } else if let Some(crate::state::TreeItem::RepositoryHeader(repo_info)) =
                             self.state.tree_items.get(clicked_item_idx)
                         {
                             // Clicked on a repository header - toggle expansion
-                            let repo_name = repo_name.clone();
+                            let repo_name = repo_info.full_name.clone();
                             self.state.toggle_repo_expansion(&repo_name);
 
                             // After toggling, try to select the first notification in this repo

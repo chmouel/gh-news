@@ -104,28 +104,47 @@ impl ListWidget {
 
                         ListItem::new(Line::from(line))
                     }
-                    crate::state::TreeItem::RepositoryHeader(repo_name) => {
-                        let is_expanded = app_state
-                            .expanded_repos
-                            .get(repo_name)
-                            .copied()
-                            .unwrap_or(true);
+                    crate::state::TreeItem::OrgHeader(org_info) => {
+                        let colors = TokyoNight::colors();
+                        let mut line = vec![];
 
-                        let notif_count = app_state
-                            .filtered_notifications
-                            .iter()
-                            .filter(|&&idx| {
-                                app_state
-                                    .notifications
-                                    .get(idx)
-                                    .map(|n| {
-                                        n.repo_full_name() == repo_name
-                                            && !app_state.is_pinned(&n.id)
-                                    })
-                                    .unwrap_or(false)
-                            })
-                            .count();
+                        line.push(Span::styled(
+                            "󰊻 ",
+                            if is_selected {
+                                Style::default().fg(self.theme.highlight_fg)
+                            } else {
+                                Style::default().fg(colors.magenta)
+                            },
+                        ));
 
+                        line.push(Span::styled(
+                            format!("{} ", org_info.login),
+                            if is_selected {
+                                Style::default()
+                                    .fg(self.theme.highlight_fg)
+                                    .add_modifier(Modifier::BOLD)
+                            } else {
+                                Style::default()
+                                    .fg(colors.magenta)
+                                    .add_modifier(Modifier::BOLD)
+                            },
+                        ));
+
+                        let count_style = if is_selected {
+                            Style::default()
+                                .fg(self.theme.highlight_fg)
+                                .bg(self.theme.highlight_bg)
+                        } else {
+                            Style::default().fg(colors.fg).bg(colors.bg_dark)
+                        };
+                        line.push(Span::styled(
+                            format!(" ({}) ", org_info.notification_count),
+                            count_style.add_modifier(Modifier::BOLD),
+                        ));
+
+                        ListItem::new(Line::from(line))
+                    }
+                    crate::state::TreeItem::RepositoryHeader(repo_info) => {
                         let mut line = vec![];
 
                         let colors = TokyoNight::colors();
@@ -138,7 +157,7 @@ impl ListWidget {
                             },
                         ));
 
-                        let indicator = if is_expanded { " " } else { " " };
+                        let indicator = " ";
                         line.push(Span::styled(
                             indicator,
                             if is_selected {
@@ -149,7 +168,7 @@ impl ListWidget {
                         ));
 
                         line.push(Span::styled(
-                            format!("{} ", repo_name),
+                            format!("{} ", repo_info.display_name),
                             if is_selected {
                                 Style::default()
                                     .fg(self.theme.highlight_fg)
@@ -167,7 +186,7 @@ impl ListWidget {
                             Style::default().fg(colors.fg).bg(colors.bg_dark)
                         };
                         line.push(Span::styled(
-                            format!(" ({}) ", notif_count),
+                            format!(" ({}) ", repo_info.notification_count),
                             count_style.add_modifier(Modifier::BOLD),
                         ));
 

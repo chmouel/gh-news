@@ -89,6 +89,14 @@ default_preview_mode = "vertical"
 # CLI flag: (not available as flag, set via env or config)
 repos_collapsed = false
 
+# Group notifications by organisation above repository grouping.
+# Options:
+#   - "off":    only group by repository
+#   - "auto":   group by organisation only when an organisation has >1 notifications
+#   - "always": always group by organisation when applicable
+# Default: "auto"
+org_grouping = "auto"
+
 # ==============================================================================
 # BEHAVIOR
 # ==============================================================================
