@@ -63,73 +63,6 @@ impl<'a> TreeBuilder<'a> {
             }
         }
 
-        let build_repo_list = |repo_groups: HashMap<String, Vec<usize>>| {
-            let mut repo_list: Vec<(String, Vec<usize>, DateTime<Utc>)> = repo_groups
-                .into_iter()
-                .map(|(repo_name, mut notif_indices)| {
-                    notif_indices.sort_by(|&a, &b| {
-                        let timestamp_a = self
-                            .notifications
-                            .get(a)
-                            .and_then(|n| n.effective_timestamp())
-                            .unwrap_or(DateTime::<Utc>::MIN_UTC);
-                        let timestamp_b = self
-                            .notifications
-                            .get(b)
-                            .and_then(|n| n.effective_timestamp())
-                            .unwrap_or(DateTime::<Utc>::MIN_UTC);
-                        timestamp_b.cmp(&timestamp_a)
-                    });
-
-                    let latest_timestamp = notif_indices
-                        .iter()
-                        .filter_map(|&idx| {
-                            self.notifications
-                                .get(idx)
-                                .and_then(|n| n.effective_timestamp())
-                        })
-                        .max()
-                        .unwrap_or(DateTime::<Utc>::MIN_UTC);
-
-                    (repo_name, notif_indices, latest_timestamp)
-                })
-                .collect();
-
-            repo_list.sort_by(|a, b| b.2.cmp(&a.2));
-            repo_list
-        };
-
-        let append_repos = |tree_items: &mut Vec<TreeItem>,
-                            repo_list: Vec<(String, Vec<usize>, DateTime<Utc>)>,
-                            current_org: Option<&str>| {
-            for (repo_name, notif_indices, _) in repo_list {
-                // Compute display name: strip org prefix if under an org header
-                let display_name = current_org
-                    .and_then(|org| {
-                        repo_name
-                            .split_once('/')
-                            .and_then(|(owner, repo)| (owner == org).then_some(repo))
-                    })
-                    .unwrap_or(&repo_name)
-                    .to_string();
-
-                let notification_count = notif_indices.len();
-
-                tree_items.push(TreeItem::RepositoryHeader(RepoHeaderInfo {
-                    full_name: repo_name.clone(),
-                    display_name,
-                    notification_count,
-                }));
-
-                let is_expanded = *self.expanded_repos.get(&repo_name).unwrap_or(&true);
-                if is_expanded {
-                    for &notif_idx in &notif_indices {
-                        tree_items.push(TreeItem::Notification(notif_idx));
-                    }
-                }
-            }
-        };
-
         let mut org_counts: HashMap<String, usize> = HashMap::new();
         for idx in &regular_indices {
             if let Some(notif) = self.notifications.get(*idx) {
@@ -141,8 +74,7 @@ impl<'a> TreeBuilder<'a> {
             }
         }
 
-        let has_org_notifications = !org_counts.is_empty();
-        let use_org_grouping = has_org_notifications
+        let use_org_grouping = !org_counts.is_empty()
             && match self.org_grouping {
                 OrgGroupingMode::Off => false,
                 OrgGroupingMode::Always => true,
@@ -158,7 +90,7 @@ impl<'a> TreeBuilder<'a> {
                 }
             }
 
-            append_repos(&mut tree_items, build_repo_list(repo_groups), None);
+            self.append_repos(&mut tree_items, &self.sort_repo_groups(repo_groups), None);
             return tree_items;
         }
 
@@ -212,7 +144,11 @@ impl<'a> TreeBuilder<'a> {
                 }
             }
 
-            append_repos(&mut tree_items, build_repo_list(repo_groups), Some(&org));
+            self.append_repos(
+                &mut tree_items,
+                &self.sort_repo_groups(repo_groups),
+                Some(&org),
+            );
         }
 
         if !non_org_indices.is_empty() {
@@ -224,10 +160,74 @@ impl<'a> TreeBuilder<'a> {
                 }
             }
 
-            append_repos(&mut tree_items, build_repo_list(repo_groups), None);
+            self.append_repos(&mut tree_items, &self.sort_repo_groups(repo_groups), None);
         }
 
         tree_items
+    }
+
+    fn sort_repo_groups(
+        &self,
+        repo_groups: HashMap<String, Vec<usize>>,
+    ) -> Vec<(String, Vec<usize>, DateTime<Utc>)> {
+        let mut repo_list: Vec<(String, Vec<usize>, DateTime<Utc>)> = repo_groups
+            .into_iter()
+            .map(|(repo_name, mut notif_indices)| {
+                notif_indices.sort_by_key(|&idx| {
+                    std::cmp::Reverse(
+                        self.notifications
+                            .get(idx)
+                            .and_then(|n| n.effective_timestamp())
+                            .unwrap_or(DateTime::<Utc>::MIN_UTC),
+                    )
+                });
+
+                let latest_timestamp = notif_indices
+                    .first()
+                    .and_then(|&idx| self.notifications.get(idx))
+                    .and_then(|n| n.effective_timestamp())
+                    .unwrap_or(DateTime::<Utc>::MIN_UTC);
+
+                (repo_name, notif_indices, latest_timestamp)
+            })
+            .collect();
+
+        repo_list.sort_by(|a, b| b.2.cmp(&a.2));
+        repo_list
+    }
+
+    fn append_repos(
+        &self,
+        tree_items: &mut Vec<TreeItem>,
+        repo_list: &[(String, Vec<usize>, DateTime<Utc>)],
+        current_org: Option<&str>,
+    ) {
+        for (repo_name, notif_indices, _) in repo_list {
+            // Strip org prefix from display name when under an org header
+            let display_name = current_org
+                .and_then(|org| {
+                    repo_name
+                        .split_once('/')
+                        .and_then(|(owner, repo)| (owner == org).then_some(repo))
+                })
+                .unwrap_or(repo_name)
+                .to_string();
+
+            let notification_count = notif_indices.len();
+
+            tree_items.push(TreeItem::RepositoryHeader(RepoHeaderInfo {
+                full_name: repo_name.clone(),
+                display_name,
+                notification_count,
+            }));
+
+            let is_expanded = *self.expanded_repos.get(repo_name).unwrap_or(&true);
+            if is_expanded {
+                for &notif_idx in notif_indices {
+                    tree_items.push(TreeItem::Notification(notif_idx));
+                }
+            }
+        }
     }
 }
 

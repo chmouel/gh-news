@@ -1084,7 +1084,7 @@ impl App {
             let mut success_count = 0;
             let mut last_error = String::new();
 
-            for notification in notifications.iter() {
+            for notification in &notifications {
                 match actions::execute_action(&action, notification, &github_host) {
                     ActionResult::Spawned => {
                         success_count += 1;
@@ -2210,7 +2210,6 @@ impl App {
                         } else if let Some(crate::state::TreeItem::OrgHeader(_)) =
                             self.state.tree_items.get(clicked_item_idx)
                         {
-                            // Organisation header - no action
                         } else if let Some(crate::state::TreeItem::RepositoryHeader(repo_info)) =
                             self.state.tree_items.get(clicked_item_idx)
                         {
