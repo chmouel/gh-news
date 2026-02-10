@@ -62,10 +62,6 @@ impl<'a> NotificationFetcher<'a> {
             }
 
             all_notifications.extend(notifications.into_iter().take(remaining));
-
-            if all_notifications.len() >= max_notifications {
-                break;
-            }
         }
 
         Ok(all_notifications)
