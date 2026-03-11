@@ -120,6 +120,7 @@ impl AppStateFile {
         Ok(state.auto_mark_read)
     }
 
+    #[allow(dead_code)]
     pub fn save_auto_archive(auto_archive: bool) -> Result<()> {
         Self::update_with(|state| {
             state.auto_archive = auto_archive;

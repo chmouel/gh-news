@@ -168,12 +168,6 @@ impl App {
                         if let Err(e) = client.mark_thread_done(notification_id) {
                             eprintln!("Failed to auto-archive notification: {}", e);
                         }
-                        // Remove from local state optimistically
-                        self.state.remove_notification(notification_id);
-                        self.state.build_tree();
-                        if self.state.selected_index >= self.state.tree_items.len() {
-                            self.state.select_last_notification();
-                        }
                     } else if let Err(e) = client.mark_notification_read(notification_id) {
                         eprintln!("Failed to auto-mark notification as read: {}", e);
                     }
@@ -828,7 +822,6 @@ impl App {
             &self.state,
             &self.config,
             self.auto_mark_read_enabled,
-            self.auto_archive_enabled,
         );
 
         let preview_mode = self.effective_preview_mode();
@@ -1706,31 +1699,13 @@ impl App {
                 }
             }
             KeyCode::Char('M') => {
-                // Cycle auto-scroll mode: off -> read -> archive (implies read) -> off
-                if !self.auto_mark_read_enabled && !self.auto_archive_enabled {
-                    // off -> read
-                    self.auto_mark_read_enabled = true;
-                    self.auto_archive_enabled = false;
-                } else if self.auto_mark_read_enabled && !self.auto_archive_enabled {
-                    // read -> archive (implies read)
-                    self.auto_archive_enabled = true;
-                    self.auto_mark_read_enabled = true;
-                } else {
-                    // archive -> off
-                    self.auto_archive_enabled = false;
-                    self.auto_mark_read_enabled = false;
-                }
-
-                // Clear pending mark if disabling
+                self.auto_mark_read_enabled = !self.auto_mark_read_enabled;
                 if !self.auto_mark_read_enabled {
                     self.pending_mark_read = None;
                 }
-
                 let _ = crate::state_file::AppStateFile::save_auto_mark_read(
                     self.auto_mark_read_enabled,
                 );
-                let _ =
-                    crate::state_file::AppStateFile::save_auto_archive(self.auto_archive_enabled);
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::SHIFT) => {
                 // Scroll preview up

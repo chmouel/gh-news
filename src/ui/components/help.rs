@@ -185,7 +185,7 @@ impl HelpWidget {
                     },
                     HelpLine {
                         key: "M",
-                        desc: "Cycle auto-scroll mode (off/read/archive)",
+                        desc: "Toggle auto-mark-read (persisted)",
                     },
                 ],
             },

@@ -406,39 +406,6 @@ impl AppState {
         self.preview_mode != PreviewMode::Off && !self.notifications.is_empty()
     }
 
-    /// Remove a notification from local state entirely (used after archiving).
-    /// Updates filtered_notifications indices to remain consistent.
-    pub fn remove_notification(&mut self, notification_id: &str) {
-        if let Some(pos) = self
-            .notifications
-            .iter()
-            .position(|n| n.id == notification_id)
-        {
-            self.notifications.remove(pos);
-            self.filtered_notifications.retain(|&idx| idx != pos);
-            for idx in &mut self.filtered_notifications {
-                if *idx > pos {
-                    *idx -= 1;
-                }
-            }
-            self.selected_notification_ids.remove(notification_id);
-        }
-    }
-
-    pub fn select_last_notification(&mut self) {
-        for i in (0..self.tree_items.len()).rev() {
-            if matches!(self.tree_items[i], TreeItem::Notification(_)) {
-                self.selected_index = i;
-                return;
-            }
-        }
-        if !self.tree_items.is_empty() {
-            self.selected_index = self.tree_items.len() - 1;
-        } else {
-            self.selected_index = 0;
-        }
-    }
-
     pub fn mark_notification_read(&mut self, notification_id: &str) {
         if let Some(notif) = self
             .notifications

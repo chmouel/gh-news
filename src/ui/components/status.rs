@@ -24,7 +24,6 @@ impl StatusWidget {
         state: &AppState,
         config: &Config,
         auto_mark_read: bool,
-        auto_archive: bool,
     ) {
         let colors = crate::ui::theme::TokyoNight::colors();
 
@@ -102,22 +101,12 @@ impl StatusWidget {
             ));
         }
 
-        // Show auto-scroll mode indicator
-        let mode_label = if auto_archive {
-            "M:archive"
-        } else if auto_mark_read {
-            "M:read"
-        } else {
-            "M:off"
-        };
+        // Show auto-mark-read indicator
+        let mode_label = if auto_mark_read { "M:read" } else { "M:off" };
         status_line.spans.push(Span::raw(" · "));
         status_line.spans.push(Span::styled(
             mode_label,
-            if auto_archive {
-                Style::default()
-                    .fg(colors.orange)
-                    .add_modifier(Modifier::BOLD)
-            } else if auto_mark_read {
+            if auto_mark_read {
                 Style::default().fg(colors.green)
             } else {
                 Style::default().fg(colors.fg_muted)

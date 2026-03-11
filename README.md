@@ -119,7 +119,7 @@ gh news --static-display | grep "something" # List notifications without TUI
 - `Shift+U`/`Shift+D` - Scroll preview (5 lines)
 - `Ctrl+U`/`Ctrl+D` - Scroll preview (page)
 - `1`/`2` - Focus pane 1 (list) / pane 2 (preview)
-- `M` - Cycle auto-scroll mode (off/read/archive)
+- `M` - Toggle auto-mark-read on/off (persisted across sessions)
 
 ### General
 
