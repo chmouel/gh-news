@@ -95,6 +95,7 @@ gh news --static-display | grep "something" # List notifications without TUI
 - `Enter` - Open notification in browser and mark as read, or toggle repository collapse on headers
 - `o` - Open notification in browser without marking as read
 - `.` - Toggle read/unread status
+- `d` - Archive (done) notification — removes from inbox
 - `!` - Pin/unpin notification (pinned appear at top)
 - `h` - Collapse current repository
 - `x` - Open action menu (run custom commands on notifications)
@@ -106,6 +107,7 @@ gh news --static-display | grep "something" # List notifications without TUI
 - `Enter` - Open all selected + mark as read
 - `o` - Open all selected without marking as read
 - `.` - Mark all selected as read
+- `d` - Archive all selected
 - `Ctrl+A` - Archive selected (or all if none selected)
 - `Ctrl+Alt+A` - Toggle select all notifications in current repository
 

@@ -457,6 +457,17 @@ impl AppState {
         self.selected_notification_ids.iter().cloned().collect()
     }
 
+    pub fn remove_notification(&mut self, notification_id: &str) {
+        self.notifications.retain(|n| n.id != notification_id);
+        self.apply_filter();
+    }
+
+    pub fn remove_notifications(&mut self, notification_ids: &[String]) {
+        let id_set: HashSet<&String> = notification_ids.iter().collect();
+        self.notifications.retain(|n| !id_set.contains(&n.id));
+        self.apply_filter();
+    }
+
     pub fn toggle_select_all_in_repo(&mut self, repo_name: &str) -> usize {
         let mut total_in_repo = 0;
         let mut all_selected = true;
