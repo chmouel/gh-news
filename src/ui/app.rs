@@ -1609,6 +1609,79 @@ impl App {
                     }
                 }
             }
+            KeyCode::Char('d') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if self.state.has_selection() {
+                    // Archive all selected notifications
+                    let selected_ids = self.state.get_selected_notification_ids();
+                    let count = selected_ids.len();
+
+                    if let Some(ref client) = self.api_client {
+                        for notification_id in &selected_ids {
+                            if let Err(e) = client.mark_thread_done(notification_id) {
+                                eprintln!(
+                                    "Failed to archive notification {}: {}",
+                                    notification_id, e
+                                );
+                            }
+                        }
+                    }
+
+                    let saved_index = self.state.selected_index;
+                    self.state.remove_notifications(&selected_ids);
+                    self.state.clear_selection();
+
+                    // Stay near the same position
+                    if !self.state.tree_items.is_empty() {
+                        self.state.selected_index =
+                            saved_index.min(self.state.tree_items.len() - 1);
+                        if !matches!(
+                            self.state.tree_items.get(self.state.selected_index),
+                            Some(crate::state::TreeItem::Notification(_))
+                        ) {
+                            self.state.select_first_notification();
+                        }
+                    }
+
+                    if self.state.show_preview() {
+                        self.fetch_preview_for_selected_notification();
+                        self.prefetch_next_preview();
+                    }
+
+                    self.state.status_message = Some(format!("Archived {} notifications", count));
+                } else if let Some(notification) = self.state.selected_notification() {
+                    // Archive single notification
+                    let notification_id = notification.id.clone();
+                    let saved_index = self.state.selected_index;
+
+                    if let Some(ref client) = self.api_client {
+                        if let Err(e) = client.mark_thread_done(&notification_id) {
+                            eprintln!("Failed to archive notification: {}", e);
+                        }
+                    }
+
+                    self.state.remove_notification(&notification_id);
+
+                    // Stay at the same position (or clamp to end of list)
+                    if !self.state.tree_items.is_empty() {
+                        self.state.selected_index =
+                            saved_index.min(self.state.tree_items.len() - 1);
+                        // Skip headers — find nearest notification
+                        if !matches!(
+                            self.state.tree_items.get(self.state.selected_index),
+                            Some(crate::state::TreeItem::Notification(_))
+                        ) {
+                            self.state.select_first_notification();
+                        }
+                    }
+
+                    if self.state.show_preview() {
+                        self.fetch_preview_for_selected_notification();
+                        self.prefetch_next_preview();
+                    }
+
+                    self.state.status_message = Some("Archived notification".to_string());
+                }
+            }
             KeyCode::Char('!') => {
                 if self.state.has_selection() {
                     // Toggle pin status of all selected notifications

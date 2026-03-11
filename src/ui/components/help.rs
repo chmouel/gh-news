@@ -126,6 +126,10 @@ impl HelpWidget {
                         desc: "Toggle read status (or mark selected)",
                     },
                     HelpLine {
+                        key: "d",
+                        desc: "Archive (done) notification(s)",
+                    },
+                    HelpLine {
                         key: "!",
                         desc: "Pin/unpin notification",
                     },
