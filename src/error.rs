@@ -35,6 +35,9 @@ pub enum ApiError {
     #[error("HTTP {status}: {message}")]
     HttpStatus { status: u16, message: String },
 
+    #[error("GraphQL error: {message}")]
+    GraphQL { message: String },
+
     #[error("Invalid response format")]
     InvalidResponse,
 }

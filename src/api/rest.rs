@@ -213,17 +213,15 @@ impl GitHubClient {
                 .and_then(|e| e.get("message"))
                 .and_then(|m| m.as_str())
                 .unwrap_or("Unknown GraphQL error");
-            return Err(ApiError::HttpStatus {
-                status: 200,
-                message: format!("GraphQL error: {}", message),
+            return Err(ApiError::GraphQL {
+                message: message.to_string(),
             }
             .into());
         }
 
         response.get("data").cloned().ok_or_else(|| {
-            ApiError::HttpStatus {
-                status: 200,
-                message: "GraphQL response missing 'data' field".to_string(),
+            ApiError::GraphQL {
+                message: "Response missing 'data' field".to_string(),
             }
             .into()
         })
