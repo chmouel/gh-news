@@ -4,6 +4,7 @@ use crate::error::Result;
 use crate::filter::Filter;
 use crate::hooks;
 use crate::models::Notification;
+use crate::models::NotificationType;
 use crate::notifications::{fetch_notifications, NotificationFetchOptions};
 use crate::preview::PreviewData;
 use crate::preview_manager::PreviewManager;
@@ -254,14 +255,37 @@ impl App {
     }
 
     /// Open notification URL in browser, handling errors with user-friendly messages.
+    /// For Discussion notifications, prefer the URL from the cached preview data
+    /// (fetched via GraphQL) since `web_url()` may not resolve optimally.
     fn open_notification_url(&self, notification: &Notification) {
-        if let Some(url) = notification.web_url(&self.config.github_host) {
+        let url = self
+            .discussion_url_from_preview(notification)
+            .or_else(|| notification.web_url(&self.config.github_host));
+
+        if let Some(url) = url {
             if let Err(e) = self.open_url(&url) {
                 eprintln!("Failed to open URL {}: {}", url, e);
             }
         } else {
             eprintln!("No URL available for this notification");
         }
+    }
+
+    /// If the notification is a Discussion and we have a cached preview,
+    /// return the web URL from that preview data.
+    fn discussion_url_from_preview(&self, notification: &Notification) -> Option<String> {
+        if !matches!(
+            notification.notification_type(),
+            NotificationType::Discussion
+        ) {
+            return None;
+        }
+        if let Some(PreviewData::Discussion { url, .. }) = &self.state.preview_content {
+            if !url.is_empty() {
+                return Some(url.clone());
+            }
+        }
+        None
     }
 
     pub fn start_auto_refresh(

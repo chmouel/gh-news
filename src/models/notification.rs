@@ -253,6 +253,14 @@ mod tests {
     use crate::models::{Owner, Repository, Subject};
 
     fn make_notification(subject_url: Option<&str>, title: &str) -> Notification {
+        make_notification_with_type(subject_url, title, NotificationType::Release)
+    }
+
+    fn make_notification_with_type(
+        subject_url: Option<&str>,
+        title: &str,
+        subject_type: NotificationType,
+    ) -> Notification {
         Notification {
             id: "1".to_string(),
             unread: true,
@@ -272,7 +280,7 @@ mod tests {
             },
             subject: Subject {
                 title: title.to_string(),
-                subject_type: NotificationType::Release,
+                subject_type,
                 url: subject_url.map(String::from),
                 latest_comment_url: None,
             },
@@ -349,6 +357,32 @@ mod tests {
         assert_eq!(
             n.web_url("github.com"),
             Some("https://github.com/owner/repo/releases/assets/42".to_string())
+        );
+    }
+
+    #[test]
+    fn web_url_discussion() {
+        let n = make_notification_with_type(
+            Some("https://api.github.com/repos/owner/repo/discussions/42"),
+            "Some discussion",
+            NotificationType::Discussion,
+        );
+        assert_eq!(
+            n.web_url("github.com"),
+            Some("https://github.com/owner/repo/discussions/42".to_string())
+        );
+    }
+
+    #[test]
+    fn web_url_discussion_ghes() {
+        let n = make_notification_with_type(
+            Some("https://git.example.com/api/v3/repos/org/proj/discussions/99"),
+            "GHE discussion",
+            NotificationType::Discussion,
+        );
+        assert_eq!(
+            n.web_url("git.example.com"),
+            Some("https://git.example.com/org/proj/discussions/99".to_string())
         );
     }
 }

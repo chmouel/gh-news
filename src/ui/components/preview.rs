@@ -144,6 +144,9 @@ impl PreviewWidget {
                             PreviewHeaderKind::AccentRelease => Style::default()
                                 .fg(colors.orange)
                                 .add_modifier(Modifier::BOLD),
+                            PreviewHeaderKind::AccentDiscussion => Style::default()
+                                .fg(colors.cyan)
+                                .add_modifier(Modifier::BOLD),
                             PreviewHeaderKind::Warning => {
                                 Style::default().fg(colors.red).add_modifier(Modifier::BOLD)
                             }
