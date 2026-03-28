@@ -2,7 +2,7 @@ use clap::Parser;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "gh-news")]
+#[command(name = "gh-news", version)]
 #[command(about = "GitHub notifications TUI built with Rust", long_about = None)]
 pub struct Args {
     /// Show all (read/unread) notifications
