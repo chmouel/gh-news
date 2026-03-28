@@ -13,14 +13,23 @@ pub enum PreviewData {
         comments: u64,
         mergeable: String,
         body: String,
+        labels: Vec<String>,
+        review_decision: String,
+        is_draft: bool,
+        ci_status: String,
+        additions: u64,
+        deletions: u64,
+        changed_files: u64,
     },
     Issue {
         number: String,
         title: String,
         state: String,
+        state_reason: String,
         author: String,
         comments: u64,
         body: String,
+        labels: Vec<String>,
     },
     Commit {
         sha: String,
@@ -50,6 +59,8 @@ pub enum PreviewData {
         answered: bool,
         body: String,
         url: String,
+        upvotes: u64,
+        labels: Vec<String>,
     },
     Generic {
         title: String,
@@ -73,6 +84,7 @@ pub enum PreviewHeaderKind {
     Count,
     Date,
     PackageList,
+    Tag,
 }
 
 #[derive(Debug, Clone)]
@@ -106,7 +118,7 @@ impl PreviewView {
     pub fn from(preview: &PreviewData) -> Self {
         use PreviewHeaderKind::{
             AccentCommit, AccentDiscussion, AccentIssue, AccentPullRequest, AccentRelease, Author,
-            Count, Date, Dim, Label, PackageList, Status, Title, Warning,
+            Count, Date, Dim, Label, PackageList, Status, Tag, Title, Warning,
         };
 
         fn part<T: Into<String>>(text: T, kind: PreviewHeaderKind) -> PreviewHeaderPart {
@@ -125,53 +137,104 @@ impl PreviewView {
                 author,
                 comments,
                 mergeable,
+                labels,
+                review_decision,
+                is_draft,
+                ci_status,
+                additions,
+                deletions,
+                changed_files,
                 ..
-            } => vec![
-                line(vec![
-                    part("PR #", AccentPullRequest),
-                    part(number.clone(), AccentPullRequest),
-                    part(" - ", Dim),
-                    part(title.clone(), Title),
-                    part(" [", Dim),
-                    part(state.clone(), Status),
-                    part("]", Dim),
-                ]),
-                line(vec![
-                    part("Author: ", Label),
-                    part(author.clone(), Author),
-                    part(" | ", Dim),
-                    part("Comments: ", Label),
-                    part(comments.to_string(), Count),
-                    part(" | ", Dim),
-                    part("Mergeable: ", Label),
-                    part(mergeable.clone(), Status),
-                ]),
-            ],
+            } => {
+                let mut state_text = state.clone();
+                if *is_draft {
+                    state_text = "draft".to_string();
+                }
+                let mut lines_vec = vec![
+                    line(vec![
+                        part("PR #", AccentPullRequest),
+                        part(number.clone(), AccentPullRequest),
+                        part(" - ", Dim),
+                        part(title.clone(), Title),
+                        part(" [", Dim),
+                        part(state_text, Status),
+                        part("]", Dim),
+                    ]),
+                    line(vec![
+                        part("Author: ", Label),
+                        part(author.clone(), Author),
+                        part(" | ", Dim),
+                        part("Comments: ", Label),
+                        part(comments.to_string(), Count),
+                        part(" | ", Dim),
+                        part("Mergeable: ", Label),
+                        part(mergeable.clone(), Status),
+                    ]),
+                    line(vec![
+                        part("Review: ", Label),
+                        part(review_decision.clone(), Status),
+                        part(" | ", Dim),
+                        part("CI: ", Label),
+                        part(ci_status.clone(), Status),
+                        part(" | ", Dim),
+                        part(
+                            format!("+{} -{} ({}files)", additions, deletions, changed_files),
+                            Count,
+                        ),
+                    ]),
+                ];
+                if !labels.is_empty() {
+                    lines_vec.push(line(vec![
+                        part("Labels: ", Label),
+                        part(labels.join(", "), Tag),
+                    ]));
+                }
+                lines_vec
+            }
             PreviewData::Issue {
                 number,
                 title,
                 state,
+                state_reason,
                 author,
                 comments,
+                labels,
                 ..
-            } => vec![
-                line(vec![
-                    part("Issue #", AccentIssue),
-                    part(number.clone(), AccentIssue),
-                    part(" - ", Dim),
-                    part(title.clone(), Title),
-                    part(" [", Dim),
-                    part(state.clone(), Status),
-                    part("]", Dim),
-                ]),
-                line(vec![
-                    part("Author: ", Label),
-                    part(author.clone(), Author),
-                    part(" | ", Dim),
-                    part("Comments: ", Label),
-                    part(comments.to_string(), Count),
-                ]),
-            ],
+            } => {
+                let display_state = if state_reason.is_empty()
+                    || state_reason == "OPEN"
+                    || state_reason == "unknown"
+                {
+                    state.clone()
+                } else {
+                    format!("{} ({})", state, state_reason.to_lowercase())
+                };
+                let mut lines_vec = vec![
+                    line(vec![
+                        part("Issue #", AccentIssue),
+                        part(number.clone(), AccentIssue),
+                        part(" - ", Dim),
+                        part(title.clone(), Title),
+                        part(" [", Dim),
+                        part(display_state, Status),
+                        part("]", Dim),
+                    ]),
+                    line(vec![
+                        part("Author: ", Label),
+                        part(author.clone(), Author),
+                        part(" | ", Dim),
+                        part("Comments: ", Label),
+                        part(comments.to_string(), Count),
+                    ]),
+                ];
+                if !labels.is_empty() {
+                    lines_vec.push(line(vec![
+                        part("Labels: ", Label),
+                        part(labels.join(", "), Tag),
+                    ]));
+                }
+                lines_vec
+            }
             PreviewData::Commit { sha, author, .. } => vec![
                 line(vec![
                     part("Commit ", AccentCommit),
@@ -235,31 +298,45 @@ impl PreviewView {
                 comments,
                 category,
                 answered,
+                upvotes,
+                labels,
                 ..
-            } => vec![
-                line(vec![
-                    part("Discussion #", AccentDiscussion),
-                    part(number.clone(), AccentDiscussion),
-                    part(" - ", Dim),
-                    part(title.clone(), Title),
-                    part(" [", Dim),
-                    part(state.clone(), Status),
-                    part("]", Dim),
-                ]),
-                line(vec![
-                    part("Author: ", Label),
-                    part(author.clone(), Author),
-                    part(" | ", Dim),
-                    part("Category: ", Label),
-                    part(category.clone(), Count),
-                    part(" | ", Dim),
-                    part("Answered: ", Label),
-                    part(if *answered { "Yes" } else { "No" }, Status),
-                    part(" | ", Dim),
-                    part("Comments: ", Label),
-                    part(comments.to_string(), Count),
-                ]),
-            ],
+            } => {
+                let mut lines_vec = vec![
+                    line(vec![
+                        part("Discussion #", AccentDiscussion),
+                        part(number.clone(), AccentDiscussion),
+                        part(" - ", Dim),
+                        part(title.clone(), Title),
+                        part(" [", Dim),
+                        part(state.clone(), Status),
+                        part("]", Dim),
+                    ]),
+                    line(vec![
+                        part("Author: ", Label),
+                        part(author.clone(), Author),
+                        part(" | ", Dim),
+                        part("Category: ", Label),
+                        part(category.clone(), Count),
+                        part(" | ", Dim),
+                        part("Answered: ", Label),
+                        part(if *answered { "Yes" } else { "No" }, Status),
+                        part(" | ", Dim),
+                        part("Comments: ", Label),
+                        part(comments.to_string(), Count),
+                        part(" | ", Dim),
+                        part("Upvotes: ", Label),
+                        part(upvotes.to_string(), Count),
+                    ]),
+                ];
+                if !labels.is_empty() {
+                    lines_vec.push(line(vec![
+                        part("Labels: ", Label),
+                        part(labels.join(", "), Tag),
+                    ]));
+                }
+                lines_vec
+            }
         };
 
         Self {
@@ -297,6 +374,18 @@ impl fmt::Display for PreviewData {
         let view = PreviewView::from(self);
         write!(f, "{}", view.as_text())
     }
+}
+
+fn extract_label_names(node: &serde_json::Value) -> Vec<String> {
+    node.get("labels")
+        .and_then(|l| l.get("nodes"))
+        .and_then(|n| n.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|l| l.get("name").and_then(|n| n.as_str()).map(String::from))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 pub struct PreviewFetcher;
@@ -413,18 +502,46 @@ impl PreviewFetcher {
         repo: &str,
         number: String,
     ) -> Result<PreviewData> {
-        let parts: Vec<&str> = repo.split('/').collect();
-        if parts.len() != 2 {
-            return Err(crate::error::Error::Config(
-                "Invalid repo format".to_string(),
-            ));
-        }
+        let (owner, repo_name) = repo
+            .split_once('/')
+            .ok_or_else(|| crate::error::Error::Config("Invalid repo format".to_string()))?;
 
-        let issue_num: u64 = number
+        let issue_num: i64 = number
             .parse()
             .map_err(|_| crate::error::Error::Config("Invalid issue number".to_string()))?;
 
-        let issue = client.get_issue(parts[0], parts[1], issue_num)?;
+        let query = r#"
+            query($owner: String!, $repo: String!, $number: Int!) {
+                repository(owner: $owner, name: $repo) {
+                    issue(number: $number) {
+                        number
+                        title
+                        body
+                        state
+                        stateReason
+                        author { login }
+                        comments { totalCount }
+                        labels(first: 10) { nodes { name } }
+                    }
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({
+            "owner": owner,
+            "repo": repo_name,
+            "number": issue_num,
+        });
+
+        let data = client.graphql(query, variables)?;
+
+        let issue = data
+            .get("repository")
+            .and_then(|r| r.get("issue"))
+            .filter(|d| !d.is_null())
+            .ok_or_else(|| {
+                crate::error::Error::Config("Issue not found in response".to_string())
+            })?;
 
         let title = issue
             .get("title")
@@ -439,39 +556,92 @@ impl PreviewFetcher {
         let state = issue
             .get("state")
             .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
+            .unwrap_or("OPEN")
+            .to_lowercase();
+        let state_reason = issue
+            .get("stateReason")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
             .to_string();
         let author = issue
-            .get("user")
+            .get("author")
             .and_then(|v| v.get("login"))
             .and_then(|v| v.as_str())
             .unwrap_or("unknown")
             .to_string();
-        let comments = issue.get("comments").and_then(|v| v.as_u64()).unwrap_or(0);
+        let comments = issue
+            .get("comments")
+            .and_then(|v| v.get("totalCount"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let labels = extract_label_names(issue);
 
         Ok(PreviewData::Issue {
             number,
             title,
             state,
+            state_reason,
             author,
             comments,
             body,
+            labels,
         })
     }
 
     fn fetch_pr_preview(client: &GitHubClient, repo: &str, number: String) -> Result<PreviewData> {
-        let parts: Vec<&str> = repo.split('/').collect();
-        if parts.len() != 2 {
-            return Err(crate::error::Error::Config(
-                "Invalid repo format".to_string(),
-            ));
-        }
+        let (owner, repo_name) = repo
+            .split_once('/')
+            .ok_or_else(|| crate::error::Error::Config("Invalid repo format".to_string()))?;
 
-        let pr_num: u64 = number
+        let pr_num: i64 = number
             .parse()
             .map_err(|_| crate::error::Error::Config("Invalid PR number".to_string()))?;
 
-        let pr = client.get_pr(parts[0], parts[1], pr_num)?;
+        let query = r#"
+            query($owner: String!, $repo: String!, $number: Int!) {
+                repository(owner: $owner, name: $repo) {
+                    pullRequest(number: $number) {
+                        number
+                        title
+                        body
+                        state
+                        merged
+                        isDraft
+                        mergeable
+                        reviewDecision
+                        additions
+                        deletions
+                        changedFiles
+                        author { login }
+                        comments { totalCount }
+                        labels(first: 10) { nodes { name } }
+                        commits(last: 1) {
+                            nodes {
+                                commit {
+                                    statusCheckRollup { state }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({
+            "owner": owner,
+            "repo": repo_name,
+            "number": pr_num,
+        });
+
+        let data = client.graphql(query, variables)?;
+
+        let pr = data
+            .get("repository")
+            .and_then(|r| r.get("pullRequest"))
+            .filter(|d| !d.is_null())
+            .ok_or_else(|| {
+                crate::error::Error::Config("Pull request not found in response".to_string())
+            })?;
 
         let title = pr
             .get("title")
@@ -483,20 +653,52 @@ impl PreviewFetcher {
             .and_then(|v| v.as_str())
             .unwrap_or("No description")
             .to_string();
-        let state = pr_state(&pr);
+        let merged = pr.get("merged").and_then(|v| v.as_bool()).unwrap_or(false);
+        let state = if merged {
+            "merged".to_string()
+        } else {
+            pr.get("state")
+                .and_then(|v| v.as_str())
+                .unwrap_or("OPEN")
+                .to_lowercase()
+        };
+        let is_draft = pr.get("isDraft").and_then(|v| v.as_bool()).unwrap_or(false);
+        let mergeable = match pr.get("mergeable").and_then(|v| v.as_str()) {
+            Some("MERGEABLE") => "Yes".to_string(),
+            Some("CONFLICTING") => "No".to_string(),
+            _ => "Unknown".to_string(),
+        };
+        let review_decision = pr
+            .get("reviewDecision")
+            .and_then(|v| v.as_str())
+            .unwrap_or("NONE")
+            .to_string();
         let author = pr
-            .get("user")
+            .get("author")
             .and_then(|v| v.get("login"))
             .and_then(|v| v.as_str())
             .unwrap_or("unknown")
             .to_string();
-        let comments = pr.get("comments").and_then(|v| v.as_u64()).unwrap_or(0);
-        let mergeable = pr
-            .get("mergeable")
-            .and_then(|v| v.as_bool())
-            .map(|b| if b { "Yes" } else { "No" })
-            .unwrap_or("Unknown")
+        let comments = pr
+            .get("comments")
+            .and_then(|v| v.get("totalCount"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let additions = pr.get("additions").and_then(|v| v.as_u64()).unwrap_or(0);
+        let deletions = pr.get("deletions").and_then(|v| v.as_u64()).unwrap_or(0);
+        let changed_files = pr.get("changedFiles").and_then(|v| v.as_u64()).unwrap_or(0);
+        let ci_status = pr
+            .get("commits")
+            .and_then(|v| v.get("nodes"))
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|n| n.get("commit"))
+            .and_then(|c| c.get("statusCheckRollup"))
+            .and_then(|s| s.get("state"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("UNKNOWN")
             .to_string();
+        let labels = extract_label_names(pr);
 
         Ok(PreviewData::PullRequest {
             number,
@@ -506,6 +708,13 @@ impl PreviewFetcher {
             comments,
             mergeable,
             body,
+            labels,
+            review_decision,
+            is_draft,
+            ci_status,
+            additions,
+            deletions,
+            changed_files,
         })
     }
 
@@ -717,6 +926,8 @@ impl PreviewFetcher {
                         category { name }
                         answer { id }
                         comments { totalCount }
+                        upvoteCount
+                        labels(first: 10) { nodes { name } }
                     }
                 }
             }
@@ -785,6 +996,11 @@ impl PreviewFetcher {
             .and_then(|v| v.get("totalCount"))
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
+        let upvotes = discussion
+            .get("upvoteCount")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let labels = extract_label_names(discussion);
 
         Ok(PreviewData::Discussion {
             number,
@@ -796,24 +1012,10 @@ impl PreviewFetcher {
             answered,
             body,
             url,
+            upvotes,
+            labels,
         })
     }
-}
-
-/// Derives the display state for a pull request by combining the `state` and
-/// `merged` fields from the GitHub API response. The API models these as
-/// separate fields — `state` is always `"open"` or `"closed"`, and `merged`
-/// is a boolean — so a closed+merged PR must be detected explicitly.
-fn pr_state(pr: &serde_json::Value) -> String {
-    let merged = pr.get("merged").and_then(|v| v.as_bool()).unwrap_or(false);
-    let state_str = if merged {
-        "merged"
-    } else {
-        pr.get("state")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown")
-    };
-    state_str.to_string()
 }
 
 #[cfg(test)]
@@ -822,27 +1024,14 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn test_pr_state_open() {
-        let pr = json!({"state": "open", "merged": false});
-        assert_eq!(pr_state(&pr), "open");
-    }
+    fn test_extract_label_names() {
+        let node = json!({
+            "labels": { "nodes": [{ "name": "bug" }, { "name": "urgent" }] }
+        });
+        assert_eq!(extract_label_names(&node), vec!["bug", "urgent"]);
 
-    #[test]
-    fn test_pr_state_closed_not_merged() {
-        let pr = json!({"state": "closed", "merged": false});
-        assert_eq!(pr_state(&pr), "closed");
-    }
-
-    #[test]
-    fn test_pr_state_merged() {
-        let pr = json!({"state": "closed", "merged": true});
-        assert_eq!(pr_state(&pr), "merged");
-    }
-
-    #[test]
-    fn test_pr_state_missing_fields() {
-        let pr = json!({});
-        assert_eq!(pr_state(&pr), "unknown");
+        let empty = json!({});
+        assert!(extract_label_names(&empty).is_empty());
     }
 
     #[test]
@@ -856,7 +1045,9 @@ mod tests {
             "author": { "login": "octocat" },
             "category": { "name": "Q&A" },
             "answer": { "id": "DC_abc123" },
-            "comments": { "totalCount": 5 }
+            "comments": { "totalCount": 5 },
+            "upvoteCount": 3,
+            "labels": { "nodes": [{ "name": "help wanted" }] }
         });
 
         let result = PreviewFetcher::parse_discussion_response(&discussion).unwrap();
@@ -871,6 +1062,8 @@ mod tests {
                 answered,
                 body,
                 url,
+                upvotes,
+                labels,
             } => {
                 assert_eq!(number, "42");
                 assert_eq!(title, "How do I configure auth?");
@@ -881,6 +1074,8 @@ mod tests {
                 assert!(answered);
                 assert_eq!(body, "I'm trying to set up OAuth and need help.");
                 assert_eq!(url, "https://github.com/owner/repo/discussions/42");
+                assert_eq!(upvotes, 3);
+                assert_eq!(labels, vec!["help wanted"]);
             }
             _ => panic!("Expected PreviewData::Discussion"),
         }
@@ -925,6 +1120,8 @@ mod tests {
                 author,
                 category,
                 answered,
+                upvotes,
+                labels,
                 ..
             } => {
                 assert_eq!(number, "0");
@@ -933,6 +1130,8 @@ mod tests {
                 assert_eq!(author, "unknown");
                 assert_eq!(category, "General");
                 assert!(!answered);
+                assert_eq!(upvotes, 0);
+                assert!(labels.is_empty());
             }
             _ => panic!("Expected PreviewData::Discussion"),
         }

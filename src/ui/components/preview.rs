@@ -116,60 +116,67 @@ impl PreviewWidget {
             .header
             .iter()
             .map(|line| {
-                let spans: Vec<Span> = line
-                    .parts
-                    .iter()
-                    .map(|part| {
-                        let style = match part.kind {
-                            PreviewHeaderKind::Title => {
-                                Style::default().fg(colors.fg).add_modifier(Modifier::BOLD)
-                            }
-                            PreviewHeaderKind::Label => Style::default().fg(colors.fg_dim),
-                            PreviewHeaderKind::Author => Style::default().fg(colors.cyan),
-                            PreviewHeaderKind::Count => Style::default()
-                                .fg(colors.yellow)
-                                .add_modifier(Modifier::BOLD),
-                            PreviewHeaderKind::Date => Style::default().fg(colors.fg_muted),
-                            PreviewHeaderKind::PackageList => Style::default().fg(colors.cyan),
-                            PreviewHeaderKind::Dim => Style::default().fg(colors.fg_dim),
-                            PreviewHeaderKind::AccentPullRequest => Style::default()
-                                .fg(colors.blue)
-                                .add_modifier(Modifier::BOLD),
-                            PreviewHeaderKind::AccentIssue => Style::default()
-                                .fg(colors.magenta)
-                                .add_modifier(Modifier::BOLD),
-                            PreviewHeaderKind::AccentCommit => Style::default()
-                                .fg(colors.yellow)
-                                .add_modifier(Modifier::BOLD),
-                            PreviewHeaderKind::AccentRelease => Style::default()
-                                .fg(colors.orange)
-                                .add_modifier(Modifier::BOLD),
-                            PreviewHeaderKind::AccentDiscussion => Style::default()
-                                .fg(colors.cyan)
-                                .add_modifier(Modifier::BOLD),
-                            PreviewHeaderKind::Warning => {
-                                Style::default().fg(colors.red).add_modifier(Modifier::BOLD)
-                            }
-                            PreviewHeaderKind::Status => {
-                                let lower = part.text.to_lowercase();
-                                let status_color = match lower.as_str() {
-                                    "open" | "yes" => colors.green,
-                                    "merged" => colors.magenta,
-                                    "closed" | "no" => colors.red,
-                                    "critical" | "high" => colors.red,
-                                    "medium" => colors.yellow,
-                                    "low" => colors.orange,
-                                    "unknown" => colors.fg_dim,
-                                    _ => colors.fg,
-                                };
-                                Style::default()
-                                    .fg(status_color)
-                                    .add_modifier(Modifier::BOLD)
-                            }
-                        };
-                        Span::styled(part.text.clone(), style)
-                    })
-                    .collect();
+                let spans: Vec<Span> =
+                    line.parts
+                        .iter()
+                        .map(|part| {
+                            let style = match part.kind {
+                                PreviewHeaderKind::Title => {
+                                    Style::default().fg(colors.fg).add_modifier(Modifier::BOLD)
+                                }
+                                PreviewHeaderKind::Label => Style::default().fg(colors.fg_dim),
+                                PreviewHeaderKind::Author => Style::default().fg(colors.cyan),
+                                PreviewHeaderKind::Count => Style::default()
+                                    .fg(colors.yellow)
+                                    .add_modifier(Modifier::BOLD),
+                                PreviewHeaderKind::Date => Style::default().fg(colors.fg_muted),
+                                PreviewHeaderKind::PackageList => Style::default().fg(colors.cyan),
+                                PreviewHeaderKind::Dim => Style::default().fg(colors.fg_dim),
+                                PreviewHeaderKind::AccentPullRequest => Style::default()
+                                    .fg(colors.blue)
+                                    .add_modifier(Modifier::BOLD),
+                                PreviewHeaderKind::AccentIssue => Style::default()
+                                    .fg(colors.magenta)
+                                    .add_modifier(Modifier::BOLD),
+                                PreviewHeaderKind::AccentCommit => Style::default()
+                                    .fg(colors.yellow)
+                                    .add_modifier(Modifier::BOLD),
+                                PreviewHeaderKind::AccentRelease => Style::default()
+                                    .fg(colors.orange)
+                                    .add_modifier(Modifier::BOLD),
+                                PreviewHeaderKind::AccentDiscussion => Style::default()
+                                    .fg(colors.cyan)
+                                    .add_modifier(Modifier::BOLD),
+                                PreviewHeaderKind::Warning => {
+                                    Style::default().fg(colors.red).add_modifier(Modifier::BOLD)
+                                }
+                                PreviewHeaderKind::Tag => Style::default()
+                                    .fg(colors.cyan)
+                                    .add_modifier(Modifier::ITALIC),
+                                PreviewHeaderKind::Status => {
+                                    let lower = part.text.to_lowercase();
+                                    let status_color = match lower.as_str() {
+                                        "open" | "yes" | "approved" | "success" => colors.green,
+                                        "merged" => colors.magenta,
+                                        "closed" | "no" | "changes_requested" | "failure"
+                                        | "error" => colors.red,
+                                        "draft" | "pending" | "expected" | "review_required" => {
+                                            colors.yellow
+                                        }
+                                        "critical" | "high" => colors.red,
+                                        "medium" => colors.yellow,
+                                        "low" => colors.orange,
+                                        "none" | "unknown" => colors.fg_dim,
+                                        _ => colors.fg,
+                                    };
+                                    Style::default()
+                                        .fg(status_color)
+                                        .add_modifier(Modifier::BOLD)
+                                }
+                            };
+                            Span::styled(part.text.clone(), style)
+                        })
+                        .collect();
                 Line::from(spans)
             })
             .collect()

@@ -156,22 +156,6 @@ impl GitHubClient {
         self.send_no_content(self.client.put(&url).json(&payload))
     }
 
-    pub fn get_issue(&self, owner: &str, repo: &str, number: u64) -> Result<Value> {
-        let url = format!(
-            "{}/repos/{}/{}/issues/{}",
-            self.api_base, owner, repo, number
-        );
-        self.get_json(&url)
-    }
-
-    pub fn get_pr(&self, owner: &str, repo: &str, number: u64) -> Result<Value> {
-        let url = format!(
-            "{}/repos/{}/{}/pulls/{}",
-            self.api_base, owner, repo, number
-        );
-        self.get_json(&url)
-    }
-
     pub fn get_commit(&self, owner: &str, repo: &str, sha: &str) -> Result<Value> {
         let url = format!("{}/repos/{}/{}/commits/{}", self.api_base, owner, repo, sha);
         self.get_json(&url)
