@@ -254,7 +254,7 @@ impl PreviewView {
                     part(category.clone(), Count),
                     part(" | ", Dim),
                     part("Answered: ", Label),
-                    part(if *answered { "✓" } else { "✗" }, Status),
+                    part(if *answered { "Yes" } else { "No" }, Status),
                     part(" | ", Dim),
                     part("Comments: ", Label),
                     part(comments.to_string(), Count),
@@ -733,6 +733,7 @@ impl PreviewFetcher {
         let discussion = data
             .get("repository")
             .and_then(|r| r.get("discussion"))
+            .filter(|d| !d.is_null())
             .ok_or_else(|| {
                 crate::error::Error::Config("Discussion not found in response".to_string())
             })?;
