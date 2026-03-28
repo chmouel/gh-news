@@ -57,7 +57,7 @@ sed -i "s/^version = .*/version = \"${VERSION}\"/" ${vfile}
 cargo build --release
 git commit -S -m "Release ${VERSION} 🥳" ${vfile} Cargo.lock || true
 [[ ${VERSION} != v* ]] && VERSION="v${VERSION}"
-git tag -s ${VERSION}
+git tag -s ${VERSION} -m "Release ${VERSION} 🥳"
 git push --tags origin ${VERSION}
 git push origin main --no-verify
 [[ -n ${NO_PUBLISH:-""} ]] && exit
