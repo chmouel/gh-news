@@ -235,19 +235,19 @@ impl std::str::FromStr for NotificationReason {
     type Err = ();
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(match s {
+        Ok(match s.to_lowercase().as_str() {
             "assign" => NotificationReason::Assign,
             "author" => NotificationReason::Author,
             "comment" => NotificationReason::Comment,
             "invitation" => NotificationReason::Invitation,
             "manual" => NotificationReason::Manual,
             "mention" => NotificationReason::Mention,
-            "review_requested" => NotificationReason::ReviewRequested,
-            "security_alert" => NotificationReason::SecurityAlert,
-            "state_change" => NotificationReason::StateChange,
+            "review_requested" | "reviewrequested" => NotificationReason::ReviewRequested,
+            "security_alert" | "securityalert" => NotificationReason::SecurityAlert,
+            "state_change" | "statechange" => NotificationReason::StateChange,
             "subscribed" => NotificationReason::Subscribed,
-            "team_mention" => NotificationReason::TeamMention,
-            "ci_activity" => NotificationReason::CiActivity,
+            "team_mention" | "teammention" => NotificationReason::TeamMention,
+            "ci_activity" | "ciactivity" => NotificationReason::CiActivity,
             _ => NotificationReason::Unknown,
         })
     }

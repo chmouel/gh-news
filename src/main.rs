@@ -90,11 +90,16 @@ fn run() -> Result<()> {
             },
         )?;
 
-        let filter = Filter::new(opts.filter_pattern.as_deref())?;
+        let filter = Filter::from_config(opts.filter_pattern.as_deref(), &config)?;
         let to_process: Vec<_> = notifications.iter().filter(|n| filter.matches(n)).collect();
 
         // Use bulk API when marking all as read (no filter, no archive)
-        if !archive && opts.filter_pattern.is_none() {
+        if !archive
+            && opts.filter_pattern.is_none()
+            && config.exclude_types.is_empty()
+            && config.exclude_reasons.is_empty()
+            && config.exclude_repos.is_empty()
+        {
             client.mark_all_read(None)?;
         } else {
             for notif in &to_process {
@@ -139,8 +144,19 @@ fn run() -> Result<()> {
     let filter = opts
         .filter_pattern
         .as_deref()
-        .map(|pattern| Filter::new(Some(pattern)))
-        .transpose()?;
+        .map(|pattern| Filter::from_config(Some(pattern), &config))
+        .transpose()?
+        .or_else(|| {
+            // Even without a regex pattern, apply structured excludes if configured
+            if config.exclude_types.is_empty()
+                && config.exclude_reasons.is_empty()
+                && config.exclude_repos.is_empty()
+            {
+                None
+            } else {
+                Filter::from_config(None, &config).ok()
+            }
+        });
 
     // Always use config's default preview mode on startup
     let preview_mode = config.get_default_preview_mode();
@@ -294,7 +310,7 @@ fn handle_static_display(config: &Config, opts: &RuntimeOptions) -> Result<()> {
         },
     )?;
 
-    let filter = Filter::new(opts.filter_pattern.as_deref())?;
+    let filter = Filter::from_config(opts.filter_pattern.as_deref(), config)?;
 
     for notification in &notifications {
         if !filter.matches(notification) {

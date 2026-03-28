@@ -70,6 +70,22 @@ participating_only = false
 # CLI flag: --filter <REGEX> / -f <REGEX>
 # default_filter = ""
 
+# ─── Structured Exclude Filters ─────────────────────────────────────────
+# Exclude notifications by type, reason, or repository.
+# These are applied in addition to the regex filter above.
+#
+# Notification types: Issue, PullRequest (or PR), Discussion, Commit,
+#   Release, CheckSuite (or check_suite), Security
+# Notification reasons: assign, author, comment, invitation, manual,
+#   mention, review_requested, security_alert, state_change, subscribed,
+#   team_mention, ci_activity
+# Repository patterns: exact match ("org/repo") or glob ("org/*")
+#
+# Examples:
+# exclude_types = ["CheckSuite", "Release"]
+# exclude_reasons = ["subscribed", "ci_activity"]
+# exclude_repos = ["dependabot/*", "some-org/noisy-repo"]
+
 # ==============================================================================
 # DISPLAY SETTINGS
 # ==============================================================================

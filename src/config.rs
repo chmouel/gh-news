@@ -57,6 +57,17 @@ pub struct Config {
     // State file path (optional override)
     pub state_file: Option<String>,
 
+    // Structured notification filters
+    /// Exclude notifications of these types (e.g., ["CheckSuite", "Release"]).
+    #[serde(default)]
+    pub exclude_types: Vec<String>,
+    /// Exclude notifications for these reasons (e.g., ["subscribed", "ci_activity"]).
+    #[serde(default)]
+    pub exclude_reasons: Vec<String>,
+    /// Exclude notifications from these repos. Supports glob patterns (e.g., ["org/*"]).
+    #[serde(default)]
+    pub exclude_repos: Vec<String>,
+
     // User-defined actions for notifications
     #[serde(default)]
     pub actions: Vec<Action>,
@@ -82,6 +93,9 @@ impl Default for Config {
             on_new_notification_command: None,
             github_host: "github.com".to_string(),
             state_file: None,
+            exclude_types: Vec::new(),
+            exclude_reasons: Vec::new(),
+            exclude_repos: Vec::new(),
             actions: Vec::new(),
         }
     }
@@ -260,6 +274,27 @@ command = "true"
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.actions.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_exclude_filters_from_toml() {
+        let toml_str = r#"
+exclude_types = ["CheckSuite", "Release"]
+exclude_reasons = ["subscribed", "ci_activity"]
+exclude_repos = ["org/*", "some-org/noisy-repo"]
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.exclude_types, vec!["CheckSuite", "Release"]);
+        assert_eq!(config.exclude_reasons, vec!["subscribed", "ci_activity"]);
+        assert_eq!(config.exclude_repos, vec!["org/*", "some-org/noisy-repo"]);
+    }
+
+    #[test]
+    fn test_exclude_filters_default_empty() {
+        let config = Config::default();
+        assert!(config.exclude_types.is_empty());
+        assert!(config.exclude_reasons.is_empty());
+        assert!(config.exclude_repos.is_empty());
     }
 
     #[test]

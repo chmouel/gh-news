@@ -2112,10 +2112,10 @@ impl App {
         } else {
             // Try as regex first, fall back to case-insensitive literal match
             let pattern = &self.state.search_query;
-            let filter = Filter::new(Some(&format!("(?i){}", pattern)))
+            let filter = Filter::from_pattern(Some(&format!("(?i){}", pattern)))
                 .or_else(|_| {
                     // Invalid regex, escape it and use as literal
-                    Filter::new(Some(&format!("(?i){}", regex::escape(pattern))))
+                    Filter::from_pattern(Some(&format!("(?i){}", regex::escape(pattern))))
                 })
                 .ok();
             self.state.set_filter(filter);

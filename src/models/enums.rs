@@ -53,6 +53,25 @@ impl std::fmt::Display for NotificationReason {
     }
 }
 
+impl std::str::FromStr for NotificationType {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.to_lowercase().as_str() {
+            "issue" => NotificationType::Issue,
+            "pullrequest" | "pull_request" | "pr" => NotificationType::PullRequest,
+            "discussion" => NotificationType::Discussion,
+            "commit" => NotificationType::Commit,
+            "release" => NotificationType::Release,
+            "checksuite" | "check_suite" => NotificationType::CheckSuite,
+            "repositoryvulnerabilityalert" | "security" | "security_alert" => {
+                NotificationType::RepositoryVulnerabilityAlert
+            }
+            _ => NotificationType::Unknown,
+        })
+    }
+}
+
 impl std::fmt::Display for NotificationType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

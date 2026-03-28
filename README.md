@@ -156,6 +156,11 @@ show_read = false            # show read notifications (like --all)
 participating_only = false   # only participating (like --participating)
 default_filter = ""          # regex filter always applied
 
+# Structured exclude filters
+exclude_types = ["CheckSuite"]           # by type: Issue, PR, Release, CheckSuite, etc.
+exclude_reasons = ["subscribed"]         # by reason: subscribed, ci_activity, etc.
+exclude_repos = ["noisy-org/*"]          # by repo: exact or glob pattern
+
 # Display
 default_preview_mode = "vertical"    # "off", "horizontal", or "vertical"
 repos_collapsed = false              # start with repos collapsed
