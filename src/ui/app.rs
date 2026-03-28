@@ -280,9 +280,13 @@ impl App {
         ) {
             return None;
         }
-        if let Some(PreviewData::Discussion { url, .. }) = &self.state.preview_content {
-            if !url.is_empty() {
-                return Some(url.clone());
+        if let Some(preview_manager) = &self.preview_manager {
+            if let Some(PreviewData::Discussion { url, .. }) =
+                preview_manager.get_cached(&notification.id)
+            {
+                if !url.is_empty() {
+                    return Some(url.clone());
+                }
             }
         }
         None

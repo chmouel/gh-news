@@ -696,12 +696,9 @@ impl PreviewFetcher {
         repo: &str,
         number: String,
     ) -> Result<PreviewData> {
-        let parts: Vec<&str> = repo.split('/').collect();
-        if parts.len() != 2 {
-            return Err(crate::error::Error::Config(
-                "Invalid repo format".to_string(),
-            ));
-        }
+        let (owner, repo_name) = repo
+            .split_once('/')
+            .ok_or_else(|| crate::error::Error::Config("Invalid repo format".to_string()))?;
 
         let discussion_num: i64 = number
             .parse()
@@ -726,8 +723,8 @@ impl PreviewFetcher {
         "#;
 
         let variables = serde_json::json!({
-            "owner": parts[0],
-            "repo": parts[1],
+            "owner": owner,
+            "repo": repo_name,
             "number": discussion_num,
         });
 
@@ -781,11 +778,7 @@ impl PreviewFetcher {
             .and_then(|v| v.as_str())
             .unwrap_or("General")
             .to_string();
-        let answered = discussion.get("answer").is_some()
-            && !discussion
-                .get("answer")
-                .unwrap_or(&serde_json::Value::Null)
-                .is_null();
+        let answered = discussion.get("answer").is_some_and(|v| !v.is_null());
         let comments = discussion
             .get("comments")
             .and_then(|v| v.get("totalCount"))
