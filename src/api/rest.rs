@@ -188,8 +188,8 @@ impl GitHubClient {
     /// Execute a GraphQL query against the GitHub API.
     ///
     /// GitHub Discussions are only available via GraphQL, so this method
-    /// complements the REST helpers above. See the PR description for
-    /// discussion of the trade-off of keeping this in `rest.rs`.
+    /// complements the REST helpers above. See
+    /// https://github.com/chmouel/gh-news/pull/27 for discussion of the trade-off of keeping this in `rest.rs`.
     pub fn graphql(&self, query: &str, variables: serde_json::Value) -> Result<serde_json::Value> {
         let url = if self.api_base.contains("/api/v3") {
             // GHE: https://HOST/api/graphql
