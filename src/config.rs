@@ -51,6 +51,9 @@ pub struct Config {
     // GitHub Enterprise support
     pub github_host: String,
 
+    // Notification cache
+    pub cache_file: Option<String>,
+
     // State file path (optional override)
     pub state_file: Option<String>,
 
@@ -74,6 +77,7 @@ impl Default for Config {
             org_grouping: OrgGroupingMode::default(),
             auto_mark_read: true,
             auto_archive: false,
+            cache_file: None,
             browser_command: None,
             on_new_notification_command: None,
             github_host: "github.com".to_string(),

@@ -7,7 +7,7 @@ use crate::models::Notification;
 use crate::models::NotificationType;
 use crate::notifications::{fetch_notifications, NotificationFetchOptions};
 use crate::preview::PreviewData;
-use crate::preview_manager::PreviewManager;
+use crate::preview_manager::{CacheStatus, PreviewManager, PRIORITY_HIGH, PRIORITY_LOW};
 use crate::state::{AppState, ConfirmAction, InputMode, MarkAllOption, PaneFocus, PreviewMode};
 use crate::terminal::Terminal;
 use crate::ui::components::{
@@ -20,6 +20,7 @@ use crossterm::event::{
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
@@ -88,6 +89,10 @@ pub struct App {
     pending_mark_read: Option<(String, Instant)>, // (notification_id, timestamp)
     // Track if pinned notifications need to be saved
     pinned_state_dirty: bool,
+    // Notification cache
+    cache_path: Option<PathBuf>,
+    cache_options_hash: Option<String>,
+    background_refresh_rx: Option<Receiver<crate::error::Result<InitialLoadData>>>,
 }
 
 impl App {
@@ -122,6 +127,9 @@ impl App {
             auto_archive_enabled: false,
             pending_mark_read: None,
             pinned_state_dirty: false,
+            cache_path: None,
+            cache_options_hash: None,
+            background_refresh_rx: None,
         }
     }
 
@@ -177,6 +185,32 @@ impl App {
                 self.pending_mark_read = None;
             }
         }
+    }
+
+    fn save_notifications_cache(&self, notifications: &[Notification]) {
+        if let (Some(ref path), Some(ref hash)) = (&self.cache_path, &self.cache_options_hash) {
+            let _ = crate::cache::save_cache(path, notifications, hash);
+        }
+    }
+
+    pub fn set_cache_info(&mut self, path: PathBuf, options_hash: String) {
+        self.cache_path = Some(path);
+        self.cache_options_hash = Some(options_hash);
+    }
+
+    /// Apply cached notification data immediately (no loading screen).
+    pub fn apply_cached_load(&mut self, data: InitialLoadData, settings: PendingStateSettings) {
+        self.pending_state_settings = Some(settings);
+        self.apply_initial_load(data);
+    }
+
+    /// Start a background refresh that will silently update notifications
+    /// after a cache-hit startup.
+    pub fn start_background_refresh(
+        &mut self,
+        rx: Receiver<crate::error::Result<InitialLoadData>>,
+    ) {
+        self.background_refresh_rx = Some(rx);
     }
 
     pub fn set_api_client(&mut self, client: crate::api::GitHubClient) {
@@ -238,6 +272,13 @@ impl App {
 
         self.update_state(app_state);
         self.fetch_preview_for_selected();
+
+        // Warm the cache for all notifications at low priority so navigation feels instant.
+        // The selected notification is already queued at high priority above.
+        if let Some(ref pm) = self.preview_manager {
+            pm.prefetch_all(&self.state.notifications);
+        }
+
         self.last_refresh = Instant::now();
     }
 
@@ -446,6 +487,10 @@ impl App {
                         per_page: self.config.pagination_size,
                     },
                 )?;
+
+                // Update notification cache
+                self.save_notifications_cache(&all_notifications);
+
                 for pinned in self.state.get_pinned_notifications() {
                     if !all_notifications.iter().any(|n| n.id == pinned.id) {
                         all_notifications.push(pinned.clone());
@@ -460,6 +505,13 @@ impl App {
                 let filter_pattern = self.state.filter_pattern.clone();
 
                 self.state.set_notifications(all_notifications);
+
+                // Mark stale cached previews and get the set of invalidated IDs.
+                let invalidated = if let Some(ref pm) = self.preview_manager {
+                    pm.invalidate_notifications(&self.state.notifications)
+                } else {
+                    std::collections::HashSet::new()
+                };
 
                 // Execute hook for new notifications if configured
                 if let Some(ref hook_command) = self.config.on_new_notification_command {
@@ -523,16 +575,93 @@ impl App {
                     self.state.select_first_notification();
                 }
 
-                // Auto-fetch preview for selected notification after refresh
+                // Update the preview pane for the restored selection.
+                let selected_was_invalidated = self
+                    .state
+                    .selected_notification()
+                    .map(|n| invalidated.contains(&n.id))
+                    .unwrap_or(false);
+
                 if self.state.show_preview() {
-                    self.auto_fetch_preview_for_selected();
+                    // Always refresh preview content for the current selection so stale
+                    // content from a previous selection is never shown.
+                    self.fetch_preview_for_selected_notification();
+                } else if selected_was_invalidated {
+                    // Preview pane is off but the selected entry was invalidated: clear the
+                    // cached UI content so pressing Tab won't show stale data.
+                    self.state.preview_content = None;
                 }
+
+                // Background-revalidate all remaining stale entries (low priority).
+                // The selected notification is already handled above at high priority.
+                if let Some(ref pm) = self.preview_manager {
+                    let skip_id = self.state.selected_notification().map(|n| n.id.clone());
+                    pm.revalidate_all_stale(&self.state.notifications, skip_id.as_deref());
+                }
+
+                // Prefetch neighbours regardless of preview visibility.
+                self.prefetch_neighbour_previews();
 
                 self.state.loading = false;
                 self.last_refresh = Instant::now();
             }
         }
         Ok(())
+    }
+
+    /// Merge freshly fetched notifications into the current state, preserving
+    /// the user's selection, filter, scroll position, and collapsed repos.
+    /// Used by the background refresh after a cache-hit startup.
+    fn merge_refreshed_notifications(&mut self, mut notifications: Vec<Notification>) {
+        // Merge pinned notifications
+        for pinned in self.state.get_pinned_notifications() {
+            if !notifications.iter().any(|n| n.id == pinned.id) {
+                notifications.push(pinned.clone());
+            }
+        }
+
+        // Preserve current selection
+        let old_notif_id = self.state.selected_notification().map(|n| n.id.clone());
+
+        // Preserve current filter
+        let current_filter = self.state.filter.clone();
+        let filter_pattern = self.state.filter_pattern.clone();
+
+        self.state.set_notifications(notifications);
+
+        // Mark stale cached previews
+        if let Some(ref pm) = self.preview_manager {
+            pm.invalidate_notifications(&self.state.notifications);
+        }
+
+        // Update previous notification IDs for hook tracking
+        self.previous_notification_ids = self
+            .state
+            .notifications
+            .iter()
+            .map(|n| n.id.clone())
+            .collect();
+
+        // Restore filter
+        self.state.set_filter(current_filter);
+        self.state.set_filter_pattern(filter_pattern);
+
+        // Restore selection
+        if let Some(old_id) = old_notif_id {
+            if !self.state.select_notification_by_id(&old_id) {
+                self.state.select_first_notification();
+            }
+        } else {
+            self.state.select_first_notification();
+        }
+
+        // Refresh preview for the current selection
+        if self.state.show_preview() {
+            self.fetch_preview_for_selected_notification();
+        }
+
+        self.prefetch_neighbour_previews();
+        self.last_refresh = Instant::now();
     }
 
     pub fn update_state(&mut self, state: AppState) {
@@ -542,20 +671,19 @@ impl App {
     }
 
     fn auto_fetch_preview_for_selected(&mut self) {
-        // Only auto-fetch if preview is enabled and there's no content yet
-        // Used for initial load
+        // Only auto-fetch if preview is enabled and there's no content yet.
+        // Used for initial load.
         if !self.state.show_preview() || self.state.preview_content.is_some() {
             return;
         }
 
         self.fetch_preview_for_selected_notification();
-        self.prefetch_next_preview();
+        self.prefetch_neighbour_previews();
     }
 
     fn fetch_preview_for_selected_notification(&mut self) {
-        // Get selected notification and clone data we need
-        let (notification_id, notification_clone) = match self.state.selected_notification() {
-            Some(n) => (n.id.clone(), n.clone()),
+        let notification = match self.state.selected_notification() {
+            Some(n) => n.clone(),
             None => {
                 self.state.preview_content = None;
                 return;
@@ -567,68 +695,74 @@ impl App {
             return;
         };
 
-        if let Some(cached) = preview_manager.get_cached(&notification_id) {
-            self.state.preview_content = Some(cached);
-            self.state.preview_scroll = 0;
-            return;
+        match preview_manager.get_cached_status(&notification) {
+            CacheStatus::Fresh(data) => {
+                self.state.preview_content = Some(data);
+                self.state.preview_scroll = 0;
+            }
+            CacheStatus::Stale(data) => {
+                // Show the cached content immediately and revalidate in the background.
+                self.state.preview_content = Some(data);
+                self.state.preview_scroll = 0;
+                preview_manager.request_revalidation(&notification, PRIORITY_HIGH);
+            }
+            CacheStatus::Miss => {
+                if preview_manager.is_loading(&notification.id) {
+                    self.state.preview_content = Some(PreviewData::Generic {
+                        title: "Loading details...".to_string(),
+                        body: "⏳ Fetching details...\n\nThis may take a moment.".to_string(),
+                    });
+                    return;
+                }
+                preview_manager.request_preview(&notification, PRIORITY_HIGH);
+                self.state.preview_content = Some(PreviewData::Generic {
+                    title: "Loading details...".to_string(),
+                    body: "⏳ Fetching details...\n\nThis may take a moment.".to_string(),
+                });
+                self.state.preview_scroll = 0;
+            }
         }
-
-        if preview_manager.is_loading(&notification_id) {
-            self.state.preview_content = Some(PreviewData::Generic {
-                title: "Loading details...".to_string(),
-                body: "⏳ Fetching details...\n\nThis may take a moment.".to_string(),
-            });
-            return;
-        }
-
-        preview_manager.request_preview(&notification_clone);
-
-        self.state.preview_content = Some(PreviewData::Generic {
-            title: "Loading details...".to_string(),
-            body: "⏳ Fetching details...\n\nThis may take a moment.".to_string(),
-        });
-        self.state.preview_scroll = 0;
     }
 
     pub fn fetch_preview_for_selected(&mut self) {
         self.auto_fetch_preview_for_selected();
     }
 
-    /// Prefetch the next notification's details in the background
-    fn prefetch_next_preview(&mut self) {
-        // Don't prefetch if preview is disabled
-        if !self.state.show_preview() {
+    /// Prefetch the notification immediately before and after the current selection.
+    ///
+    /// Runs regardless of whether the preview pane is currently visible so that opening
+    /// the pane feels instant.  Only queues a request if the entry is not already cached
+    /// or in-flight.
+    fn prefetch_neighbour_previews(&mut self) {
+        let Some(preview_manager) = self.preview_manager.as_ref() else {
             return;
-        }
+        };
 
-        // Find next notification in tree
         let current_idx = self.state.selected_index;
 
-        // Search forward from current position for next Notification item
-        let next_notif = (current_idx + 1..self.state.tree_items.len()).find_map(|i| {
+        // Helper: queue a prefetch for the notification at tree index `i` if needed.
+        let find_notif = |i: usize| -> Option<Notification> {
             if let Some(crate::state::TreeItem::Notification(notif_idx)) =
                 self.state.tree_items.get(i)
             {
-                self.state.notifications.get(*notif_idx)
+                self.state.notifications.get(*notif_idx).cloned()
             } else {
                 None
             }
-        });
+        };
 
-        // If found, queue for prefetch
-        if let Some(notif) = next_notif {
-            let Some(preview_manager) = self.preview_manager.as_ref() else {
-                return;
-            };
+        // One ahead.
+        let next_notif = (current_idx + 1..self.state.tree_items.len()).find_map(&find_notif);
 
-            let notification_id = notif.id.clone();
-            if preview_manager.get_cached(&notification_id).is_some()
-                || preview_manager.is_loading(&notification_id)
+        // One behind.
+        let prev_notif = (0..current_idx).rev().find_map(find_notif);
+
+        for notif in [next_notif, prev_notif].into_iter().flatten() {
+            if preview_manager.get_cached(&notif.id).is_none()
+                && !preview_manager.is_loading(&notif.id)
             {
-                return;
+                preview_manager.request_preview(&notif, PRIORITY_LOW);
             }
-
-            preview_manager.request_preview(notif);
         }
     }
 
@@ -656,6 +790,24 @@ impl App {
                         return Err(crate::error::Error::Terminal(
                             "Initial load channel closed unexpectedly".to_string(),
                         ));
+                    }
+                    Err(TryRecvError::Empty) => {}
+                }
+            }
+
+            // Poll background refresh (after cache-hit startup)
+            if let Some(ref rx) = self.background_refresh_rx {
+                match rx.try_recv() {
+                    Ok(Ok(data)) => {
+                        self.background_refresh_rx = None;
+                        self.merge_refreshed_notifications(data.notifications);
+                    }
+                    Ok(Err(_)) => {
+                        // Background refresh failed; keep showing cached data
+                        self.background_refresh_rx = None;
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        self.background_refresh_rx = None;
                     }
                     Err(TryRecvError::Empty) => {}
                 }
@@ -1347,7 +1499,7 @@ impl App {
                 // Auto-fetch preview for the newly selected notification
                 if self.state.show_preview() {
                     self.fetch_preview_for_selected_notification();
-                    self.prefetch_next_preview();
+                    self.prefetch_neighbour_previews();
                 }
                 self.queue_auto_mark_read();
             }
@@ -1358,7 +1510,7 @@ impl App {
                 // Auto-fetch preview for the newly selected notification
                 if self.state.show_preview() {
                     self.fetch_preview_for_selected_notification();
-                    self.prefetch_next_preview();
+                    self.prefetch_neighbour_previews();
                 }
                 self.queue_auto_mark_read();
             }
@@ -1375,7 +1527,7 @@ impl App {
                     self.state.preview_scroll = 0;
                     if self.state.show_preview() {
                         self.fetch_preview_for_selected_notification();
-                        self.prefetch_next_preview();
+                        self.prefetch_neighbour_previews();
                     }
                     self.queue_auto_mark_read();
                 }
@@ -1393,7 +1545,7 @@ impl App {
                     self.state.preview_scroll = 0;
                     if self.state.show_preview() {
                         self.fetch_preview_for_selected_notification();
-                        self.prefetch_next_preview();
+                        self.prefetch_neighbour_previews();
                     }
                     self.queue_auto_mark_read();
                 }
@@ -1403,7 +1555,7 @@ impl App {
                 self.state.preview_scroll = 0;
                 if self.state.show_preview() {
                     self.fetch_preview_for_selected_notification();
-                    self.prefetch_next_preview();
+                    self.prefetch_neighbour_previews();
                 }
                 self.queue_auto_mark_read();
             }
@@ -1414,7 +1566,7 @@ impl App {
                 self.state.preview_scroll = 0;
                 if self.state.show_preview() {
                     self.fetch_preview_for_selected_notification();
-                    self.prefetch_next_preview();
+                    self.prefetch_neighbour_previews();
                 }
                 self.queue_auto_mark_read();
             }
@@ -1629,7 +1781,7 @@ impl App {
                             // Auto-fetch preview for the newly selected notification
                             if self.state.show_preview() {
                                 self.fetch_preview_for_selected_notification();
-                                self.prefetch_next_preview();
+                                self.prefetch_neighbour_previews();
                             }
                         }
                         // If marking as unread (was read, now unread), just update local state
@@ -1672,7 +1824,7 @@ impl App {
 
                     if self.state.show_preview() {
                         self.fetch_preview_for_selected_notification();
-                        self.prefetch_next_preview();
+                        self.prefetch_neighbour_previews();
                     }
 
                     self.state.status_message = Some(format!("Archived {} notifications", count));
@@ -1704,7 +1856,7 @@ impl App {
 
                     if self.state.show_preview() {
                         self.fetch_preview_for_selected_notification();
-                        self.prefetch_next_preview();
+                        self.prefetch_neighbour_previews();
                     }
 
                     self.state.status_message = Some("Archived notification".to_string());
@@ -1744,7 +1896,7 @@ impl App {
 
                     if self.state.show_preview() {
                         self.fetch_preview_for_selected_notification();
-                        self.prefetch_next_preview();
+                        self.prefetch_neighbour_previews();
                     }
 
                     // Build status message
@@ -1780,7 +1932,7 @@ impl App {
                     // Refresh preview for selected notification
                     if self.state.show_preview() {
                         self.fetch_preview_for_selected_notification();
-                        self.prefetch_next_preview();
+                        self.prefetch_neighbour_previews();
                     }
                 }
             }
@@ -1793,10 +1945,12 @@ impl App {
                 };
                 self.state.preview_scroll = 0;
 
-                // If showing preview and no content loaded, fetch it (uses cache)
-                if self.state.show_preview() && self.state.preview_content.is_none() {
+                // When the preview pane becomes visible, always (re-)fetch for the selected
+                // notification.  This ensures stale content is never silently reused and that
+                // a notification invalidated while preview was Off triggers revalidation now.
+                if self.state.show_preview() {
                     self.fetch_preview_for_selected_notification();
-                    self.prefetch_next_preview();
+                    self.prefetch_neighbour_previews();
                 }
             }
             KeyCode::Char('M') => {
@@ -2013,7 +2167,7 @@ impl App {
         self.state.preview_scroll = 0;
         if self.state.show_preview() {
             self.fetch_preview_for_selected_notification();
-            self.prefetch_next_preview();
+            self.prefetch_neighbour_previews();
         }
 
         self.pending_mark_read = None;
@@ -2275,12 +2429,12 @@ impl App {
                             // Fetch and show preview for the selected notification
                             if self.state.show_preview() {
                                 self.fetch_preview_for_selected_notification();
-                                self.prefetch_next_preview();
+                                self.prefetch_neighbour_previews();
                             } else {
                                 // Enable preview if it's off
                                 self.state.preview_mode = PreviewMode::Horizontal;
                                 self.fetch_preview_for_selected_notification();
-                                self.prefetch_next_preview();
+                                self.prefetch_neighbour_previews();
                             }
                             self.queue_auto_mark_read();
                         } else if let Some(crate::state::TreeItem::OrgHeader(_)) =
@@ -2316,7 +2470,7 @@ impl App {
                                 self.state.preview_scroll = 0;
                                 if self.state.show_preview() {
                                     self.fetch_preview_for_selected_notification();
-                                    self.prefetch_next_preview();
+                                    self.prefetch_neighbour_previews();
                                 }
                                 self.queue_auto_mark_read();
                             }
@@ -2386,7 +2540,7 @@ impl App {
                             // Fetch preview for the newly selected notification
                             if self.state.show_preview() {
                                 self.fetch_preview_for_selected_notification();
-                                self.prefetch_next_preview();
+                                self.prefetch_neighbour_previews();
                             }
                             self.queue_auto_mark_read();
                         }
