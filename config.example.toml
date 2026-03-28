@@ -129,6 +129,17 @@ auto_archive = false
 # CLI flag: (not available as flag, set via env or config)
 # browser_command = ""
 
+# ─── Notification Cache ──────────────────────────────────────────────────
+# Cache notifications locally so subsequent launches display data instantly
+# instead of waiting for the GitHub API. A background refresh always fetches
+# fresh data after the cached view is shown. Use --no-cache to bypass.
+#
+# Custom path for the notification cache file.
+# Default: ~/.cache/gh-news/notifications_cache.json
+# cache_file = "/path/to/cache.json"
+
+# ─── External Commands ──────────────────────────────────────────────────
+
 # Command to execute when a new notification arrives.
 # Useful for sending notifications to your desktop, playing a sound, etc.
 #

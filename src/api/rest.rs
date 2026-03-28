@@ -93,6 +93,16 @@ impl GitHubClient {
         self.send_json(self.client.get(url))
     }
 
+    /// Build a minimal client suitable for unit tests that never make real HTTP requests.
+    #[cfg(test)]
+    pub fn new_test() -> Self {
+        let client = Client::builder().build().unwrap();
+        Self {
+            client,
+            api_base: "http://localhost".to_string(),
+        }
+    }
+
     pub fn new(config: &Config) -> Result<Self> {
         let token = get_github_token(&config.github_host)?;
         let headers = default_headers(&token)?;

@@ -45,6 +45,10 @@ pub struct Args {
     #[arg(long)]
     pub no_auto_archive: bool,
 
+    /// Bypass notification cache and always fetch fresh from the API
+    #[arg(long)]
+    pub no_cache: bool,
+
     /// Path to state file (overrides config and default)
     #[arg(long)]
     pub state_file: Option<PathBuf>,
