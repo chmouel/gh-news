@@ -1701,7 +1701,10 @@ impl App {
                     }
                 }
             }
-            KeyCode::Char('.') => {
+            KeyCode::Char('.') | KeyCode::Char('r')
+                if !key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                let advance = key.code == KeyCode::Char('.');
                 if self.state.has_selection() {
                     // Toggle read status of all selected notifications
                     let selected_ids = self.state.get_selected_notification_ids();
@@ -1774,14 +1777,16 @@ impl App {
                                     self.state.toggle_notification_read(&notification_id);
                                 }
                             }
-                            // Move to next notification
-                            self.state.move_down();
-                            // Scroll preview to top when selection changes
-                            self.state.preview_scroll = 0;
-                            // Auto-fetch preview for the newly selected notification
-                            if self.state.show_preview() {
-                                self.fetch_preview_for_selected_notification();
-                                self.prefetch_neighbour_previews();
+                            if advance {
+                                // Move to next notification
+                                self.state.move_down();
+                                // Scroll preview to top when selection changes
+                                self.state.preview_scroll = 0;
+                                // Auto-fetch preview for the newly selected notification
+                                if self.state.show_preview() {
+                                    self.fetch_preview_for_selected_notification();
+                                    self.prefetch_neighbour_previews();
+                                }
                             }
                         }
                         // If marking as unread (was read, now unread), just update local state

@@ -123,7 +123,11 @@ impl HelpWidget {
                     },
                     HelpLine {
                         key: ".",
-                        desc: "Toggle read status (or mark selected)",
+                        desc: "Toggle read status and advance",
+                    },
+                    HelpLine {
+                        key: "r",
+                        desc: "Toggle read status (stay in place)",
                     },
                     HelpLine {
                         key: "d",
