@@ -40,6 +40,17 @@ pub enum PreviewData {
         affected_packages: Vec<String>,
         body: String,
     },
+    Discussion {
+        number: String,
+        title: String,
+        state: String,
+        author: String,
+        comments: u64,
+        category: String,
+        answered: bool,
+        body: String,
+        url: String,
+    },
     Generic {
         title: String,
         body: String,
@@ -56,6 +67,7 @@ pub enum PreviewHeaderKind {
     AccentIssue,
     AccentCommit,
     AccentRelease,
+    AccentDiscussion,
     Warning,
     Author,
     Count,
@@ -93,8 +105,8 @@ impl PreviewHeaderLine {
 impl PreviewView {
     pub fn from(preview: &PreviewData) -> Self {
         use PreviewHeaderKind::{
-            AccentCommit, AccentIssue, AccentPullRequest, AccentRelease, Author, Count, Date, Dim,
-            Label, PackageList, Status, Title, Warning,
+            AccentCommit, AccentDiscussion, AccentIssue, AccentPullRequest, AccentRelease, Author,
+            Count, Date, Dim, Label, PackageList, Status, Title, Warning,
         };
 
         fn part<T: Into<String>>(text: T, kind: PreviewHeaderKind) -> PreviewHeaderPart {
@@ -215,6 +227,39 @@ impl PreviewView {
                 ]
             }
             PreviewData::Generic { title, .. } => vec![line(vec![part(title.clone(), Title)])],
+            PreviewData::Discussion {
+                number,
+                title,
+                state,
+                author,
+                comments,
+                category,
+                answered,
+                ..
+            } => vec![
+                line(vec![
+                    part("Discussion #", AccentDiscussion),
+                    part(number.clone(), AccentDiscussion),
+                    part(" - ", Dim),
+                    part(title.clone(), Title),
+                    part(" [", Dim),
+                    part(state.clone(), Status),
+                    part("]", Dim),
+                ]),
+                line(vec![
+                    part("Author: ", Label),
+                    part(author.clone(), Author),
+                    part(" | ", Dim),
+                    part("Category: ", Label),
+                    part(category.clone(), Count),
+                    part(" | ", Dim),
+                    part("Answered: ", Label),
+                    part(if *answered { "✓" } else { "✗" }, Status),
+                    part(" | ", Dim),
+                    part("Comments: ", Label),
+                    part(comments.to_string(), Count),
+                ]),
+            ],
         };
 
         Self {
@@ -241,6 +286,7 @@ impl PreviewData {
             PreviewData::Commit { body, .. } => body,
             PreviewData::Release { body, .. } => body,
             PreviewData::SecurityAlert { body, .. } => body,
+            PreviewData::Discussion { body, .. } => body,
             PreviewData::Generic { body, .. } => body,
         }
     }
@@ -298,13 +344,11 @@ impl PreviewFetcher {
                     }
                 }
             }
-            NotificationType::Discussion => PreviewData::Generic {
-                title: notification.title().to_string(),
-                body: format!(
-                    "Discussion preview not yet implemented\n\nRepository: {}",
-                    repo_full_name
-                ),
-            },
+            NotificationType::Discussion => {
+                let number =
+                    Self::extract_number_from_url(notification.subject_url(), notification_type)?;
+                Self::fetch_discussion_preview(client, repo_full_name, number)?
+            }
             NotificationType::RepositoryVulnerabilityAlert => {
                 if let Some(url) = notification.subject_url() {
                     Self::fetch_security_alert_preview(client, url)?
@@ -646,6 +690,120 @@ impl PreviewFetcher {
             body,
         })
     }
+
+    fn fetch_discussion_preview(
+        client: &GitHubClient,
+        repo: &str,
+        number: String,
+    ) -> Result<PreviewData> {
+        let parts: Vec<&str> = repo.split('/').collect();
+        if parts.len() != 2 {
+            return Err(crate::error::Error::Config(
+                "Invalid repo format".to_string(),
+            ));
+        }
+
+        let discussion_num: i64 = number
+            .parse()
+            .map_err(|_| crate::error::Error::Config("Invalid discussion number".to_string()))?;
+
+        let query = r#"
+            query($owner: String!, $repo: String!, $number: Int!) {
+                repository(owner: $owner, name: $repo) {
+                    discussion(number: $number) {
+                        number
+                        title
+                        body
+                        url
+                        stateReason
+                        author { login }
+                        category { name }
+                        answer { id }
+                        comments { totalCount }
+                    }
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({
+            "owner": parts[0],
+            "repo": parts[1],
+            "number": discussion_num,
+        });
+
+        let data = client.graphql(query, variables)?;
+
+        let discussion = data
+            .get("repository")
+            .and_then(|r| r.get("discussion"))
+            .ok_or_else(|| {
+                crate::error::Error::Config("Discussion not found in response".to_string())
+            })?;
+
+        Self::parse_discussion_response(discussion)
+    }
+
+    fn parse_discussion_response(discussion: &serde_json::Value) -> Result<PreviewData> {
+        let number = discussion
+            .get("number")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0)
+            .to_string();
+        let title = discussion
+            .get("title")
+            .and_then(|v| v.as_str())
+            .unwrap_or("No title")
+            .to_string();
+        let body = discussion
+            .get("body")
+            .and_then(|v| v.as_str())
+            .unwrap_or("No description")
+            .to_string();
+        let url = discussion
+            .get("url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let state = discussion
+            .get("stateReason")
+            .and_then(|v| v.as_str())
+            .unwrap_or("OPEN")
+            .to_string();
+        let author = discussion
+            .get("author")
+            .and_then(|v| v.get("login"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let category = discussion
+            .get("category")
+            .and_then(|v| v.get("name"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("General")
+            .to_string();
+        let answered = discussion.get("answer").is_some()
+            && !discussion
+                .get("answer")
+                .unwrap_or(&serde_json::Value::Null)
+                .is_null();
+        let comments = discussion
+            .get("comments")
+            .and_then(|v| v.get("totalCount"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+
+        Ok(PreviewData::Discussion {
+            number,
+            title,
+            state,
+            author,
+            comments,
+            category,
+            answered,
+            body,
+            url,
+        })
+    }
 }
 
 /// Derives the display state for a pull request by combining the `state` and
@@ -691,5 +849,98 @@ mod tests {
     fn test_pr_state_missing_fields() {
         let pr = json!({});
         assert_eq!(pr_state(&pr), "unknown");
+    }
+
+    #[test]
+    fn test_parse_discussion_response_full() {
+        let discussion = json!({
+            "number": 42,
+            "title": "How do I configure auth?",
+            "body": "I'm trying to set up OAuth and need help.",
+            "url": "https://github.com/owner/repo/discussions/42",
+            "stateReason": "OPEN",
+            "author": { "login": "octocat" },
+            "category": { "name": "Q&A" },
+            "answer": { "id": "DC_abc123" },
+            "comments": { "totalCount": 5 }
+        });
+
+        let result = PreviewFetcher::parse_discussion_response(&discussion).unwrap();
+        match result {
+            PreviewData::Discussion {
+                number,
+                title,
+                state,
+                author,
+                comments,
+                category,
+                answered,
+                body,
+                url,
+            } => {
+                assert_eq!(number, "42");
+                assert_eq!(title, "How do I configure auth?");
+                assert_eq!(state, "OPEN");
+                assert_eq!(author, "octocat");
+                assert_eq!(comments, 5);
+                assert_eq!(category, "Q&A");
+                assert!(answered);
+                assert_eq!(body, "I'm trying to set up OAuth and need help.");
+                assert_eq!(url, "https://github.com/owner/repo/discussions/42");
+            }
+            _ => panic!("Expected PreviewData::Discussion"),
+        }
+    }
+
+    #[test]
+    fn test_parse_discussion_response_unanswered() {
+        let discussion = json!({
+            "number": 7,
+            "title": "Feature request",
+            "body": "Please add dark mode",
+            "url": "https://github.com/owner/repo/discussions/7",
+            "stateReason": "OPEN",
+            "author": { "login": "user" },
+            "category": { "name": "Ideas" },
+            "answer": null,
+            "comments": { "totalCount": 0 }
+        });
+
+        let result = PreviewFetcher::parse_discussion_response(&discussion).unwrap();
+        match result {
+            PreviewData::Discussion {
+                answered, category, ..
+            } => {
+                assert!(!answered);
+                assert_eq!(category, "Ideas");
+            }
+            _ => panic!("Expected PreviewData::Discussion"),
+        }
+    }
+
+    #[test]
+    fn test_parse_discussion_response_missing_fields() {
+        let discussion = json!({});
+
+        let result = PreviewFetcher::parse_discussion_response(&discussion).unwrap();
+        match result {
+            PreviewData::Discussion {
+                number,
+                title,
+                state,
+                author,
+                category,
+                answered,
+                ..
+            } => {
+                assert_eq!(number, "0");
+                assert_eq!(title, "No title");
+                assert_eq!(state, "OPEN");
+                assert_eq!(author, "unknown");
+                assert_eq!(category, "General");
+                assert!(!answered);
+            }
+            _ => panic!("Expected PreviewData::Discussion"),
+        }
     }
 }

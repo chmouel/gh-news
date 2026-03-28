@@ -184,4 +184,48 @@ impl GitHubClient {
     pub fn get_json_by_url(&self, url: &str) -> Result<Value> {
         self.get_json(url)
     }
+
+    /// Execute a GraphQL query against the GitHub API.
+    ///
+    /// GitHub Discussions are only available via GraphQL, so this method
+    /// complements the REST helpers above. See the PR description for
+    /// discussion of the trade-off of keeping this in `rest.rs`.
+    pub fn graphql(&self, query: &str, variables: serde_json::Value) -> Result<serde_json::Value> {
+        let url = if self.api_base.contains("/api/v3") {
+            // GHE: https://HOST/api/graphql
+            self.api_base.replace("/api/v3", "/api/graphql")
+        } else {
+            // github.com: https://api.github.com/graphql
+            format!("{}/graphql", self.api_base)
+        };
+
+        let body = serde_json::json!({
+            "query": query,
+            "variables": variables,
+        });
+
+        let response: serde_json::Value = self.send_json(self.client.post(&url).json(&body))?;
+
+        if let Some(errors) = response.get("errors") {
+            let message = errors
+                .as_array()
+                .and_then(|arr| arr.first())
+                .and_then(|e| e.get("message"))
+                .and_then(|m| m.as_str())
+                .unwrap_or("Unknown GraphQL error");
+            return Err(ApiError::HttpStatus {
+                status: 200,
+                message: format!("GraphQL error: {}", message),
+            }
+            .into());
+        }
+
+        response.get("data").cloned().ok_or_else(|| {
+            ApiError::HttpStatus {
+                status: 200,
+                message: "GraphQL response missing 'data' field".to_string(),
+            }
+            .into()
+        })
+    }
 }
