@@ -135,26 +135,32 @@ impl Notification {
             Some((owner, repo, web_type, number))
         };
 
-        // Prefer latest_comment_url if available (goes directly to the comment)
-        if let Some(comment_url) = &self.latest_comment_url {
-            // Convert API URL to web URL
-            // API: https://api.github.com/repos/owner/repo/issues/comments/123456
-            // Web: https://github.com/owner/repo/issues/123#issuecomment-123456
-            if let Some(comment_id) = comment_url.split('/').next_back() {
-                if let Some(subject_url) = self.subject_url() {
-                    // Extract repo and issue/PR number from subject URL
-                    // subject_url: https://api.github.com/repos/owner/repo/issues/123
-                    // or: https://api.github.com/repos/owner/repo/pulls/456
-                    if let Some((owner, repo, web_type, number)) = parse_subject_url(subject_url) {
-                        let anchor = if comment_url.contains("/pulls/comments/") {
-                            format!("#discussion_r{}", comment_id)
-                        } else {
-                            format!("#issuecomment-{}", comment_id)
-                        };
-                        return Some(format!(
-                            "{}/{}/{}/{}/{}{}",
-                            web_base, owner, repo, web_type, number, anchor
-                        ));
+        // Prefer latest_comment_url if available (goes directly to the comment).
+        // Skip for Discussions — the comment URL logic only handles issues/PRs
+        // and would incorrectly rewrite to /issues/.
+        if !matches!(self.notification_type(), NotificationType::Discussion) {
+            if let Some(comment_url) = &self.latest_comment_url {
+                // Convert API URL to web URL
+                // API: https://api.github.com/repos/owner/repo/issues/comments/123456
+                // Web: https://github.com/owner/repo/issues/123#issuecomment-123456
+                if let Some(comment_id) = comment_url.split('/').next_back() {
+                    if let Some(subject_url) = self.subject_url() {
+                        // Extract repo and issue/PR number from subject URL
+                        // subject_url: https://api.github.com/repos/owner/repo/issues/123
+                        // or: https://api.github.com/repos/owner/repo/pulls/456
+                        if let Some((owner, repo, web_type, number)) =
+                            parse_subject_url(subject_url)
+                        {
+                            let anchor = if comment_url.contains("/pulls/comments/") {
+                                format!("#discussion_r{}", comment_id)
+                            } else {
+                                format!("#issuecomment-{}", comment_id)
+                            };
+                            return Some(format!(
+                                "{}/{}/{}/{}/{}{}",
+                                web_base, owner, repo, web_type, number, anchor
+                            ));
+                        }
                     }
                 }
             }
