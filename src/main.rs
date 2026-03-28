@@ -99,6 +99,7 @@ fn run() -> Result<()> {
             && config.exclude_types.is_empty()
             && config.exclude_reasons.is_empty()
             && config.exclude_repos.is_empty()
+            && config.exclude_subjects.is_empty()
         {
             client.mark_all_read(None)?;
         } else {
@@ -151,6 +152,7 @@ fn run() -> Result<()> {
             if config.exclude_types.is_empty()
                 && config.exclude_reasons.is_empty()
                 && config.exclude_repos.is_empty()
+                && config.exclude_subjects.is_empty()
             {
                 None
             } else {

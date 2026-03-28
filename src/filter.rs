@@ -39,6 +39,7 @@ pub struct Filter {
     exclude_types: Vec<NotificationType>,
     exclude_reasons: Vec<NotificationReason>,
     exclude_repo_patterns: Vec<RepoPattern>,
+    exclude_subjects: Vec<Regex>,
 }
 
 impl Filter {
@@ -47,6 +48,7 @@ impl Filter {
         exclude_types: &[String],
         exclude_reasons: &[String],
         exclude_repos: &[String],
+        exclude_subjects: &[String],
     ) -> Result<Self> {
         let parsed_types: Vec<NotificationType> = exclude_types
             .iter()
@@ -77,6 +79,11 @@ impl Filter {
             .filter_map(|s| RepoPattern::new(s).ok())
             .collect();
 
+        let parsed_subjects: Vec<Regex> = exclude_subjects
+            .iter()
+            .filter_map(|s| Regex::new(&format!("(?i){s}")).ok())
+            .collect();
+
         Ok(Self {
             pattern: match pattern {
                 Some(p) => Some(Regex::new(p)?),
@@ -85,13 +92,14 @@ impl Filter {
             exclude_types: parsed_types,
             exclude_reasons: parsed_reasons,
             exclude_repo_patterns: parsed_repos,
+            exclude_subjects: parsed_subjects,
         })
     }
 
     /// Create a filter with only a regex pattern (no structured excludes).
     /// Used for interactive search within the TUI.
     pub fn from_pattern(pattern: Option<&str>) -> Result<Self> {
-        Self::new(pattern, &[], &[], &[])
+        Self::new(pattern, &[], &[], &[], &[])
     }
 
     /// Create a filter from config settings.
@@ -101,6 +109,7 @@ impl Filter {
             &config.exclude_types,
             &config.exclude_reasons,
             &config.exclude_repos,
+            &config.exclude_subjects,
         )
     }
 
@@ -117,6 +126,10 @@ impl Filter {
         }
         let repo = notification.repo_full_name();
         if self.exclude_repo_patterns.iter().any(|p| p.matches(repo)) {
+            return false;
+        }
+        let title = notification.title();
+        if self.exclude_subjects.iter().any(|p| p.is_match(title)) {
             return false;
         }
 
@@ -185,7 +198,7 @@ mod tests {
 
     #[test]
     fn test_exclude_type() {
-        let filter = Filter::new(None, &["CheckSuite".to_string()], &[], &[]).unwrap();
+        let filter = Filter::new(None, &["CheckSuite".to_string()], &[], &[], &[]).unwrap();
         let cs = make_notification("org/repo", "build", "CheckSuite", "subscribed");
         let issue = make_notification("org/repo", "bug", "Issue", "mention");
         assert!(!filter.matches(&cs));
@@ -194,7 +207,7 @@ mod tests {
 
     #[test]
     fn test_exclude_reason() {
-        let filter = Filter::new(None, &[], &["subscribed".to_string()], &[]).unwrap();
+        let filter = Filter::new(None, &[], &["subscribed".to_string()], &[], &[]).unwrap();
         let sub = make_notification("org/repo", "test", "Issue", "subscribed");
         let mention = make_notification("org/repo", "test", "Issue", "mention");
         assert!(!filter.matches(&sub));
@@ -203,7 +216,7 @@ mod tests {
 
     #[test]
     fn test_exclude_repo_exact() {
-        let filter = Filter::new(None, &[], &[], &["org/noisy-repo".to_string()]).unwrap();
+        let filter = Filter::new(None, &[], &[], &["org/noisy-repo".to_string()], &[]).unwrap();
         let excluded = make_notification("org/noisy-repo", "test", "Issue", "mention");
         let included = make_notification("org/good-repo", "test", "Issue", "mention");
         assert!(!filter.matches(&excluded));
@@ -212,7 +225,7 @@ mod tests {
 
     #[test]
     fn test_exclude_repo_glob() {
-        let filter = Filter::new(None, &[], &[], &["noisy-org/*".to_string()]).unwrap();
+        let filter = Filter::new(None, &[], &[], &["noisy-org/*".to_string()], &[]).unwrap();
         let excluded = make_notification("noisy-org/repo1", "test", "Issue", "mention");
         let also_excluded = make_notification("noisy-org/repo2", "test", "PR", "author");
         let included = make_notification("good-org/repo", "test", "Issue", "mention");
@@ -223,7 +236,7 @@ mod tests {
 
     #[test]
     fn test_exclude_combined_with_regex() {
-        let filter = Filter::new(Some("bug"), &["CheckSuite".to_string()], &[], &[]).unwrap();
+        let filter = Filter::new(Some("bug"), &["CheckSuite".to_string()], &[], &[], &[]).unwrap();
         // Matches regex but excluded by type
         let cs = make_notification("org/repo", "bug in checksuite", "CheckSuite", "mention");
         // Matches regex and not excluded
@@ -242,6 +255,7 @@ mod tests {
             &["NonExistentType".to_string(), "Issue".to_string()],
             &[],
             &[],
+            &[],
         )
         .unwrap();
         // Only Issue should be excluded, unrecognised type silently ignored
@@ -254,6 +268,7 @@ mod tests {
         let filter = Filter::new(
             None,
             &["checksuite".to_string(), "PR".to_string()],
+            &[],
             &[],
             &[],
         )
@@ -281,6 +296,40 @@ mod tests {
         assert!(!filter.matches(&release));
         assert!(!filter.matches(&ci));
         assert!(!filter.matches(&bot));
+        assert!(filter.matches(&normal));
+    }
+
+    #[test]
+    fn test_exclude_subject_regex() {
+        let filter = Filter::new(
+            None,
+            &[],
+            &[],
+            &[],
+            &["^Bump ".to_string(), "\\[bot\\]".to_string()],
+        )
+        .unwrap();
+        let bump = make_notification(
+            "org/repo",
+            "Bump serde from 1.0 to 1.1",
+            "PullRequest",
+            "subscribed",
+        );
+        let bot = make_notification("org/repo", "Update deps [bot]", "PullRequest", "subscribed");
+        let normal = make_notification("org/repo", "Fix login bug", "Issue", "mention");
+        assert!(!filter.matches(&bump));
+        assert!(!filter.matches(&bot));
+        assert!(filter.matches(&normal));
+    }
+
+    #[test]
+    fn test_exclude_subject_case_insensitive() {
+        let filter = Filter::new(None, &[], &[], &[], &["dependabot".to_string()]).unwrap();
+        let upper = make_notification("org/repo", "Dependabot alert", "Issue", "mention");
+        let lower = make_notification("org/repo", "dependabot update", "PullRequest", "subscribed");
+        let normal = make_notification("org/repo", "Fix something", "Issue", "mention");
+        assert!(!filter.matches(&upper));
+        assert!(!filter.matches(&lower));
         assert!(filter.matches(&normal));
     }
 }

@@ -80,11 +80,13 @@ participating_only = false
 #   mention, review_requested, security_alert, state_change, subscribed,
 #   team_mention, ci_activity
 # Repository patterns: exact match ("org/repo") or glob ("org/*")
+# Subject patterns: regex matched against notification titles (case-insensitive)
 #
 # Examples:
 # exclude_types = ["CheckSuite", "Release"]
 # exclude_reasons = ["subscribed", "ci_activity"]
 # exclude_repos = ["dependabot/*", "some-org/noisy-repo"]
+# exclude_subjects = ["\\[bot\\]", "^Bump ", "dependabot"]
 
 # ==============================================================================
 # DISPLAY SETTINGS

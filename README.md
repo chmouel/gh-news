@@ -160,6 +160,7 @@ default_filter = ""          # regex filter always applied
 exclude_types = ["CheckSuite"]           # by type: Issue, PR, Release, CheckSuite, etc.
 exclude_reasons = ["subscribed"]         # by reason: subscribed, ci_activity, etc.
 exclude_repos = ["noisy-org/*"]          # by repo: exact or glob pattern
+exclude_subjects = ["^Bump ", "\\[bot\\]"] # by title: regex patterns (case-insensitive)
 
 # Display
 default_preview_mode = "vertical"    # "off", "horizontal", or "vertical"

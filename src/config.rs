@@ -67,6 +67,9 @@ pub struct Config {
     /// Exclude notifications from these repos. Supports glob patterns (e.g., ["org/*"]).
     #[serde(default)]
     pub exclude_repos: Vec<String>,
+    /// Exclude notifications whose title matches any of these regex patterns.
+    #[serde(default)]
+    pub exclude_subjects: Vec<String>,
 
     // User-defined actions for notifications
     #[serde(default)]
@@ -96,6 +99,7 @@ impl Default for Config {
             exclude_types: Vec::new(),
             exclude_reasons: Vec::new(),
             exclude_repos: Vec::new(),
+            exclude_subjects: Vec::new(),
             actions: Vec::new(),
         }
     }
@@ -282,11 +286,13 @@ command = "true"
 exclude_types = ["CheckSuite", "Release"]
 exclude_reasons = ["subscribed", "ci_activity"]
 exclude_repos = ["org/*", "some-org/noisy-repo"]
+exclude_subjects = ["\\[bot\\]", "^Bump "]
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.exclude_types, vec!["CheckSuite", "Release"]);
         assert_eq!(config.exclude_reasons, vec!["subscribed", "ci_activity"]);
         assert_eq!(config.exclude_repos, vec!["org/*", "some-org/noisy-repo"]);
+        assert_eq!(config.exclude_subjects, vec!["\\[bot\\]", "^Bump "]);
     }
 
     #[test]
@@ -295,6 +301,7 @@ exclude_repos = ["org/*", "some-org/noisy-repo"]
         assert!(config.exclude_types.is_empty());
         assert!(config.exclude_reasons.is_empty());
         assert!(config.exclude_repos.is_empty());
+        assert!(config.exclude_subjects.is_empty());
     }
 
     #[test]
