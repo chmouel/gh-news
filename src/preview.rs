@@ -146,10 +146,11 @@ impl PreviewView {
                 changed_files,
                 ..
             } => {
-                let mut state_text = state.clone();
-                if *is_draft {
-                    state_text = "draft".to_string();
-                }
+                let state_text = if *is_draft && state == "open" {
+                    "draft".to_string()
+                } else {
+                    state.clone()
+                };
                 let mut lines_vec = vec![
                     line(vec![
                         part("PR #", AccentPullRequest),
@@ -1135,5 +1136,65 @@ mod tests {
             }
             _ => panic!("Expected PreviewData::Discussion"),
         }
+    }
+
+    #[test]
+    fn test_preview_view_displays_draft_only_for_open_pull_requests() {
+        let open_draft = PreviewData::PullRequest {
+            number: "1".to_string(),
+            title: "Open draft".to_string(),
+            state: "open".to_string(),
+            author: "octocat".to_string(),
+            comments: 0,
+            mergeable: "Unknown".to_string(),
+            body: String::new(),
+            labels: Vec::new(),
+            review_decision: "NONE".to_string(),
+            is_draft: true,
+            ci_status: "UNKNOWN".to_string(),
+            additions: 0,
+            deletions: 0,
+            changed_files: 0,
+        };
+        let closed_draft = PreviewData::PullRequest {
+            number: "2".to_string(),
+            title: "Closed draft".to_string(),
+            state: "closed".to_string(),
+            author: "octocat".to_string(),
+            comments: 0,
+            mergeable: "Unknown".to_string(),
+            body: String::new(),
+            labels: Vec::new(),
+            review_decision: "NONE".to_string(),
+            is_draft: true,
+            ci_status: "UNKNOWN".to_string(),
+            additions: 0,
+            deletions: 0,
+            changed_files: 0,
+        };
+        let merged_draft = PreviewData::PullRequest {
+            number: "3".to_string(),
+            title: "Merged draft".to_string(),
+            state: "merged".to_string(),
+            author: "octocat".to_string(),
+            comments: 0,
+            mergeable: "Unknown".to_string(),
+            body: String::new(),
+            labels: Vec::new(),
+            review_decision: "NONE".to_string(),
+            is_draft: true,
+            ci_status: "UNKNOWN".to_string(),
+            additions: 0,
+            deletions: 0,
+            changed_files: 0,
+        };
+
+        let open_header = PreviewView::from(&open_draft).header[0].text();
+        let closed_header = PreviewView::from(&closed_draft).header[0].text();
+        let merged_header = PreviewView::from(&merged_draft).header[0].text();
+
+        assert!(open_header.ends_with("[draft]"));
+        assert!(closed_header.ends_with("[closed]"));
+        assert!(merged_header.ends_with("[merged]"));
     }
 }
