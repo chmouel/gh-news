@@ -180,10 +180,10 @@ impl App {
 
         if let Some((ref notification_id, timestamp)) = self.pending_mark_read.clone() {
             if timestamp.elapsed() >= dwell_time {
-                if !is_synthetic_id(notification_id) {
-                    // Update local state optimistically
-                    self.state.mark_notification_read(notification_id);
+                // Update local state optimistically
+                self.state.mark_notification_read(notification_id);
 
+                if !is_synthetic_id(notification_id) {
                     if let Some(ref client) = self.api_client {
                         if self.auto_archive_enabled {
                             if let Err(e) = client.mark_thread_done(notification_id) {
@@ -384,7 +384,7 @@ impl App {
                     .iter()
                     .filter_map(|&idx| {
                         let notif = &self.state.notifications[idx];
-                        if !self.state.is_pinned(&notif.id) && !is_synthetic_id(&notif.id) {
+                        if !self.state.is_pinned(&notif.id) {
                             Some(notif.id.clone())
                         } else {
                             None
@@ -1590,13 +1590,7 @@ impl App {
                 self.queue_blocking_action(BlockingAction::MarkAllRead { selected }, msg);
             }
             ConfirmAction::ArchiveSelected { count: _, option } => {
-                // Get selected notification IDs, filtering out synthetic ones
-                let selected_ids: Vec<String> = self
-                    .state
-                    .get_selected_notification_ids()
-                    .into_iter()
-                    .filter(|id| !is_synthetic_id(id))
-                    .collect();
+                let selected_ids: Vec<String> = self.state.get_selected_notification_ids();
                 self.state.clear_selection();
 
                 // Queue the blocking action to be handled by the main loop with progress
@@ -1769,8 +1763,8 @@ impl App {
                             }
                         }
 
+                        self.state.mark_notification_read(notification_id);
                         if !is_synthetic_id(notification_id) {
-                            self.state.mark_notification_read(notification_id);
                             if let Some(ref client) = self.api_client {
                                 let _ = client.mark_notification_read(notification_id);
                             }
@@ -1795,19 +1789,19 @@ impl App {
                     // Open the notification URL in the browser
                     self.open_notification_url(notification);
 
-                    // Mark notification as read if it's unread (skip synthetic)
-                    if notification.is_unread() && !is_synthetic_id(&notification.id) {
+                    // Mark notification as read if it's unread
+                    if notification.is_unread() {
                         let notification_id = notification.id.clone();
 
                         // Update local state optimistically (for better UX)
                         self.state.mark_notification_read(&notification_id);
 
-                        // Call API to mark as read (non-blocking, log errors)
-                        if let Some(ref client) = self.api_client {
-                            if let Err(e) = client.mark_notification_read(&notification_id) {
-                                eprintln!("Failed to mark notification as read: {}", e);
-                                // Note: We've already updated local state optimistically,
-                                // so the UI will show it as read even if API call fails
+                        // Call API to mark as read (skip synthetic — no real thread)
+                        if !is_synthetic_id(&notification_id) {
+                            if let Some(ref client) = self.api_client {
+                                if let Err(e) = client.mark_notification_read(&notification_id) {
+                                    eprintln!("Failed to mark notification as read: {}", e);
+                                }
                             }
                         }
                     }
@@ -1937,9 +1931,6 @@ impl App {
                     let mut marked_unread = 0;
 
                     for notification_id in &selected_ids {
-                        if is_synthetic_id(notification_id) {
-                            continue;
-                        }
                         // Check current state before toggle
                         let was_unread = self
                             .state
@@ -1953,14 +1944,18 @@ impl App {
                             self.state.toggle_notification_read(notification_id)
                         {
                             if was_unread && !is_now_unread {
-                                // Went from unread to read - call API
+                                // Went from unread to read
                                 marked_read += 1;
-                                if let Some(ref client) = self.api_client {
-                                    if let Err(e) = client.mark_notification_read(notification_id) {
-                                        eprintln!(
-                                            "Failed to mark notification {} as read: {}",
-                                            notification_id, e
-                                        );
+                                if !is_synthetic_id(notification_id) {
+                                    if let Some(ref client) = self.api_client {
+                                        if let Err(e) =
+                                            client.mark_notification_read(notification_id)
+                                        {
+                                            eprintln!(
+                                                "Failed to mark notification {} as read: {}",
+                                                notification_id, e
+                                            );
+                                        }
                                     }
                                 }
                             } else if !was_unread && is_now_unread {
@@ -1987,19 +1982,17 @@ impl App {
                     };
                     self.state.status_message = Some(msg);
                 } else if let Some(notification) = self.state.selected_notification() {
-                    if is_synthetic_id(&notification.id) {
-                        // Synthetic notifications cannot be toggled
-                    } else {
-                        // Toggle read/unread status of single notification
-                        let notification_id = notification.id.clone();
-                        let was_unread = notification.is_unread();
+                    // Toggle read/unread status of single notification
+                    let notification_id = notification.id.clone();
+                    let was_unread = notification.is_unread();
 
-                        // Toggle local state
-                        if let Some(is_now_unread) =
-                            self.state.toggle_notification_read(&notification_id)
-                        {
-                            // If marking as read (was unread, now read), call API
-                            if was_unread && !is_now_unread {
+                    // Toggle local state
+                    if let Some(is_now_unread) =
+                        self.state.toggle_notification_read(&notification_id)
+                    {
+                        // If marking as read (was unread, now read), call API (skip synthetic)
+                        if was_unread && !is_now_unread {
+                            if !is_synthetic_id(&notification_id) {
                                 if let Some(ref client) = self.api_client {
                                     if let Err(e) = client.mark_notification_read(&notification_id)
                                     {
@@ -2008,47 +2001,45 @@ impl App {
                                         self.state.toggle_notification_read(&notification_id);
                                     }
                                 }
-                                if advance {
-                                    // Move to next notification
-                                    self.state.move_down();
-                                    // Scroll preview to top when selection changes
-                                    self.state.preview_scroll = 0;
-                                    // Auto-fetch preview for the newly selected notification
-                                    if self.state.show_preview() {
-                                        self.fetch_preview_for_selected_notification();
-                                        self.prefetch_neighbour_previews();
-                                    }
+                            }
+                            if advance {
+                                // Move to next notification
+                                self.state.move_down();
+                                // Scroll preview to top when selection changes
+                                self.state.preview_scroll = 0;
+                                // Auto-fetch preview for the newly selected notification
+                                if self.state.show_preview() {
+                                    self.fetch_preview_for_selected_notification();
+                                    self.prefetch_neighbour_previews();
                                 }
                             }
-                            // If marking as unread (was read, now unread), just update local state
-                            // Note: GitHub API doesn't support marking as unread, so this won't persist on refresh
                         }
+                        // If marking as unread (was read, now unread), just update local state
+                        // Note: GitHub API doesn't support marking as unread, so this won't persist on refresh
                     }
                 }
             }
             KeyCode::Char('d') if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 if self.state.has_selection() {
-                    // Archive all selected notifications (skip synthetic)
+                    // Archive all selected notifications
                     let selected_ids = self.state.get_selected_notification_ids();
-                    let real_ids: Vec<String> = selected_ids
-                        .into_iter()
-                        .filter(|id| !is_synthetic_id(id))
-                        .collect();
-                    let count = real_ids.len();
+                    let count = selected_ids.len();
 
                     if let Some(ref client) = self.api_client {
-                        for notification_id in &real_ids {
-                            if let Err(e) = client.mark_thread_done(notification_id) {
-                                eprintln!(
-                                    "Failed to archive notification {}: {}",
-                                    notification_id, e
-                                );
+                        for notification_id in &selected_ids {
+                            if !is_synthetic_id(notification_id) {
+                                if let Err(e) = client.mark_thread_done(notification_id) {
+                                    eprintln!(
+                                        "Failed to archive notification {}: {}",
+                                        notification_id, e
+                                    );
+                                }
                             }
                         }
                     }
 
                     let saved_index = self.state.selected_index;
-                    self.state.remove_notifications(&real_ids);
+                    self.state.remove_notifications(&selected_ids);
                     self.state.clear_selection();
 
                     // Stay near the same position
@@ -2070,41 +2061,39 @@ impl App {
 
                     self.state.status_message = Some(format!("Archived {} notifications", count));
                 } else if let Some(notification) = self.state.selected_notification() {
-                    // Archive single notification (skip synthetic)
-                    if is_synthetic_id(&notification.id) {
-                        // Synthetic notifications cannot be archived
-                    } else {
-                        let notification_id = notification.id.clone();
-                        let saved_index = self.state.selected_index;
+                    let notification_id = notification.id.clone();
+                    let saved_index = self.state.selected_index;
 
+                    // Skip API call for synthetic notifications (no real thread)
+                    if !is_synthetic_id(&notification_id) {
                         if let Some(ref client) = self.api_client {
                             if let Err(e) = client.mark_thread_done(&notification_id) {
                                 eprintln!("Failed to archive notification: {}", e);
                             }
                         }
-
-                        self.state.remove_notification(&notification_id);
-
-                        // Stay at the same position (or clamp to end of list)
-                        if !self.state.tree_items.is_empty() {
-                            self.state.selected_index =
-                                saved_index.min(self.state.tree_items.len() - 1);
-                            // Skip headers — find nearest notification
-                            if !matches!(
-                                self.state.tree_items.get(self.state.selected_index),
-                                Some(crate::state::TreeItem::Notification(_))
-                            ) {
-                                self.state.select_first_notification();
-                            }
-                        }
-
-                        if self.state.show_preview() {
-                            self.fetch_preview_for_selected_notification();
-                            self.prefetch_neighbour_previews();
-                        }
-
-                        self.state.status_message = Some("Archived notification".to_string());
                     }
+
+                    self.state.remove_notification(&notification_id);
+
+                    // Stay at the same position (or clamp to end of list)
+                    if !self.state.tree_items.is_empty() {
+                        self.state.selected_index =
+                            saved_index.min(self.state.tree_items.len() - 1);
+                        // Skip headers — find nearest notification
+                        if !matches!(
+                            self.state.tree_items.get(self.state.selected_index),
+                            Some(crate::state::TreeItem::Notification(_))
+                        ) {
+                            self.state.select_first_notification();
+                        }
+                    }
+
+                    if self.state.show_preview() {
+                        self.fetch_preview_for_selected_notification();
+                        self.prefetch_neighbour_previews();
+                    }
+
+                    self.state.status_message = Some("Archived notification".to_string());
                 }
             }
             KeyCode::Char('!') => {
@@ -2848,7 +2837,7 @@ mod tests {
     }
 
     #[test]
-    fn process_pending_mark_read_skips_synthetic_notifications() {
+    fn process_pending_mark_read_marks_synthetic_locally() {
         let mut app = App::new(Config::default());
         app.state
             .set_notifications(vec![test_notification("actions-123", true)]);
@@ -2859,12 +2848,13 @@ mod tests {
 
         app.process_pending_mark_read();
 
-        assert!(app.state.notifications[0].is_unread());
+        // Local state should be updated (no API client, so no API call)
+        assert!(!app.state.notifications[0].is_unread());
         assert!(app.pending_mark_read.is_none());
     }
 
     #[test]
-    fn handle_normal_key_does_not_toggle_synthetic_notifications() {
+    fn handle_normal_key_toggles_synthetic_notifications_locally() {
         let mut app = App::new(Config::default());
         app.state
             .set_notifications(vec![test_notification("actions-123", true)]);
@@ -2872,11 +2862,12 @@ mod tests {
         app.handle_normal_key(KeyEvent::new(KeyCode::Char('.'), KeyModifiers::NONE))
             .unwrap();
 
-        assert!(app.state.notifications[0].is_unread());
+        // Local state should be toggled (no API call for synthetic)
+        assert!(!app.state.notifications[0].is_unread());
     }
 
     #[test]
-    fn handle_normal_key_does_not_archive_synthetic_notifications() {
+    fn handle_normal_key_archives_synthetic_notifications_locally() {
         let mut app = App::new(Config::default());
         app.state
             .set_notifications(vec![test_notification("event-123", true)]);
@@ -2884,8 +2875,8 @@ mod tests {
         app.handle_normal_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))
             .unwrap();
 
-        assert_eq!(app.state.notifications.len(), 1);
-        assert_eq!(app.state.notifications[0].id, "event-123");
+        // Synthetic notification should be removed locally (no API call)
+        assert_eq!(app.state.notifications.len(), 0);
     }
 }
 
