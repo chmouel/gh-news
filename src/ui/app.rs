@@ -12,6 +12,7 @@ use crate::preview_manager::{CacheStatus, PreviewManager, PRIORITY_HIGH, PRIORIT
 use crate::state::{
     AppState, CommandOutputData, ConfirmAction, InputMode, MarkAllOption, PaneFocus, PreviewMode,
 };
+use crate::state_file::AppStateFile;
 use crate::terminal::Terminal;
 use crate::ui::components::{
     action_menu, command_output, confirm, filter, help, help_search, list, loading, preview, status,
@@ -63,6 +64,21 @@ struct PendingInteractiveAction {
 
 /// Dwell time before auto-marking a notification as read (ms)
 const AUTO_MARK_READ_DWELL_MS: u64 = 400;
+
+/// Synthetic notification IDs (from Actions/Events) that have no real
+/// GitHub thread and must not be marked read, toggled, or archived.
+fn is_synthetic_id(id: &str) -> bool {
+    id.starts_with("actions-") || id.starts_with("event-")
+}
+
+/// Remove previously dismissed synthetic notifications from a list.
+fn filter_dismissed_synthetic(notifications: &mut Vec<Notification>) {
+    if let Ok(dismissed) = AppStateFile::load_dismissed_synthetic_ids() {
+        if !dismissed.is_empty() {
+            notifications.retain(|n| !dismissed.contains(&n.id));
+        }
+    }
+}
 
 pub struct App {
     state: AppState,
@@ -183,15 +199,17 @@ impl App {
                 // Update local state optimistically
                 self.state.mark_notification_read(notification_id);
 
-                if !is_synthetic_id(notification_id) {
-                    if let Some(ref client) = self.api_client {
-                        if self.auto_archive_enabled {
-                            if let Err(e) = client.mark_thread_done(notification_id) {
-                                eprintln!("Failed to auto-archive notification: {}", e);
-                            }
-                        } else if let Err(e) = client.mark_notification_read(notification_id) {
-                            eprintln!("Failed to auto-mark notification as read: {}", e);
+                if is_synthetic_id(notification_id) {
+                    if self.auto_archive_enabled {
+                        let _ = AppStateFile::dismiss_synthetic_id(notification_id);
+                    }
+                } else if let Some(ref client) = self.api_client {
+                    if self.auto_archive_enabled {
+                        if let Err(e) = client.mark_thread_done(notification_id) {
+                            eprintln!("Failed to auto-archive notification: {}", e);
                         }
+                    } else if let Err(e) = client.mark_notification_read(notification_id) {
+                        eprintln!("Failed to auto-mark notification as read: {}", e);
                     }
                 }
 
@@ -254,9 +272,12 @@ impl App {
                 preview_mode: self.config.get_default_preview_mode(),
             });
 
+        let mut notifications = data.notifications;
+        filter_dismissed_synthetic(&mut notifications);
+
         let mut app_state = AppState::new();
         app_state.org_grouping = self.config.org_grouping;
-        app_state.set_notifications(data.notifications);
+        app_state.set_notifications(notifications);
         app_state.set_filter(settings.filter);
         app_state.set_filter_pattern(settings.filter_pattern);
         app_state.show_all = settings.show_all;
@@ -394,6 +415,16 @@ impl App {
                 let total = to_process.len();
                 let is_filtered = self.state.filter.is_some();
 
+                // Persist dismissed state for synthetic notifications
+                let synthetic_ids: Vec<String> = to_process
+                    .iter()
+                    .filter(|id| is_synthetic_id(id))
+                    .cloned()
+                    .collect();
+                if !synthetic_ids.is_empty() {
+                    let _ = AppStateFile::dismiss_synthetic_ids(&synthetic_ids);
+                }
+
                 // Take the client temporarily to avoid borrow conflicts during render
                 if let Some(client) = self.api_client.take() {
                     for (i, notification_id) in to_process.iter().enumerate() {
@@ -440,6 +471,16 @@ impl App {
                 notification_ids,
                 option,
             } => {
+                // Persist dismissed state for synthetic notifications
+                let synthetic_ids: Vec<String> = notification_ids
+                    .iter()
+                    .filter(|id| is_synthetic_id(id))
+                    .cloned()
+                    .collect();
+                if !synthetic_ids.is_empty() {
+                    let _ = AppStateFile::dismiss_synthetic_ids(&synthetic_ids);
+                }
+
                 let total = notification_ids.len();
                 // Take the client temporarily to avoid borrow conflicts during render
                 if let Some(client) = self.api_client.take() {
@@ -504,6 +545,9 @@ impl App {
                 // Fetch opt-in extra sources (Actions, Events)
                 let extra = fetch_extra_sources(client, &self.config, &all_notifications);
                 all_notifications.extend(extra);
+
+                // Filter out previously dismissed synthetic notifications
+                filter_dismissed_synthetic(&mut all_notifications);
 
                 // Update notification cache
                 self.save_notifications_cache(&all_notifications);
@@ -630,6 +674,9 @@ impl App {
     /// the user's selection, filter, scroll position, and collapsed repos.
     /// Used by the background refresh after a cache-hit startup.
     fn merge_refreshed_notifications(&mut self, mut notifications: Vec<Notification>) {
+        // Filter out previously dismissed synthetic notifications
+        filter_dismissed_synthetic(&mut notifications);
+
         // Merge pinned notifications
         for pinned in self.state.get_pinned_notifications() {
             if !notifications.iter().any(|n| n.id == pinned.id) {
@@ -1993,6 +2040,15 @@ impl App {
                     let selected_ids = self.state.get_selected_notification_ids();
                     let count = selected_ids.len();
 
+                    let synthetic_ids: Vec<String> = selected_ids
+                        .iter()
+                        .filter(|id| is_synthetic_id(id))
+                        .cloned()
+                        .collect();
+                    if !synthetic_ids.is_empty() {
+                        let _ = AppStateFile::dismiss_synthetic_ids(&synthetic_ids);
+                    }
+
                     if let Some(ref client) = self.api_client {
                         for notification_id in &selected_ids {
                             if !is_synthetic_id(notification_id) {
@@ -2033,11 +2089,11 @@ impl App {
                     let saved_index = self.state.selected_index;
 
                     // Skip API call for synthetic notifications (no real thread)
-                    if !is_synthetic_id(&notification_id) {
-                        if let Some(ref client) = self.api_client {
-                            if let Err(e) = client.mark_thread_done(&notification_id) {
-                                eprintln!("Failed to archive notification: {}", e);
-                            }
+                    if is_synthetic_id(&notification_id) {
+                        let _ = AppStateFile::dismiss_synthetic_id(&notification_id);
+                    } else if let Some(ref client) = self.api_client {
+                        if let Err(e) = client.mark_thread_done(&notification_id) {
+                            eprintln!("Failed to archive notification: {}", e);
                         }
                     }
 
