@@ -258,6 +258,13 @@ impl std::str::FromStr for NotificationReason {
             "subscribed" => NotificationReason::Subscribed,
             "team_mention" | "teammention" => NotificationReason::TeamMention,
             "ci_activity" | "ciactivity" => NotificationReason::CiActivity,
+            "approval_requested" | "approvalrequested" => NotificationReason::ApprovalRequested,
+            "member_feature_requested" | "memberfeaturerequested" => {
+                NotificationReason::MemberFeatureRequested
+            }
+            "security_advisory_credit" | "securityadvisorycredit" => {
+                NotificationReason::SecurityAdvisoryCredit
+            }
             _ => NotificationReason::Unknown,
         })
     }

@@ -16,7 +16,7 @@ GitHub notifications TUI built with Rust and ratatui.
 - Vim-style navigation with j/k keys
 - Multi-select for batch operations on notifications
 - Auto-refresh with configurable interva
-- Preview notifications
+- Preview notifications with rich details (GraphQL-powered for Issues, PRs, Discussions, Commits)
 - Regex filtering to filter specific notifications
 - Pin important notifications
 - Repository grouping with collapsible headers
@@ -26,6 +26,8 @@ GitHub notifications TUI built with Rust and ratatui.
 - Custom actions with command templates
 - Mark notifications read/unread individually or in bulk
 - Static display mode for scripting and pipelines
+- GitHub Actions workflow run notifications (opt-in)
+- GitHub Activity Events feed (opt-in)
 
 ## Installation
 
@@ -184,6 +186,15 @@ on_new_notification_command = ""  # command to run when new notifications appear
 
 # GitHub Enterprise (optional)
 github_host = "github.com"   # change for GHE, e.g. "github.mycompany.com"
+
+# GitHub Actions workflow notifications (opt-in)
+enable_actions = false       # set to true to show workflow run notifications
+actions_failed_only = true   # only show failed/cancelled runs (default when actions enabled)
+actions_repos = []           # repos to watch (empty = derive from your notifications)
+
+# GitHub Activity Events feed (opt-in)
+enable_events = false        # set to true to show activity events
+event_types = []             # filter event types, e.g. ["WatchEvent", "ForkEvent"] (empty = all)
 ```
 
 ### Notification Hooks

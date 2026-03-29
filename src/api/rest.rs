@@ -10,6 +10,7 @@ use std::time::Duration;
 
 const API_VERSION: &str = "2022-11-28";
 const DEFAULT_PER_PAGE: usize = 50;
+const MAX_PER_PAGE: usize = 100;
 const USER_AGENT_VALUE: &str = "gh-news/0.1.0";
 
 struct NotificationQuery {
@@ -64,6 +65,11 @@ pub struct GitHubClient {
 }
 
 impl GitHubClient {
+    /// Get the API base URL.
+    pub fn api_base(&self) -> &str {
+        &self.api_base
+    }
+
     fn send(&self, request: RequestBuilder) -> Result<Response> {
         let response = request.send().map_err(Error::from)?;
         let status = response.status();
@@ -100,6 +106,15 @@ impl GitHubClient {
         Self {
             client,
             api_base: "http://localhost".to_string(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_test_with_base(api_base: impl Into<String>) -> Self {
+        let client = Client::builder().build().unwrap();
+        Self {
+            client,
+            api_base: api_base.into(),
         }
     }
 
@@ -162,11 +177,19 @@ impl GitHubClient {
     }
 
     pub fn mark_notification_read(&self, thread_id: &str) -> Result<()> {
+        // Synthetic notifications (actions-*, event-*) have no real thread
+        if thread_id.starts_with("actions-") || thread_id.starts_with("event-") {
+            return Ok(());
+        }
         let url = format!("{}/notifications/threads/{}", self.api_base, thread_id);
         self.send_no_content(self.client.patch(&url))
     }
 
     pub fn mark_thread_done(&self, thread_id: &str) -> Result<()> {
+        // Synthetic notifications (actions-*, event-*) have no real thread
+        if thread_id.starts_with("actions-") || thread_id.starts_with("event-") {
+            return Ok(());
+        }
         let url = format!("{}/notifications/threads/{}", self.api_base, thread_id);
         self.send_no_content(self.client.delete(&url))
     }
@@ -200,6 +223,97 @@ impl GitHubClient {
             "ignored": true
         });
         self.send_no_content(self.client.put(&url).json(&payload))
+    }
+
+    /// Fetch workflow runs from GitHub Actions.
+    pub fn get_workflow_runs(
+        &self,
+        owner: &str,
+        repo: &str,
+        status: Option<&str>,
+        per_page: usize,
+    ) -> Result<Value> {
+        let mut url = format!(
+            "{}/repos/{}/{}/actions/runs?per_page={}",
+            self.api_base, owner, repo, per_page
+        );
+        if let Some(s) = status {
+            url.push_str(&format!("&status={}", s));
+        }
+        self.get_json(&url)
+    }
+
+    /// Fetch the authenticated user's login.
+    pub fn get_authenticated_user(&self) -> Result<String> {
+        let url = format!("{}/user", self.api_base);
+        let user: Value = self.get_json(&url)?;
+        user.get("login")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .ok_or_else(|| crate::error::Error::Config("Could not get username".to_string()))
+    }
+
+    /// List repositories for an owner (user or organisation).
+    ///
+    /// Tries the org endpoint first; falls back to the user endpoint.
+    /// Returns full_name values like "owner/repo".
+    pub fn list_owner_repos(&self, owner: &str) -> Result<Vec<String>> {
+        // Try org repos first, fall back to user repos
+        let base_urls = [
+            format!(
+                "{}/orgs/{}/repos?per_page={}&type=all",
+                self.api_base, owner, MAX_PER_PAGE
+            ),
+            format!(
+                "{}/users/{}/repos?per_page={}&type=all",
+                self.api_base, owner, MAX_PER_PAGE
+            ),
+        ];
+
+        for base_url in &base_urls {
+            let mut all_repos = Vec::new();
+
+            for page in 1.. {
+                let url = format!("{}&page={}", base_url, page);
+                match self.get_json::<Value>(&url) {
+                    Ok(repos) => {
+                        let Some(arr) = repos.as_array() else {
+                            return Err(Error::Api(ApiError::InvalidResponse));
+                        };
+
+                        if arr.is_empty() {
+                            return Ok(all_repos);
+                        }
+
+                        for repo in arr {
+                            if let Some(full_name) = repo.get("full_name").and_then(|v| v.as_str())
+                            {
+                                all_repos.push(full_name.to_string());
+                            }
+                        }
+
+                        if arr.len() < MAX_PER_PAGE {
+                            return Ok(all_repos);
+                        }
+                    }
+                    Err(Error::Api(ApiError::HttpStatus { status: 404, .. })) if page == 1 => {
+                        break;
+                    }
+                    Err(err) => return Err(err),
+                }
+            }
+        }
+
+        Ok(Vec::new())
+    }
+
+    /// Fetch received events for a user.
+    pub fn get_received_events(&self, username: &str, per_page: usize) -> Result<Value> {
+        let url = format!(
+            "{}/users/{}/received_events?per_page={}",
+            self.api_base, username, per_page
+        );
+        self.get_json(&url)
     }
 
     /// Execute a GraphQL query against the GitHub API.
@@ -242,5 +356,105 @@ impl GitHubClient {
             }
             .into()
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    struct TestServer {
+        base_url: String,
+        handle: thread::JoinHandle<()>,
+    }
+
+    impl TestServer {
+        fn join(self) {
+            self.handle.join().unwrap();
+        }
+    }
+
+    fn spawn_json_server(routes: Vec<(String, u16, String)>) -> TestServer {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let base_url = format!("http://{}", address);
+        let route_map: HashMap<String, (u16, String)> =
+            routes
+                .into_iter()
+                .fold(HashMap::new(), |mut map, (path, status, body)| {
+                    map.insert(path, (status, body));
+                    map
+                });
+
+        let handle = thread::spawn(move || {
+            for _ in 0..route_map.len() {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut request_line = String::new();
+                reader.read_line(&mut request_line).unwrap();
+                let path = request_line.split_whitespace().nth(1).unwrap();
+
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" || line.is_empty() {
+                        break;
+                    }
+                }
+
+                let (status, body) = route_map
+                    .get(path)
+                    .cloned()
+                    .unwrap_or_else(|| (404, "[]".to_string()));
+                let status_text = match status {
+                    200 => "OK",
+                    404 => "Not Found",
+                    _ => "Error",
+                };
+                let response = format!(
+                    "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    status,
+                    status_text,
+                    body.len(),
+                    body
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+
+        TestServer { base_url, handle }
+    }
+
+    #[test]
+    fn list_owner_repos_paginates_until_short_page() {
+        let first_page = (0..100)
+            .map(|i| serde_json::json!({ "full_name": format!("owner/repo-{i:03}") }))
+            .collect::<Vec<_>>();
+        let second_page = vec![serde_json::json!({ "full_name": "owner/repo-100" })];
+        let server = spawn_json_server(vec![
+            (
+                "/orgs/owner/repos?per_page=100&type=all&page=1".to_string(),
+                200,
+                serde_json::to_string(&first_page).unwrap(),
+            ),
+            (
+                "/orgs/owner/repos?per_page=100&type=all&page=2".to_string(),
+                200,
+                serde_json::to_string(&second_page).unwrap(),
+            ),
+        ]);
+        let client = GitHubClient::new_test_with_base(server.base_url.clone());
+
+        let repos = client.list_owner_repos("owner").unwrap();
+
+        assert_eq!(repos.len(), 101);
+        assert_eq!(repos.first().unwrap(), "owner/repo-000");
+        assert_eq!(repos.last().unwrap(), "owner/repo-100");
+
+        server.join();
     }
 }

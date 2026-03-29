@@ -15,6 +15,9 @@ pub enum NotificationReason {
     Subscribed,
     TeamMention,
     CiActivity,
+    ApprovalRequested,
+    MemberFeatureRequested,
+    SecurityAdvisoryCredit,
     #[serde(other)]
     Unknown,
 }
@@ -29,6 +32,8 @@ pub enum NotificationType {
     Release,
     CheckSuite,
     RepositoryVulnerabilityAlert,
+    WorkflowRun,
+    ActivityEvent,
     #[serde(other)]
     Unknown,
 }
@@ -48,6 +53,9 @@ impl std::fmt::Display for NotificationReason {
             NotificationReason::Subscribed => write!(f, "subscribed"),
             NotificationReason::TeamMention => write!(f, "team_mention"),
             NotificationReason::CiActivity => write!(f, "ci_activity"),
+            NotificationReason::ApprovalRequested => write!(f, "approval_requested"),
+            NotificationReason::MemberFeatureRequested => write!(f, "member_feature_requested"),
+            NotificationReason::SecurityAdvisoryCredit => write!(f, "security_advisory_credit"),
             NotificationReason::Unknown => write!(f, "unknown"),
         }
     }
@@ -67,6 +75,8 @@ impl std::str::FromStr for NotificationType {
             "repositoryvulnerabilityalert" | "security" | "security_alert" => {
                 NotificationType::RepositoryVulnerabilityAlert
             }
+            "workflowrun" | "workflow_run" => NotificationType::WorkflowRun,
+            "activityevent" | "activity_event" => NotificationType::ActivityEvent,
             _ => NotificationType::Unknown,
         })
     }
@@ -84,6 +94,8 @@ impl std::fmt::Display for NotificationType {
             NotificationType::RepositoryVulnerabilityAlert => {
                 write!(f, "Security")
             }
+            NotificationType::WorkflowRun => write!(f, "Workflow"),
+            NotificationType::ActivityEvent => write!(f, "Event"),
             NotificationType::Unknown => write!(f, "Unknown"),
         }
     }

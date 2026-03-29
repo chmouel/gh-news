@@ -147,6 +147,12 @@ impl PreviewWidget {
                                 PreviewHeaderKind::AccentDiscussion => Style::default()
                                     .fg(colors.cyan)
                                     .add_modifier(Modifier::BOLD),
+                                PreviewHeaderKind::AccentWorkflowRun => Style::default()
+                                    .fg(colors.orange)
+                                    .add_modifier(Modifier::BOLD),
+                                PreviewHeaderKind::AccentActivityEvent => Style::default()
+                                    .fg(colors.cyan)
+                                    .add_modifier(Modifier::BOLD),
                                 PreviewHeaderKind::Warning => {
                                     Style::default().fg(colors.red).add_modifier(Modifier::BOLD)
                                 }
@@ -166,6 +172,10 @@ impl PreviewWidget {
                                         "critical" | "high" => colors.red,
                                         "medium" => colors.yellow,
                                         "low" => colors.orange,
+                                        "cancelled" | "skipped" | "timed_out" => colors.yellow,
+                                        "completed" | "in_progress" | "queued" | "waiting" => {
+                                            colors.blue
+                                        }
                                         "none" | "unknown" => colors.fg_dim,
                                         _ => colors.fg,
                                     };
