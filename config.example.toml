@@ -201,6 +201,40 @@ auto_archive = false
 github_host = "github.com"
 
 # ==============================================================================
+# EXTRA NOTIFICATION SOURCES (OPT-IN)
+# ==============================================================================
+
+# ─── GitHub Actions Workflow Runs ────────────────────────────────────────
+# Show GitHub Actions workflow run notifications alongside regular notifications.
+# When enabled, gh-news fetches recent workflow runs for your repositories.
+#
+# Default: false (disabled)
+# enable_actions = true
+
+# Only show failed/cancelled workflow runs. Set to false to see all runs.
+# Default: true
+# actions_failed_only = true
+
+# Specific repos to watch for workflow runs. Supports glob patterns.
+# When empty, repos are derived from your existing notifications.
+# Default: [] (derive from notifications)
+# actions_repos = ["my-org/critical-repo", "my-org/deploy-*"]
+
+# ─── GitHub Activity Events ─────────────────────────────────────────────
+# Show GitHub activity events (stars, forks, pushes, etc.) from the Events API.
+# These appear alongside your regular notifications.
+#
+# Default: false (disabled)
+# enable_events = true
+
+# Filter which event types to show. When empty, all event types are shown.
+# Common types: WatchEvent, ForkEvent, CreateEvent, DeleteEvent, PushEvent,
+#   IssuesEvent, PullRequestEvent, ReleaseEvent, IssueCommentEvent,
+#   MemberEvent, PublicEvent, GollumEvent
+# Default: [] (all events)
+# event_types = ["WatchEvent", "ForkEvent", "ReleaseEvent"]
+
+# ==============================================================================
 # CUSTOM ACTIONS
 # ==============================================================================
 

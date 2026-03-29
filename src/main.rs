@@ -5,6 +5,7 @@ mod cache;
 mod cli;
 mod config;
 mod error;
+mod events;
 mod filter;
 mod hooks;
 mod markdown;
@@ -16,13 +17,14 @@ mod state;
 mod state_file;
 mod terminal;
 mod ui;
+mod workflow_runs;
 
 use clap::Parser;
 use cli::Args;
 use config::Config;
 use error::Result;
 use filter::Filter;
-use notifications::{fetch_notifications, NotificationFetchOptions};
+use notifications::{fetch_extra_sources, fetch_notifications, NotificationFetchOptions};
 use std::path::PathBuf;
 use std::sync::mpsc::channel;
 use std::thread;
@@ -233,6 +235,8 @@ fn run() -> Result<()> {
                         per_page: config_clone.pagination_size,
                     },
                 )?;
+                let extra = fetch_extra_sources(&client_clone, &config_clone, &notifications);
+                notifications.extend(extra);
                 // Save to cache
                 let _ = cache::save_cache(&cache_path_clone, &notifications, &options_hash_clone);
 
@@ -271,6 +275,8 @@ fn run() -> Result<()> {
                         per_page: config_clone.pagination_size,
                     },
                 )?;
+                let extra = fetch_extra_sources(&client_clone, &config_clone, &notifications);
+                notifications.extend(extra);
                 // Save to cache if enabled
                 if use_cache_clone {
                     let _ =
@@ -303,7 +309,7 @@ fn run() -> Result<()> {
 
 fn handle_static_display(config: &Config, opts: &RuntimeOptions) -> Result<()> {
     let client = api::GitHubClient::new(config)?;
-    let notifications = fetch_notifications(
+    let mut notifications = fetch_notifications(
         &client,
         NotificationFetchOptions {
             show_all: opts.show_all,
@@ -312,6 +318,8 @@ fn handle_static_display(config: &Config, opts: &RuntimeOptions) -> Result<()> {
             per_page: config.pagination_size,
         },
     )?;
+    let extra = fetch_extra_sources(&client, config, &notifications);
+    notifications.extend(extra);
 
     let filter = Filter::from_config(opts.filter_pattern.as_deref(), config)?;
 

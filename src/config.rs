@@ -75,9 +75,34 @@ pub struct Config {
     #[serde(default)]
     pub exclude_subjects: Vec<String>,
 
+    // GitHub Actions workflow run notifications (opt-in)
+    /// Enable GitHub Actions workflow run notifications.
+    #[serde(default)]
+    pub enable_actions: bool,
+    /// Only show failed and cancelled workflow runs (default: true).
+    #[serde(default = "default_actions_failed_only")]
+    pub actions_failed_only: bool,
+    /// Repos to watch for workflow runs. Supports glob patterns (e.g., "org/*").
+    /// Globs are expanded against repos from your existing notifications.
+    /// Empty = use all repos from your notifications.
+    #[serde(default)]
+    pub actions_repos: Vec<String>,
+
+    // GitHub Activity Events feed (opt-in)
+    /// Enable the GitHub Activity Events feed.
+    #[serde(default)]
+    pub enable_events: bool,
+    /// Event types to include (e.g., ["WatchEvent", "ForkEvent"]). Empty = all.
+    #[serde(default)]
+    pub event_types: Vec<String>,
+
     // User-defined actions for notifications
     #[serde(default)]
     pub actions: Vec<Action>,
+}
+
+fn default_actions_failed_only() -> bool {
+    true
 }
 
 impl Default for Config {
@@ -104,6 +129,11 @@ impl Default for Config {
             exclude_reasons: Vec::new(),
             exclude_repos: Vec::new(),
             exclude_subjects: Vec::new(),
+            enable_actions: false,
+            actions_failed_only: true,
+            actions_repos: Vec::new(),
+            enable_events: false,
+            event_types: Vec::new(),
             actions: Vec::new(),
         }
     }

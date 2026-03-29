@@ -414,6 +414,8 @@ impl ListWidget {
             NotificationType::Discussion => "󰍦",
             NotificationType::CheckSuite => "",
             NotificationType::RepositoryVulnerabilityAlert => "",
+            NotificationType::WorkflowRun => "",
+            NotificationType::ActivityEvent => "",
             NotificationType::Unknown => "󰌵",
         }
     }
@@ -441,6 +443,12 @@ impl ListWidget {
             NotificationType::Discussion => Style::default()
                 .fg(colors.cyan)
                 .add_modifier(Modifier::BOLD),
+            NotificationType::WorkflowRun => Style::default()
+                .fg(colors.orange)
+                .add_modifier(Modifier::BOLD),
+            NotificationType::ActivityEvent => Style::default()
+                .fg(colors.cyan)
+                .add_modifier(Modifier::BOLD),
             NotificationType::Unknown => Style::default()
                 .fg(colors.fg_dim)
                 .add_modifier(Modifier::BOLD),
@@ -461,6 +469,9 @@ impl ListWidget {
             NotificationReason::TeamMention => "󰓾",
             NotificationReason::Invitation => "󰓾",
             NotificationReason::Manual => "󰐕",
+            NotificationReason::ApprovalRequested => "",
+            NotificationReason::MemberFeatureRequested => "",
+            NotificationReason::SecurityAdvisoryCredit => "",
             NotificationReason::Unknown => "󰐕",
         }
     }
@@ -490,6 +501,9 @@ impl ListWidget {
                 .fg(colors.magenta)
                 .add_modifier(Modifier::BOLD),
             NotificationReason::Author => Style::default()
+                .fg(colors.cyan)
+                .add_modifier(Modifier::BOLD),
+            NotificationReason::ApprovalRequested => Style::default()
                 .fg(colors.cyan)
                 .add_modifier(Modifier::BOLD),
             _ => Style::default().fg(colors.fg_dim),

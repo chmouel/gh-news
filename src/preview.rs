@@ -34,6 +34,10 @@ pub enum PreviewData {
     Commit {
         sha: String,
         author: String,
+        date: String,
+        additions: u64,
+        deletions: u64,
+        changed_files: u64,
         body: String,
     },
     Release {
@@ -41,6 +45,9 @@ pub enum PreviewData {
         name: String,
         published_at: String,
         prerelease: bool,
+        is_draft: bool,
+        author: String,
+        assets: Vec<String>,
         body: String,
     },
     SecurityAlert {
@@ -61,6 +68,22 @@ pub enum PreviewData {
         url: String,
         upvotes: u64,
         labels: Vec<String>,
+    },
+    WorkflowRun {
+        name: String,
+        run_number: u64,
+        status: String,
+        conclusion: String,
+        branch: String,
+        event: String,
+        actor: String,
+        body: String,
+    },
+    ActivityEvent {
+        event_type: String,
+        actor: String,
+        repo: String,
+        body: String,
     },
     Generic {
         title: String,
@@ -85,6 +108,8 @@ pub enum PreviewHeaderKind {
     Date,
     PackageList,
     Tag,
+    AccentWorkflowRun,
+    AccentActivityEvent,
 }
 
 #[derive(Debug, Clone)]
@@ -117,8 +142,9 @@ impl PreviewHeaderLine {
 impl PreviewView {
     pub fn from(preview: &PreviewData) -> Self {
         use PreviewHeaderKind::{
-            AccentCommit, AccentDiscussion, AccentIssue, AccentPullRequest, AccentRelease, Author,
-            Count, Date, Dim, Label, PackageList, Status, Tag, Title, Warning,
+            AccentActivityEvent, AccentCommit, AccentDiscussion, AccentIssue, AccentPullRequest,
+            AccentRelease, AccentWorkflowRun, Author, Count, Date, Dim, Label, PackageList, Status,
+            Tag, Title, Warning,
         };
 
         fn part<T: Into<String>>(text: T, kind: PreviewHeaderKind) -> PreviewHeaderPart {
@@ -236,34 +262,74 @@ impl PreviewView {
                 }
                 lines_vec
             }
-            PreviewData::Commit { sha, author, .. } => vec![
-                line(vec![
-                    part("Commit ", AccentCommit),
-                    part(sha.chars().take(12).collect::<String>(), AccentCommit),
-                ]),
-                line(vec![part("Author: ", Label), part(author.clone(), Author)]),
-            ],
+            PreviewData::Commit {
+                sha,
+                author,
+                date,
+                additions,
+                deletions,
+                changed_files,
+                ..
+            } => {
+                let mut lines_vec = vec![
+                    line(vec![
+                        part("Commit ", AccentCommit),
+                        part(sha.chars().take(12).collect::<String>(), AccentCommit),
+                    ]),
+                    line(vec![part("Author: ", Label), part(author.clone(), Author)]),
+                ];
+                if !date.is_empty() {
+                    lines_vec.push(line(vec![
+                        part("Date: ", Label),
+                        part(date.clone(), Date),
+                        part(" | ", Dim),
+                        part(
+                            format!("+{} -{} ({}files)", additions, deletions, changed_files),
+                            Count,
+                        ),
+                    ]));
+                }
+                lines_vec
+            }
             PreviewData::Release {
                 tag,
                 name,
                 published_at,
                 prerelease,
+                is_draft,
+                author,
+                assets,
                 ..
-            } => vec![
-                line(vec![
-                    part("Release ", AccentRelease),
-                    part(tag.clone(), AccentRelease),
-                    part(" - ", Dim),
-                    part(name.clone(), Title),
-                ]),
-                line(vec![
-                    part("Published: ", Label),
-                    part(published_at.clone(), Date),
-                    part(" | ", Dim),
-                    part("Pre-release: ", Label),
-                    part(if *prerelease { "Yes" } else { "No" }, Status),
-                ]),
-            ],
+            } => {
+                let mut lines_vec = vec![
+                    line(vec![
+                        part("Release ", AccentRelease),
+                        part(tag.clone(), AccentRelease),
+                        part(" - ", Dim),
+                        part(name.clone(), Title),
+                    ]),
+                    line(vec![
+                        part("Author: ", Label),
+                        part(author.clone(), Author),
+                        part(" | ", Dim),
+                        part("Published: ", Label),
+                        part(published_at.clone(), Date),
+                        part(" | ", Dim),
+                        part("Pre-release: ", Label),
+                        part(if *prerelease { "Yes" } else { "No" }, Status),
+                        part(" | ", Dim),
+                        part("Draft: ", Label),
+                        part(if *is_draft { "Yes" } else { "No" }, Status),
+                    ]),
+                ];
+                if !assets.is_empty() {
+                    lines_vec.push(line(vec![
+                        part("Assets: ", Label),
+                        part(assets.join(", "), Tag),
+                    ]));
+                }
+                lines_vec
+            }
             PreviewData::SecurityAlert {
                 severity,
                 vulnerability_count,
@@ -290,6 +356,56 @@ impl PreviewView {
                     ]),
                 ]
             }
+            PreviewData::WorkflowRun {
+                name,
+                run_number,
+                status,
+                conclusion,
+                branch,
+                event,
+                actor,
+                ..
+            } => vec![
+                line(vec![
+                    part("Workflow ", AccentWorkflowRun),
+                    part(name.clone(), AccentWorkflowRun),
+                    part(format!(" #{}", run_number), AccentWorkflowRun),
+                    part(" [", Dim),
+                    part(conclusion.clone(), Status),
+                    part("]", Dim),
+                ]),
+                line(vec![
+                    part("Actor: ", Label),
+                    part(actor.clone(), Author),
+                    part(" | ", Dim),
+                    part("Branch: ", Label),
+                    part(branch.clone(), Count),
+                    part(" | ", Dim),
+                    part("Trigger: ", Label),
+                    part(event.clone(), Count),
+                    part(" | ", Dim),
+                    part("Status: ", Label),
+                    part(status.clone(), Status),
+                ]),
+            ],
+            PreviewData::ActivityEvent {
+                event_type,
+                actor,
+                repo,
+                ..
+            } => vec![
+                line(vec![
+                    part("Event ", AccentActivityEvent),
+                    part(event_type.clone(), AccentActivityEvent),
+                ]),
+                line(vec![
+                    part("Actor: ", Label),
+                    part(actor.clone(), Author),
+                    part(" | ", Dim),
+                    part("Repository: ", Label),
+                    part(repo.clone(), Count),
+                ]),
+            ],
             PreviewData::Generic { title, .. } => vec![line(vec![part(title.clone(), Title)])],
             PreviewData::Discussion {
                 number,
@@ -365,6 +481,8 @@ impl PreviewData {
             PreviewData::Release { body, .. } => body,
             PreviewData::SecurityAlert { body, .. } => body,
             PreviewData::Discussion { body, .. } => body,
+            PreviewData::WorkflowRun { body, .. } => body,
+            PreviewData::ActivityEvent { body, .. } => body,
             PreviewData::Generic { body, .. } => body,
         }
     }
@@ -452,6 +570,28 @@ impl PreviewFetcher {
                     }
                 }
             }
+            NotificationType::WorkflowRun => {
+                if let Some(url) = notification.subject_url() {
+                    Self::fetch_workflow_run_preview(client, url, repo_full_name)?
+                } else {
+                    PreviewData::Generic {
+                        title: notification.title().to_string(),
+                        body: format!(
+                            "Workflow run preview unavailable - no URL\n\nRepository: {}",
+                            repo_full_name
+                        ),
+                    }
+                }
+            }
+            NotificationType::ActivityEvent => {
+                // Activity events are synthetic; no extra API call needed
+                PreviewData::ActivityEvent {
+                    event_type: "Event".to_string(),
+                    actor: String::new(),
+                    repo: repo_full_name.to_string(),
+                    body: notification.title().to_string(),
+                }
+            }
             _ => PreviewData::Generic {
                 title: notification.title().to_string(),
                 body: format!("Repository: {}", repo_full_name),
@@ -470,11 +610,11 @@ impl PreviewFetcher {
 
         match notification_type {
             NotificationType::Commit => {
-                // For commits, extract SHA from URL (last part, first 12 chars)
+                // For commits, extract full SHA from URL (needed for GraphQL queries)
                 // URL format: https://api.github.com/repos/owner/repo/commits/abc123...
                 url.split('/')
                     .next_back()
-                    .map(|s| s.chars().take(12).collect())
+                    .map(|s| s.to_string())
                     .ok_or_else(|| crate::error::Error::Config("Invalid commit URL".to_string()))
             }
             NotificationType::Release => {
@@ -720,14 +860,17 @@ impl PreviewFetcher {
     }
 
     fn fetch_commit_preview(client: &GitHubClient, repo: &str, sha: &str) -> Result<PreviewData> {
-        let parts: Vec<&str> = repo.split('/').collect();
-        if parts.len() != 2 {
-            return Err(crate::error::Error::Config(
-                "Invalid repo format".to_string(),
-            ));
+        let (owner, repo_name) = repo
+            .split_once('/')
+            .ok_or_else(|| crate::error::Error::Config("Invalid repo format".to_string()))?;
+
+        // Try GraphQL first for richer data (additions, deletions, changed files)
+        if let Ok(preview) = Self::fetch_commit_preview_graphql(client, owner, repo_name, sha) {
+            return Ok(preview);
         }
 
-        let commit = client.get_commit(parts[0], parts[1], sha)?;
+        // Fallback to REST (e.g. GHE without GraphQL)
+        let commit = client.get_commit(owner, repo_name, sha)?;
 
         let message = commit
             .get("commit")
@@ -746,6 +889,98 @@ impl PreviewFetcher {
         Ok(PreviewData::Commit {
             sha: sha.to_string(),
             author,
+            date: String::new(),
+            additions: 0,
+            deletions: 0,
+            changed_files: 0,
+            body: message,
+        })
+    }
+
+    fn fetch_commit_preview_graphql(
+        client: &GitHubClient,
+        owner: &str,
+        repo_name: &str,
+        sha: &str,
+    ) -> Result<PreviewData> {
+        let query = r#"
+            query($owner: String!, $repo: String!, $oid: GitObjectID!) {
+                repository(owner: $owner, name: $repo) {
+                    object(oid: $oid) {
+                        ... on Commit {
+                            oid
+                            message
+                            author {
+                                name
+                                user { login }
+                                date
+                            }
+                            additions
+                            deletions
+                            changedFilesIfAvailable
+                        }
+                    }
+                }
+            }
+        "#;
+
+        let variables = serde_json::json!({
+            "owner": owner,
+            "repo": repo_name,
+            "oid": sha,
+        });
+
+        let data = client.graphql(query, variables)?;
+
+        let commit = data
+            .get("repository")
+            .and_then(|r| r.get("object"))
+            .filter(|d| !d.is_null())
+            .ok_or_else(|| {
+                crate::error::Error::Config("Commit not found in response".to_string())
+            })?;
+
+        let message = commit
+            .get("message")
+            .and_then(|v| v.as_str())
+            .unwrap_or("No message")
+            .to_string();
+        let author = commit
+            .get("author")
+            .and_then(|a| {
+                a.get("user")
+                    .and_then(|u| u.get("login"))
+                    .and_then(|v| v.as_str())
+                    .or_else(|| a.get("name").and_then(|v| v.as_str()))
+            })
+            .unwrap_or("unknown")
+            .to_string();
+        let date = commit
+            .get("author")
+            .and_then(|a| a.get("date"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let additions = commit
+            .get("additions")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let deletions = commit
+            .get("deletions")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let changed_files = commit
+            .get("changedFilesIfAvailable")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+
+        Ok(PreviewData::Commit {
+            sha: sha.to_string(),
+            author,
+            date,
+            additions,
+            deletions,
+            changed_files,
             body: message,
         })
     }
@@ -774,17 +1009,39 @@ impl PreviewFetcher {
             .get("prerelease")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        let is_draft = release
+            .get("draft")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
         let published_at = release
             .get("published_at")
             .and_then(|v| v.as_str())
             .unwrap_or("Unknown")
             .to_string();
+        let author = release
+            .get("author")
+            .and_then(|a| a.get("login"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let assets = release
+            .get("assets")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|a| a.get("name").and_then(|n| n.as_str()).map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
 
         Ok(PreviewData::Release {
             tag,
             name,
             published_at,
             prerelease,
+            is_draft,
+            author,
+            assets,
             body,
         })
     }
@@ -1015,6 +1272,109 @@ impl PreviewFetcher {
             url,
             upvotes,
             labels,
+        })
+    }
+
+    fn fetch_workflow_run_preview(
+        client: &GitHubClient,
+        url: &str,
+        repo: &str,
+    ) -> Result<PreviewData> {
+        // For workflow runs, the URL may be an HTML URL rather than an API URL.
+        // Try to extract run_id and fetch via API.
+        let (owner, repo_name) = repo
+            .split_once('/')
+            .ok_or_else(|| crate::error::Error::Config("Invalid repo format".to_string()))?;
+
+        // Extract run ID from URL (last numeric segment)
+        let run_id = url
+            .split('/')
+            .rev()
+            .find(|s| s.chars().all(|c| c.is_ascii_digit()) && !s.is_empty())
+            .unwrap_or("");
+
+        if run_id.is_empty() {
+            return Ok(PreviewData::Generic {
+                title: "Workflow Run".to_string(),
+                body: format!("Could not extract run ID from URL: {}", url),
+            });
+        }
+
+        let api_url = format!(
+            "{}/repos/{}/{}/actions/runs/{}",
+            client.api_base(),
+            owner,
+            repo_name,
+            run_id
+        );
+        let run = client.get_json_by_url(&api_url)?;
+
+        let name = run
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown")
+            .to_string();
+        let run_number = run.get("run_number").and_then(|v| v.as_u64()).unwrap_or(0);
+        let status = run
+            .get("status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let conclusion = run
+            .get("conclusion")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let branch = run
+            .get("head_branch")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let event = run
+            .get("event")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let actor = run
+            .get("actor")
+            .and_then(|a| a.get("login"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+
+        // Fetch jobs for the body
+        let jobs_url = format!("{}/jobs", api_url);
+        let body = match client.get_json_by_url(&jobs_url) {
+            Ok(jobs_data) => {
+                let jobs = jobs_data
+                    .get("jobs")
+                    .and_then(|v| v.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+                jobs.iter()
+                    .map(|job| {
+                        let job_name = job.get("name").and_then(|v| v.as_str()).unwrap_or("Job");
+                        let job_conclusion = job
+                            .get("conclusion")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown");
+                        format!("- {} [{}]", job_name, job_conclusion)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            }
+            Err(_) => format!("Workflow: {} #{}", name, run_number),
+        };
+
+        Ok(PreviewData::WorkflowRun {
+            name,
+            run_number,
+            status,
+            conclusion,
+            branch,
+            event,
+            actor,
+            body,
         })
     }
 }
