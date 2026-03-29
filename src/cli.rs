@@ -33,7 +33,7 @@ pub struct Args {
     #[arg(long)]
     pub mark_read_archive: bool,
 
-    /// Print a static display (non-interactive)
+    /// Print a static display (non-interactive, cache is bypassed)
     #[arg(short = 's', long)]
     pub static_display: bool,
 

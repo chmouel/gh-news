@@ -181,7 +181,7 @@ fn run() -> Result<()> {
     };
 
     // Notification cache setup
-    let use_cache = !args.no_cache;
+    let use_cache = !args.no_cache && !args.static_display;
     let options_hash =
         cache::compute_options_hash(opts.show_all, opts.participating, opts.max_notifications);
     let cache_path = cache::get_cache_path(config.cache_file.as_deref())?;
