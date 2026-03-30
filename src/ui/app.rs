@@ -1609,6 +1609,9 @@ impl App {
                         if opened_count == 1 { "" } else { "s" },
                         marked_count
                     ));
+                } else if let Some(org_name) = self.state.selected_org() {
+                    let org_name = org_name.to_string();
+                    self.state.toggle_org_expansion(&org_name);
                 } else if let Some(repo_name) = self.state.selected_repo() {
                     // If selected item is a repository header, toggle expansion
                     let repo_name = repo_name.to_string();
@@ -1677,8 +1680,26 @@ impl App {
                 }
             }
             KeyCode::Left | KeyCode::Char('h') => {
-                // Collapse the current folder if expanded
-                if let Some(repo_name) = self.state.parent_repo_for_selected() {
+                // Collapse org if on an org header
+                if let Some(org_name) = self.state.selected_org() {
+                    let org_name = org_name.to_string();
+                    let is_expanded = self
+                        .state
+                        .expanded_orgs
+                        .get(&org_name)
+                        .copied()
+                        .unwrap_or(true);
+                    if is_expanded {
+                        self.state.expanded_orgs.insert(org_name, false);
+                        self.state.build_tree();
+                        if !self.state.tree_items.is_empty() {
+                            self.state.selected_index = self
+                                .state
+                                .selected_index
+                                .min(self.state.tree_items.len() - 1);
+                        }
+                    }
+                } else if let Some(repo_name) = self.state.parent_repo_for_selected() {
                     let repo_name = repo_name.to_string();
                     // Check if it's currently expanded (default is expanded)
                     let is_expanded = self
@@ -1698,6 +1719,34 @@ impl App {
                                 .selected_index
                                 .min(self.state.tree_items.len() - 1);
                         }
+                    }
+                }
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                // Expand org if on a collapsed org header
+                if let Some(org_name) = self.state.selected_org() {
+                    let org_name = org_name.to_string();
+                    let is_expanded = self
+                        .state
+                        .expanded_orgs
+                        .get(&org_name)
+                        .copied()
+                        .unwrap_or(true);
+                    if !is_expanded {
+                        self.state.expanded_orgs.insert(org_name, true);
+                        self.state.build_tree();
+                    }
+                } else if let Some(repo_name) = self.state.selected_repo() {
+                    let repo_name = repo_name.to_string();
+                    let is_expanded = self
+                        .state
+                        .expanded_repos
+                        .get(&repo_name)
+                        .copied()
+                        .unwrap_or(true);
+                    if !is_expanded {
+                        self.state.expanded_repos.insert(repo_name, true);
+                        self.state.build_tree();
                     }
                 }
             }
@@ -2442,9 +2491,11 @@ impl App {
                                 self.prefetch_neighbour_previews();
                             }
                             self.queue_auto_mark_read();
-                        } else if let Some(crate::state::TreeItem::OrgHeader(_)) =
+                        } else if let Some(crate::state::TreeItem::OrgHeader(org_info)) =
                             self.state.tree_items.get(clicked_item_idx)
                         {
+                            let org_name = org_info.login.clone();
+                            self.state.toggle_org_expansion(&org_name);
                         } else if let Some(crate::state::TreeItem::RepositoryHeader(repo_info)) =
                             self.state.tree_items.get(clicked_item_idx)
                         {

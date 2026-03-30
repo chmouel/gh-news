@@ -43,6 +43,7 @@ pub struct AppState {
     pub filtered_notifications: Vec<usize>, // Indices into notifications
     pub tree_items: Vec<TreeItem>,          // Tree structure for display
     pub expanded_repos: HashMap<String, bool>, // Track which repos are expanded
+    pub expanded_orgs: HashMap<String, bool>, // Track which orgs are expanded
     pub org_grouping: OrgGroupingMode,
     pub selected_index: usize,
     pub filter: Option<Filter>,
@@ -121,6 +122,7 @@ impl AppState {
             filtered_notifications: Vec::new(),
             tree_items: Vec::new(),
             expanded_repos: HashMap::new(),
+            expanded_orgs: HashMap::new(),
             org_grouping: OrgGroupingMode::default(),
             selected_index: 0,
             filter: None,
@@ -219,10 +221,30 @@ impl AppState {
             &self.notifications,
             &self.filtered_notifications,
             &self.expanded_repos,
+            &self.expanded_orgs,
             &pinned_ids,
             self.org_grouping,
         )
         .build();
+    }
+
+    pub fn selected_org(&self) -> Option<&str> {
+        self.tree_items
+            .get(self.selected_index)
+            .and_then(|item| match item {
+                TreeItem::OrgHeader(org_info) => Some(org_info.login.as_str()),
+                _ => None,
+            })
+    }
+
+    pub fn toggle_org_expansion(&mut self, org_name: &str) {
+        let current = self.expanded_orgs.get(org_name).copied().unwrap_or(true);
+        self.expanded_orgs.insert(org_name.to_string(), !current);
+        self.build_tree();
+
+        if !self.tree_items.is_empty() {
+            self.selected_index = self.selected_index.min(self.tree_items.len() - 1);
+        }
     }
 
     pub fn toggle_repo_expansion(&mut self, repo_name: &str) {

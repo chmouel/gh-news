@@ -108,12 +108,28 @@ impl ListWidget {
                         let colors = TokyoNight::colors();
                         let mut line = vec![];
 
+                        let is_org_expanded = app_state
+                            .expanded_orgs
+                            .get(&org_info.login)
+                            .copied()
+                            .unwrap_or(true);
+
                         line.push(Span::styled(
                             "󰊻 ",
                             if is_selected {
                                 Style::default().fg(self.theme.highlight_fg)
                             } else {
                                 Style::default().fg(colors.magenta)
+                            },
+                        ));
+
+                        let indicator = if is_org_expanded { "▾ " } else { "▸ " };
+                        line.push(Span::styled(
+                            indicator,
+                            if is_selected {
+                                Style::default().fg(self.theme.highlight_fg)
+                            } else {
+                                Style::default().fg(colors.yellow)
                             },
                         ));
 

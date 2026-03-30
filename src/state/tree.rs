@@ -8,6 +8,7 @@ pub struct TreeBuilder<'a> {
     notifications: &'a [Notification],
     filtered_notifications: &'a [usize],
     expanded_repos: &'a HashMap<String, bool>,
+    expanded_orgs: &'a HashMap<String, bool>,
     pinned_ids: &'a HashSet<String>,
     org_grouping: OrgGroupingMode,
 }
@@ -17,6 +18,7 @@ impl<'a> TreeBuilder<'a> {
         notifications: &'a [Notification],
         filtered_notifications: &'a [usize],
         expanded_repos: &'a HashMap<String, bool>,
+        expanded_orgs: &'a HashMap<String, bool>,
         pinned_ids: &'a HashSet<String>,
         org_grouping: OrgGroupingMode,
     ) -> Self {
@@ -24,6 +26,7 @@ impl<'a> TreeBuilder<'a> {
             notifications,
             filtered_notifications,
             expanded_repos,
+            expanded_orgs,
             pinned_ids,
             org_grouping,
         }
@@ -136,19 +139,22 @@ impl<'a> TreeBuilder<'a> {
                 notification_count,
             }));
 
-            let mut repo_groups: HashMap<String, Vec<usize>> = HashMap::new();
-            for idx in indices {
-                if let Some(notif) = self.notifications.get(idx) {
-                    let repo_name = notif.repo_full_name().to_string();
-                    repo_groups.entry(repo_name).or_default().push(idx);
+            let is_org_expanded = *self.expanded_orgs.get(&org).unwrap_or(&true);
+            if is_org_expanded {
+                let mut repo_groups: HashMap<String, Vec<usize>> = HashMap::new();
+                for idx in indices {
+                    if let Some(notif) = self.notifications.get(idx) {
+                        let repo_name = notif.repo_full_name().to_string();
+                        repo_groups.entry(repo_name).or_default().push(idx);
+                    }
                 }
-            }
 
-            self.append_repos(
-                &mut tree_items,
-                &self.sort_repo_groups(repo_groups),
-                Some(&org),
-            );
+                self.append_repos(
+                    &mut tree_items,
+                    &self.sort_repo_groups(repo_groups),
+                    Some(&org),
+                );
+            }
         }
 
         if !non_org_indices.is_empty() {
@@ -270,6 +276,7 @@ mod tests {
         TreeBuilder::new(
             &notifications,
             &filtered,
+            &HashMap::new(),
             &HashMap::new(),
             &HashSet::new(),
             mode,
