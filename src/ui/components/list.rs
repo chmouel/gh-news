@@ -282,7 +282,11 @@ impl ListWidget {
                                     .fg(colors.fg_dim)
                                     .add_modifier(Modifier::ITALIC)
                             };
-                            line.push(Span::styled(notif.title(), title_style));
+                            let title_text = match notif.subject_number() {
+                                Some(n) => format!("#{n} {}", notif.title()),
+                                None => notif.title().to_string(),
+                            };
+                            line.push(Span::styled(title_text, title_style));
 
                             ListItem::new(Line::from(line))
                         } else {

@@ -102,6 +102,7 @@ pub fn substitute_batch_placeholders(
 /// Supported placeholders:
 /// - {id} - Notification ID
 /// - {title} - Notification title
+/// - {number} - PR/issue/discussion number (e.g. "42"), empty string for other types
 /// - {url} - Web URL for the notification
 /// - {repo} - Repository name (without owner)
 /// - {owner} - Repository owner
@@ -119,10 +120,13 @@ pub fn substitute_placeholders(
 
     let url = notification.web_url(github_host).unwrap_or_default();
 
+    let number = notification.subject_number().unwrap_or_default();
+
     // Shell-escape all values to prevent injection attacks
     command
         .replace("{id}", &shell_escape(&notification.id))
         .replace("{title}", &shell_escape(notification.title()))
+        .replace("{number}", &shell_escape(&number))
         .replace("{url}", &shell_escape(&url))
         .replace("{repo}", &shell_escape(repo_name))
         .replace("{owner}", &shell_escape(owner))
@@ -520,6 +524,30 @@ mod tests {
         let result = substitute_placeholders(command, &notification, "github.com");
         // NotificationType::PullRequest displays as "PR", all values shell-escaped
         assert_eq!(result, "'org'/'other-repo' PR: 'Add new feature' ('PR')");
+    }
+
+    #[test]
+    fn test_number_placeholder_pr() {
+        let notification = create_pr_notification();
+        let result = substitute_placeholders("echo {number}", &notification, "github.com");
+        assert_eq!(result, "echo '123'");
+    }
+
+    #[test]
+    fn test_number_placeholder_issue() {
+        let notification = create_test_notification();
+        let result = substitute_placeholders("echo {number}", &notification, "github.com");
+        assert_eq!(result, "echo '42'");
+    }
+
+    #[test]
+    fn test_number_placeholder_release() {
+        let mut notification = create_test_notification();
+        notification.subject.subject_type = NotificationType::Release;
+        notification.subject.url =
+            Some("https://api.github.com/repos/chmouel/gh-news/releases/v1.0.0".to_string());
+        let result = substitute_placeholders("echo {number}", &notification, "github.com");
+        assert_eq!(result, "echo ''");
     }
 
     #[test]

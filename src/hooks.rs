@@ -9,6 +9,7 @@ use std::process::{Command, Stdio};
 /// # Environment Variables Set
 /// - GH_NEWS_ID
 /// - GH_NEWS_TITLE
+/// - GH_NEWS_NUMBER      PR/issue/discussion number, empty string for other types
 /// - GH_NEWS_REPO
 /// - GH_NEWS_OWNER
 /// - GH_NEWS_TYPE
@@ -42,6 +43,10 @@ pub fn execute_new_notification_hook(
         .args(args)
         .env("GH_NEWS_ID", &notification.id)
         .env("GH_NEWS_TITLE", notification.title())
+        .env(
+            "GH_NEWS_NUMBER",
+            notification.subject_number().unwrap_or_default(),
+        )
         .env("GH_NEWS_REPO", repo_name)
         .env("GH_NEWS_OWNER", owner)
         .env("GH_NEWS_TYPE", notification.notification_type().to_string())

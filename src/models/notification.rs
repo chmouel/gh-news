@@ -49,6 +49,16 @@ impl Notification {
         self.subject.url.as_deref()
     }
 
+    pub fn subject_number(&self) -> Option<String> {
+        let url = self.subject.url.as_deref()?;
+        let number = url.rsplit('/').next()?;
+        if number.chars().all(|c| c.is_ascii_digit()) {
+            Some(number.to_string())
+        } else {
+            None
+        }
+    }
+
     pub fn effective_timestamp(&self) -> Option<DateTime<Utc>> {
         if self.unread {
             self.last_read_at.or(self.updated_at)
