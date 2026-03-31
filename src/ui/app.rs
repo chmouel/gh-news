@@ -1190,7 +1190,11 @@ impl App {
             }
             KeyCode::Enter => {
                 self.execute_selected_action();
-                self.state.input_mode = InputMode::Normal;
+                // Don't override input_mode if execute_selected_action set a specific mode
+                // (e.g. CommandOutput). Only reset to Normal when still in ActionMenu.
+                if self.state.input_mode == InputMode::ActionMenu {
+                    self.state.input_mode = InputMode::Normal;
+                }
             }
             _ => {}
         }
