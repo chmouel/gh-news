@@ -2948,7 +2948,7 @@ impl Drop for App {
 }
 
 #[cfg(test)]
-mod tests {
+mod action_tests {
     use super::*;
     use crate::config::Action;
     use crate::models::{NotificationType, Owner, Repository, Subject};
