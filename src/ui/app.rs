@@ -25,7 +25,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
@@ -375,6 +375,44 @@ impl App {
         // No need for a separate thread since we're already polling events
     }
 
+    /// Spawn a background thread to fetch notifications without blocking the UI.
+    fn spawn_background_refresh(&mut self) {
+        let Some(ref client) = self.api_client else {
+            return;
+        };
+        let Some((all, participating, max_notifications)) = self.refresh_args else {
+            return;
+        };
+
+        let client = client.clone();
+        let config = self.config.clone();
+        let (tx, rx) = mpsc::channel();
+
+        std::thread::spawn(move || {
+            let result = (|| -> crate::error::Result<InitialLoadData> {
+                let mut notifications = fetch_notifications(
+                    &client,
+                    NotificationFetchOptions {
+                        show_all: all,
+                        participating,
+                        max_notifications,
+                        per_page: config.pagination_size,
+                    },
+                )?;
+                let extra = fetch_extra_sources(&client, &config, &notifications);
+                notifications.extend(extra);
+                Ok(InitialLoadData {
+                    notifications,
+                    pinned_notifications: Vec::new(),
+                })
+            })();
+            let _ = tx.send(result);
+        });
+
+        self.background_refresh_rx = Some(rx);
+        self.last_refresh = Instant::now();
+    }
+
     fn queue_blocking_action(&mut self, action: BlockingAction, message: &str) {
         self.state.loading = true;
         self.state.loading_message = message.to_string();
@@ -666,10 +704,13 @@ impl App {
 
     /// Merge freshly fetched notifications into the current state, preserving
     /// the user's selection, filter, scroll position, and collapsed repos.
-    /// Used by the background refresh after a cache-hit startup.
+    /// Used by background refresh (cache-hit startup and auto-refresh timer).
     fn merge_refreshed_notifications(&mut self, mut notifications: Vec<Notification>) {
         // Filter out previously dismissed synthetic notifications
         filter_dismissed_synthetic(&mut notifications);
+
+        // Save the notification cache
+        self.save_notifications_cache(&notifications);
 
         // Merge pinned notifications
         for pinned in self.state.get_pinned_notifications() {
@@ -685,6 +726,7 @@ impl App {
         let current_filter = self.state.filter.clone();
         let filter_pattern = self.state.filter_pattern.clone();
 
+        let old_count = self.state.notifications.len();
         self.state.set_notifications(notifications);
 
         // Mark stale cached previews
@@ -692,13 +734,48 @@ impl App {
             pm.invalidate_notifications(&self.state.notifications);
         }
 
-        // Update previous notification IDs for hook tracking
-        self.previous_notification_ids = self
+        // Execute hook for new notifications if configured
+        let current_ids: HashSet<String> = self
             .state
             .notifications
             .iter()
             .map(|n| n.id.clone())
             .collect();
+
+        if let Some(ref hook_command) = self.config.on_new_notification_command.clone() {
+            if !hook_command.is_empty() && !self.previous_notification_ids.is_empty() {
+                for new_id in current_ids.difference(&self.previous_notification_ids) {
+                    if let Some(notification) =
+                        self.state.notifications.iter().find(|n| &n.id == new_id)
+                    {
+                        let _ = hooks::execute_new_notification_hook(
+                            hook_command,
+                            notification,
+                            &self.config.github_host,
+                        );
+                    }
+                }
+            }
+        }
+
+        // Count new notifications for status message
+        let new_count = if !self.previous_notification_ids.is_empty() {
+            current_ids
+                .difference(&self.previous_notification_ids)
+                .count()
+        } else {
+            0
+        };
+
+        // Update previous notification IDs for hook tracking
+        self.previous_notification_ids = current_ids;
+
+        // Show status message if new notifications arrived
+        if new_count > 0 {
+            self.state.status_message = Some(format!("{} new", new_count));
+        } else if old_count > 0 {
+            self.state.status_message = Some("Refreshed".to_string());
+        }
 
         // Restore filter
         self.state.set_filter(current_filter);
@@ -902,16 +979,14 @@ impl App {
                 });
             }
 
-            // Check for auto-refresh signal (non-blocking)
-            if self.config.auto_refresh_interval > 0 && !self.state.loading {
+            // Check for auto-refresh signal (non-blocking background fetch)
+            if self.config.auto_refresh_interval > 0
+                && !self.state.loading
+                && self.background_refresh_rx.is_none()
+            {
                 let elapsed = self.last_refresh.elapsed();
                 if elapsed >= Duration::from_secs(self.config.auto_refresh_interval) {
-                    if let Err(e) = self.refresh_notifications() {
-                        // Log error but don't disrupt UI - user can manually refresh
-                        // In production, this could be sent to a logging system
-                        // For now, we silently continue to avoid UI disruption
-                        let _ = e; // Acknowledge error but don't panic
-                    }
+                    self.spawn_background_refresh();
                 }
             }
 
@@ -1054,12 +1129,17 @@ impl App {
             ])
             .split(size);
 
+        let refresh_state = status::RefreshState {
+            last_refresh: self.last_refresh,
+            is_refreshing: self.background_refresh_rx.is_some(),
+        };
         self.status_widget.render(
             frame,
             chunks[0],
             &self.state,
             &self.config,
             self.auto_mark_read_enabled,
+            &refresh_state,
         );
 
         let preview_mode = self.effective_preview_mode();

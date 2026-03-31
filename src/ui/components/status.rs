@@ -5,6 +5,13 @@ use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Paragraph},
 };
+use std::time::Instant;
+
+/// Refresh state passed to the status widget for countdown display.
+pub struct RefreshState {
+    pub last_refresh: Instant,
+    pub is_refreshing: bool,
+}
 
 pub struct StatusWidget {
     theme: Theme,
@@ -24,14 +31,22 @@ impl StatusWidget {
         state: &AppState,
         config: &Config,
         auto_mark_read: bool,
+        refresh: &RefreshState,
     ) {
         let colors = crate::ui::theme::TokyoNight::colors();
 
         let interval_text = if config.auto_refresh_interval > 0 {
-            if config.auto_refresh_interval >= 60 {
-                format!("🔄 {}min", config.auto_refresh_interval / 60)
+            if refresh.is_refreshing {
+                "🔄 refreshing…".to_string()
             } else {
-                format!("🔄 {}s", config.auto_refresh_interval)
+                let elapsed = refresh.last_refresh.elapsed().as_secs();
+                let interval = config.auto_refresh_interval;
+                let remaining = interval.saturating_sub(elapsed);
+                if remaining >= 60 {
+                    format!("🔄 {}m{:02}s", remaining / 60, remaining % 60)
+                } else {
+                    format!("🔄 {}s", remaining)
+                }
             }
         } else {
             String::new()
@@ -70,9 +85,14 @@ impl StatusWidget {
 
         if !interval_text.is_empty() {
             status_line.spans.push(Span::raw(" · "));
-            status_line
-                .spans
-                .push(Span::styled(interval_text, self.theme.status_bar));
+            let style = if refresh.is_refreshing {
+                Style::default()
+                    .fg(colors.cyan)
+                    .add_modifier(Modifier::ITALIC)
+            } else {
+                self.theme.status_bar
+            };
+            status_line.spans.push(Span::styled(interval_text, style));
         }
 
         // Show active filter indicator when not in search mode
