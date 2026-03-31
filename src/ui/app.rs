@@ -9,10 +9,12 @@ use crate::models::NotificationType;
 use crate::notifications::{fetch_notifications, NotificationFetchOptions};
 use crate::preview::PreviewData;
 use crate::preview_manager::{CacheStatus, PreviewManager, PRIORITY_HIGH, PRIORITY_LOW};
-use crate::state::{AppState, ConfirmAction, InputMode, MarkAllOption, PaneFocus, PreviewMode};
+use crate::state::{
+    AppState, CommandOutputData, ConfirmAction, InputMode, MarkAllOption, PaneFocus, PreviewMode,
+};
 use crate::terminal::Terminal;
 use crate::ui::components::{
-    action_menu, confirm, filter, help, help_search, list, loading, preview, status,
+    action_menu, command_output, confirm, filter, help, help_search, list, loading, preview, status,
 };
 use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
@@ -75,6 +77,7 @@ pub struct App {
     loading_widget: loading::LoadingWidget,
     filter_widget: filter::FilterWidget,
     action_menu_widget: action_menu::ActionMenuWidget,
+    command_output_widget: command_output::CommandOutputWidget,
     api_client: Option<crate::api::GitHubClient>,
     last_refresh: Instant,
     refresh_args: Option<(bool, bool, Option<usize>)>, // (all, participating, max_notifications)
@@ -115,6 +118,7 @@ impl App {
             loading_widget: loading::LoadingWidget::new(),
             filter_widget: filter::FilterWidget::new(),
             action_menu_widget: action_menu::ActionMenuWidget::new(),
+            command_output_widget: command_output::CommandOutputWidget::new(),
             api_client: None,
             last_refresh: Instant::now(),
             refresh_args: None,
@@ -1106,6 +1110,13 @@ impl App {
                 notification_count,
             );
         }
+
+        // Render command output popup as overlay (if active)
+        if self.state.input_mode == InputMode::CommandOutput {
+            if let Some(ref out) = self.state.command_output {
+                self.command_output_widget.render(frame, size, out);
+            }
+        }
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
@@ -1116,6 +1127,7 @@ impl App {
             InputMode::HelpSearch => self.handle_help_search_key(key),
             InputMode::Confirm => self.handle_confirm_key(key),
             InputMode::ActionMenu => self.handle_action_menu_key(key),
+            InputMode::CommandOutput => self.handle_command_output_key(key),
         }
     }
 
@@ -1179,6 +1191,37 @@ impl App {
             KeyCode::Enter => {
                 self.execute_selected_action();
                 self.state.input_mode = InputMode::Normal;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn handle_command_output_key(&mut self, key: KeyEvent) -> Result<()> {
+        match key.code {
+            KeyCode::Char('q') | KeyCode::Esc => {
+                self.state.command_output = None;
+                self.state.input_mode = InputMode::Normal;
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if let Some(ref mut out) = self.state.command_output {
+                    out.scroll = out.scroll.saturating_add(1);
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if let Some(ref mut out) = self.state.command_output {
+                    out.scroll = out.scroll.saturating_sub(1);
+                }
+            }
+            KeyCode::PageDown => {
+                if let Some(ref mut out) = self.state.command_output {
+                    out.scroll = out.scroll.saturating_add(10);
+                }
+            }
+            KeyCode::PageUp => {
+                if let Some(ref mut out) = self.state.command_output {
+                    out.scroll = out.scroll.saturating_sub(10);
+                }
             }
             _ => {}
         }
@@ -1274,6 +1317,44 @@ impl App {
             }
 
             // Clear selection
+            if self.state.has_selection() {
+                self.state.clear_selection();
+            }
+            return;
+        }
+
+        // show_output actions: run synchronously and display output in a popup
+        if custom_action.show_output {
+            let command = if is_batch {
+                actions::prepare_batch_command(&custom_action, &notifications, &github_host)
+            } else {
+                notifications
+                    .first()
+                    .map(|n| actions::prepare_command(&custom_action, n, &github_host))
+                    .unwrap_or_default()
+            };
+
+            if !command.trim().is_empty() {
+                match actions::execute_and_capture(&command) {
+                    Ok(output) => {
+                        let content = if output.trim().is_empty() {
+                            "(no output)".to_string()
+                        } else {
+                            output
+                        };
+                        self.state.command_output = Some(CommandOutputData {
+                            title: action_name,
+                            content,
+                            scroll: 0,
+                        });
+                        self.state.input_mode = InputMode::CommandOutput;
+                    }
+                    Err(e) => {
+                        self.state.status_message = Some(format!("{}: {}", action_name, e));
+                    }
+                }
+            }
+
             if self.state.has_selection() {
                 self.state.clear_selection();
             }

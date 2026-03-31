@@ -79,6 +79,15 @@ pub struct AppState {
     pub action_menu_index: usize,
     // Cached snoozed notification IDs — refreshed on fetch and after snooze/mute actions
     pub snoozed_ids: HashMap<String, SnoozeEntry>,
+    // Captured output from a show_output action
+    pub command_output: Option<CommandOutputData>,
+}
+
+/// State for displaying captured command output in a scrollable popup.
+pub struct CommandOutputData {
+    pub title: String,
+    pub content: String,
+    pub scroll: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,6 +99,7 @@ pub enum InputMode {
     Search,
     Confirm,
     ActionMenu,
+    CommandOutput,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -151,6 +161,7 @@ impl AppState {
             loading_progress: None,
             action_menu_index: 0,
             snoozed_ids: HashMap::new(),
+            command_output: None,
         }
     }
 

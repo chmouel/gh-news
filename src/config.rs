@@ -16,6 +16,10 @@ pub struct Action {
     /// This allows running TUI-based tools like fzf, vim, etc. Default: false.
     #[serde(default)]
     pub interactive: bool,
+    /// If true, capture command output and display it in a scrollable TUI popup.
+    /// Incompatible with `interactive`. Default: false.
+    #[serde(default)]
+    pub show_output: bool,
 }
 
 /// Application configuration loaded from config file and environment variables.

@@ -318,6 +318,7 @@ When you select multiple notifications and run this action, it executes once as 
 | `name` | required | Display name in the action menu |
 | `command` | required | Command template with placeholders |
 | `interactive` | `false` | Suspend TUI and run command with full terminal access (for TUI tools like fzf, vim) |
+| `show_output` | `false` | Capture command output and display it in a scrollable TUI popup (incompatible with `interactive`) |
 
 Actions work with multi-select: select multiple notifications with `Space`, then press `x` to run an action on all of them. With singular placeholders, the command runs once per notification. With plural placeholders (e.g., `{urls}`), the command runs once with all values.
 

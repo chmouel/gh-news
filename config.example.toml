@@ -224,6 +224,8 @@ github_host = "github.com"
 #   - command:     Command template with placeholders (required)
 #   - interactive: Suspend TUI and run with full terminal access for interactive
 #                  tools like vim, fzf, etc. (default: false)
+#   - show_output: Capture command output and display it in a scrollable TUI
+#                  popup. Incompatible with interactive. (default: false)
 #
 # Examples:
 
@@ -252,6 +254,12 @@ github_host = "github.com"
 # name = "Open in Vim"
 # command = "gh pr view {url} | vim -"
 # interactive = true
+
+# Show PR diff in scrollable popup
+# [[actions]]
+# name = "Show PR diff"
+# command = "gh pr diff {number} -R {full_name}"
+# show_output = true
 
 # ==============================================================================
 # STATE FILE

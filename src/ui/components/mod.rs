@@ -1,4 +1,5 @@
 pub mod action_menu;
+pub mod command_output;
 pub mod confirm;
 pub mod filter;
 pub mod help;

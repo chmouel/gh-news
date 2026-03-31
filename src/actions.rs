@@ -207,6 +207,22 @@ fn execute_background(command: &str) -> ActionResult {
     }
 }
 
+/// Execute a command synchronously and capture its combined stdout+stderr output.
+/// Returns the captured output string, or an error message.
+pub fn execute_and_capture(command: &str) -> std::result::Result<String, String> {
+    let result = Command::new("sh").arg("-c").arg(command).output();
+
+    match result {
+        Ok(output) => {
+            let mut combined = String::new();
+            combined.push_str(&String::from_utf8_lossy(&output.stdout));
+            combined.push_str(&String::from_utf8_lossy(&output.stderr));
+            Ok(combined)
+        }
+        Err(e) => Err(format!("Failed to execute: {}", e)),
+    }
+}
+
 /// Execute a command interactively with full terminal access.
 /// Returns Ok(exit_success) or Err with error message.
 pub fn execute_interactive(command: &str) -> std::result::Result<bool, String> {
@@ -319,6 +335,7 @@ mod tests {
             name: "Test".to_string(),
             command: "true".to_string(),
             interactive: false,
+            show_output: false,
         };
         let notification = create_test_notification();
         let result = execute_action(&action, &notification, "github.com");
@@ -331,6 +348,7 @@ mod tests {
             name: "Test".to_string(),
             command: "echo {id}".to_string(),
             interactive: true,
+            show_output: false,
         };
         let notification = create_test_notification();
         let result = prepare_command(&action, &notification, "github.com");
@@ -343,6 +361,7 @@ mod tests {
             name: "Empty".to_string(),
             command: "".to_string(),
             interactive: false,
+            show_output: false,
         };
         let notification = create_test_notification();
         let result = execute_action(&action, &notification, "github.com");
@@ -355,6 +374,7 @@ mod tests {
             name: "Whitespace".to_string(),
             command: "   ".to_string(),
             interactive: false,
+            show_output: false,
         };
         let notification = create_test_notification();
         let result = execute_action(&action, &notification, "github.com");
@@ -441,6 +461,7 @@ mod tests {
             name: "PipePlaceholder".to_string(),
             command: "echo {id} | rev".to_string(),
             interactive: false,
+            show_output: false,
         };
         // Verify placeholder substitution works with pipes
         let cmd = prepare_command(&action, &notification, "github.com");
@@ -709,6 +730,7 @@ mod tests {
             name: "Open all".to_string(),
             command: "firefox {urls}".to_string(),
             interactive: true,
+            show_output: false,
         };
         let notif1 = create_test_notification();
         let notif2 = create_pr_notification();
@@ -727,6 +749,7 @@ mod tests {
             name: "Echo".to_string(),
             command: "true {ids}".to_string(),
             interactive: false,
+            show_output: false,
         };
         let notif1 = create_test_notification();
         let notif2 = create_pr_notification();
