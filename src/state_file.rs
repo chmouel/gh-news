@@ -162,7 +162,6 @@ impl AppStateFile {
         Ok(state.pinned_notifications)
     }
 
-<<<<<<< HEAD
     /// Load snoozed notifications, filtering out expired entries
     pub fn load_snoozed_notifications() -> Result<HashMap<String, SnoozeEntry>> {
         let state = Self::load_full()?;
@@ -189,6 +188,47 @@ impl AppStateFile {
                 .snoozed_notifications
                 .insert(thread_id, SnoozeEntry { wake_time, note });
         })
+    }
+
+    /// Record a synthetic notification ID as dismissed so it is filtered out
+    /// on future fetches. The list is capped at 200 entries.
+    pub fn dismiss_synthetic_id(id: &str) -> Result<()> {
+        Self::update_with(|state| {
+            if !state.dismissed_synthetic_ids.iter().any(|d| d == id) {
+                state.dismissed_synthetic_ids.push(id.to_string());
+            }
+            Self::trim_dismissed(&mut state.dismissed_synthetic_ids);
+        })
+    }
+
+    /// Batch-dismiss multiple synthetic notification IDs.
+    pub fn dismiss_synthetic_ids(ids: &[String]) -> Result<()> {
+        if ids.is_empty() {
+            return Ok(());
+        }
+        Self::update_with(|state| {
+            for id in ids {
+                if !state.dismissed_synthetic_ids.iter().any(|d| d == id) {
+                    state.dismissed_synthetic_ids.push(id.clone());
+                }
+            }
+            Self::trim_dismissed(&mut state.dismissed_synthetic_ids);
+        })
+    }
+
+    /// Load the set of dismissed synthetic IDs for filtering.
+    pub fn load_dismissed_synthetic_ids() -> Result<HashSet<String>> {
+        let state = Self::load_full()?;
+        Ok(state.dismissed_synthetic_ids.into_iter().collect())
+    }
+
+    /// Keep only the most recent 200 entries, dropping the oldest.
+    fn trim_dismissed(ids: &mut Vec<String>) {
+        const MAX_DISMISSED: usize = 200;
+        if ids.len() > MAX_DISMISSED {
+            let excess = ids.len() - MAX_DISMISSED;
+            ids.drain(..excess);
+        }
     }
 }
 
@@ -299,46 +339,5 @@ mod tests {
             ("t3", now + Duration::days(7)),
         ]);
         assert_eq!(state.snoozed_notifications.len(), 3);
-    }
-
-    /// Record a synthetic notification ID as dismissed so it is filtered out
-    /// on future fetches. The list is capped at 200 entries.
-    pub fn dismiss_synthetic_id(id: &str) -> Result<()> {
-        Self::update_with(|state| {
-            if !state.dismissed_synthetic_ids.iter().any(|d| d == id) {
-                state.dismissed_synthetic_ids.push(id.to_string());
-            }
-            Self::trim_dismissed(&mut state.dismissed_synthetic_ids);
-        })
-    }
-
-    /// Batch-dismiss multiple synthetic notification IDs.
-    pub fn dismiss_synthetic_ids(ids: &[String]) -> Result<()> {
-        if ids.is_empty() {
-            return Ok(());
-        }
-        Self::update_with(|state| {
-            for id in ids {
-                if !state.dismissed_synthetic_ids.iter().any(|d| d == id) {
-                    state.dismissed_synthetic_ids.push(id.clone());
-                }
-            }
-            Self::trim_dismissed(&mut state.dismissed_synthetic_ids);
-        })
-    }
-
-    /// Load the set of dismissed synthetic IDs for filtering.
-    pub fn load_dismissed_synthetic_ids() -> Result<HashSet<String>> {
-        let state = Self::load_full()?;
-        Ok(state.dismissed_synthetic_ids.into_iter().collect())
-    }
-
-    /// Keep only the most recent 200 entries, dropping the oldest.
-    fn trim_dismissed(ids: &mut Vec<String>) {
-        const MAX_DISMISSED: usize = 200;
-        if ids.len() > MAX_DISMISSED {
-            let excess = ids.len() - MAX_DISMISSED;
-            ids.drain(..excess);
-        }
     }
 }

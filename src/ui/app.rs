@@ -115,12 +115,6 @@ pub struct App {
     background_refresh_rx: Option<Receiver<crate::error::Result<InitialLoadData>>>,
 }
 
-/// Synthetic notification IDs (from Actions/Events) that have no real
-/// GitHub thread and must not be marked read, toggled, or archived.
-fn is_synthetic_id(id: &str) -> bool {
-    id.starts_with("actions-") || id.starts_with("event-")
-}
-
 impl App {
     pub fn new(config: Config) -> Self {
         let auto_mark_read = config.auto_mark_read;
