@@ -164,6 +164,7 @@ auto_archive = false
 # Available environment variables:
 #   - GH_NEWS_ID          Repository notification ID
 #   - GH_NEWS_TITLE       Notification subject
+#   - GH_NEWS_NUMBER      PR/issue/discussion number (empty for other types)
 #   - GH_NEWS_REPO        Repository name (owner/repo)
 #   - GH_NEWS_OWNER       Repository owner
 #   - GH_NEWS_TYPE        Notification type (PullRequest, Issue, etc)
@@ -209,6 +210,7 @@ github_host = "github.com"
 # Available placeholders:
 #   - {id}        Notification ID
 #   - {title}     Notification title
+#   - {number}    PR/issue/discussion number (empty string for other types)
 #   - {url}       Web URL for the notification
 #   - {repo}      Repository name (without owner)
 #   - {owner}     Repository owner
