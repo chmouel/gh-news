@@ -21,6 +21,8 @@ GitHub notifications TUI built with Rust and ratatui.
 - Pin important notifications
 - Repository grouping with collapsible headers
 - Notification hooks for custom commands
+- Mute threads and repositories via the GitHub API
+- Snooze notifications locally until a chosen time
 - Custom actions with command templates
 - Mark notifications read/unread individually or in bulk
 - Static display mode for scripting and pipelines
@@ -99,7 +101,7 @@ gh news --static-display | grep "something" # List notifications without TUI
 - `d` - Archive (done) notification — removes from inbox
 - `!` - Pin/unpin notification (pinned appear at top)
 - `h` - Collapse current repository
-- `x` - Open action menu (run custom commands on notifications)
+- `x` - Open action menu (built-in and custom actions on notifications)
 
 ### Multi-select
 
@@ -229,6 +231,22 @@ fi
 ```
 
 **Note:** For commands with complex arguments or shell features, use a wrapper script.
+
+### Built-in Actions
+
+The action menu (press `x`) always includes these built-in actions:
+
+| Action | Description |
+|--------|-------------|
+| Mute Thread | Sets the thread subscription to ignored via the GitHub API. Future notifications for the thread are suppressed until you comment or are `@mentioned` again. |
+| Mute Repository | Sets the repository subscription to ignored via the GitHub API. Suppresses all notifications from that repository. |
+| Snooze (4 hours) | Hides the notification until 4 hours from now. |
+| Snooze (tomorrow 09:00) | Hides the notification until 09:00 the following day. |
+| Snooze (next week) | Hides the notification until 09:00 one week from now. |
+
+Snoozed notifications are hidden from the default view and stored locally. They reappear automatically once the snooze period expires. Mute actions are reflected back to GitHub immediately.
+
+All built-in actions support multi-select: select notifications with `Space`, then press `x` and choose an action to apply it to all selected notifications.
 
 ### Custom Actions
 

@@ -1,4 +1,5 @@
 use crate::actions::{self, ActionResult};
+use crate::builtin_actions::{self, CombinedAction};
 use crate::config::Config;
 use crate::error::Result;
 use crate::filter::Filter;
@@ -1096,10 +1097,11 @@ impl App {
             } else {
                 1
             };
+            let all_actions = builtin_actions::get_all_actions(&self.config.actions);
             self.action_menu_widget.render(
                 frame,
                 size,
-                &self.config.actions,
+                &all_actions,
                 self.state.action_menu_index,
                 notification_count,
             );
@@ -1153,7 +1155,8 @@ impl App {
     }
 
     fn handle_action_menu_key(&mut self, key: KeyEvent) -> Result<()> {
-        let action_count = self.config.actions.len();
+        let all_actions = builtin_actions::get_all_actions(&self.config.actions);
+        let action_count = all_actions.len();
         if action_count == 0 {
             self.state.input_mode = InputMode::Normal;
             return Ok(());
@@ -1184,7 +1187,8 @@ impl App {
 
     fn execute_selected_action(&mut self) {
         let action_index = self.state.action_menu_index;
-        let action = match self.config.actions.get(action_index) {
+        let all_actions = builtin_actions::get_all_actions(&self.config.actions);
+        let action = match all_actions.get(action_index) {
             Some(a) => a.clone(),
             None => return,
         };
@@ -1208,22 +1212,57 @@ impl App {
             return;
         }
 
+        // Handle built-in actions
+        if let CombinedAction::Builtin(builtin) = &action {
+            let msg = if let Some(ref client) = self.api_client {
+                if notifications.len() > 1 {
+                    match builtin.execute_batch(&notifications, client) {
+                        Ok(msg) => msg,
+                        Err(e) => format!("{}: {}", builtin.name(), e),
+                    }
+                } else {
+                    match builtin.execute(&notifications[0], client) {
+                        Ok(msg) => msg,
+                        Err(e) => format!("{}: {}", builtin.name(), e),
+                    }
+                }
+            } else {
+                format!("{}: API client not available", builtin.name())
+            };
+
+            // Clear selection after executing action
+            if self.state.has_selection() {
+                self.state.clear_selection();
+            }
+
+            self.state.status_message = Some(msg);
+            self.state.rebuild_after_changes();
+            self.fetch_preview_for_selected_notification();
+            self.prefetch_neighbour_previews();
+            return;
+        }
+
+        // Handle custom actions
+        let CombinedAction::Custom(custom_action) = action else {
+            return;
+        };
+
         let count = notifications.len();
         let github_host = self.config.github_host.clone();
-        let action_name = action.name.clone();
-        let is_batch = actions::has_batch_placeholders(&action.command);
+        let action_name = custom_action.name.clone();
+        let is_batch = actions::has_batch_placeholders(&custom_action.command);
 
         // Interactive actions: prepare command and defer execution to main loop
         // (requires terminal access for suspend/resume)
-        if action.interactive {
+        if custom_action.interactive {
             let command = if is_batch {
                 // Batch mode: run single command with all notifications
-                actions::prepare_batch_command(&action, &notifications, &github_host)
+                actions::prepare_batch_command(&custom_action, &notifications, &github_host)
             } else {
                 // Non-batch: only run on first notification
                 notifications
                     .first()
-                    .map(|n| actions::prepare_command(&action, n, &github_host))
+                    .map(|n| actions::prepare_command(&custom_action, n, &github_host))
                     .unwrap_or_default()
             };
 
@@ -1244,7 +1283,7 @@ impl App {
         // Non-interactive actions: spawn in background
         let msg = if is_batch {
             // Batch mode: single command with all notifications
-            match actions::execute_batch_action(&action, &notifications, &github_host) {
+            match actions::execute_batch_action(&custom_action, &notifications, &github_host) {
                 ActionResult::Spawned => format!(
                     "{}: ran on {} notifications",
                     action_name,
@@ -1258,7 +1297,7 @@ impl App {
             let mut last_error = String::new();
 
             for notification in &notifications {
-                match actions::execute_action(&action, notification, &github_host) {
+                match actions::execute_action(&custom_action, notification, &github_host) {
                     ActionResult::Spawned => {
                         success_count += 1;
                     }
@@ -2111,16 +2150,11 @@ impl App {
                 self.state.input_mode = InputMode::Search;
             }
             KeyCode::Char('x') => {
-                // Open action menu if there are configured actions
-                if !self.config.actions.is_empty() {
-                    // Only open if there's a notification selected or multi-select is active
-                    if self.state.has_selection() || self.state.selected_notification().is_some() {
-                        self.state.action_menu_index = 0;
-                        self.state.input_mode = InputMode::ActionMenu;
-                    }
-                } else {
-                    self.state.status_message =
-                        Some("No actions configured. Add [[actions]] to config.toml".to_string());
+                // Open action menu (built-in actions are always available)
+                // Only open if there's a notification selected or multi-select is active
+                if self.state.has_selection() || self.state.selected_notification().is_some() {
+                    self.state.action_menu_index = 0;
+                    self.state.input_mode = InputMode::ActionMenu;
                 }
             }
             _ => {}

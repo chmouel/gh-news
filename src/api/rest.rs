@@ -179,6 +179,29 @@ impl GitHubClient {
         self.get_json(url)
     }
 
+    /// Mute a repository by setting subscription to ignored.
+    /// This prevents notifications for this repository until the user acts on it again.
+    pub fn mute_repository(&self, owner: &str, repo: &str) -> Result<()> {
+        let url = format!("{}/repos/{}/{}/subscription", self.api_base, owner, repo);
+        let payload = serde_json::json!({
+            "ignored": true
+        });
+        self.send_no_content(self.client.put(&url).json(&payload))
+    }
+
+    /// Mute a notification thread by setting subscription to ignored.
+    /// This prevents future notifications for this thread until the user comments or is mentioned.
+    pub fn mute_thread(&self, thread_id: &str) -> Result<()> {
+        let url = format!(
+            "{}/notifications/threads/{}/subscription",
+            self.api_base, thread_id
+        );
+        let payload = serde_json::json!({
+            "ignored": true
+        });
+        self.send_no_content(self.client.put(&url).json(&payload))
+    }
+
     /// Execute a GraphQL query against the GitHub API.
     ///
     /// GitHub Discussions are only available via GraphQL, so this method

@@ -1,4 +1,4 @@
-use crate::config::Action;
+use crate::builtin_actions::CombinedAction;
 use crate::ui::theme::{Theme, TokyoNight};
 use ratatui::{
     prelude::*,
@@ -20,14 +20,14 @@ impl ActionMenuWidget {
         &self,
         frame: &mut Frame,
         area: Rect,
-        actions: &[Action],
+        actions: &[CombinedAction],
         selected_index: usize,
         notification_count: usize,
     ) {
         let colors = TokyoNight::colors();
 
         // Calculate box dimensions based on content
-        let max_name_len = actions.iter().map(|a| a.name.len()).max().unwrap_or(10);
+        let max_name_len = actions.iter().map(|a| a.name().len()).max().unwrap_or(10);
         let box_width = (max_name_len + 10).clamp(30, 60) as u16;
         let box_width = box_width.min(area.width.saturating_sub(4));
 
@@ -66,7 +66,7 @@ impl ActionMenuWidget {
 
             content.push(Line::from(vec![
                 Span::styled(format!(" {} ", indicator), style),
-                Span::styled(&action.name, style),
+                Span::styled(action.name(), style),
             ]));
         }
 

@@ -1,5 +1,6 @@
 mod actions;
 mod api;
+mod builtin_actions;
 mod cache;
 mod cli;
 mod config;

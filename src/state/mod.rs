@@ -1,6 +1,7 @@
 use crate::filter::Filter;
 use crate::models::Notification;
 use crate::preview::PreviewData;
+use crate::state_file::SnoozeEntry;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
@@ -76,6 +77,8 @@ pub struct AppState {
     pub loading_progress: Option<(usize, usize)>,
     // Action menu: index of selected action
     pub action_menu_index: usize,
+    // Cached snoozed notification IDs — refreshed on fetch and after snooze/mute actions
+    pub snoozed_ids: HashMap<String, SnoozeEntry>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -147,6 +150,7 @@ impl AppState {
             selected_notification_ids: HashSet::new(),
             loading_progress: None,
             action_menu_index: 0,
+            snoozed_ids: HashMap::new(),
         }
     }
 
@@ -180,6 +184,8 @@ impl AppState {
 
     pub fn set_notifications(&mut self, notifications: Vec<Notification>) {
         self.notifications = notifications;
+        self.snoozed_ids =
+            crate::state_file::AppStateFile::load_snoozed_notifications().unwrap_or_default();
         self.apply_filter();
     }
 
@@ -198,10 +204,30 @@ impl AppState {
                 .notifications
                 .iter()
                 .enumerate()
-                .filter_map(|(i, n)| if filter.matches(n) { Some(i) } else { None })
+                .filter_map(|(i, n)| {
+                    if self.snoozed_ids.contains_key(&n.id) {
+                        return None;
+                    }
+                    if filter.matches(n) {
+                        Some(i)
+                    } else {
+                        None
+                    }
+                })
                 .collect();
         } else {
-            self.filtered_notifications = (0..self.notifications.len()).collect();
+            self.filtered_notifications = self
+                .notifications
+                .iter()
+                .enumerate()
+                .filter_map(|(i, n)| {
+                    if self.snoozed_ids.contains_key(&n.id) {
+                        None
+                    } else {
+                        Some(i)
+                    }
+                })
+                .collect();
         }
 
         // Build tree structure grouped by repository
@@ -226,6 +252,14 @@ impl AppState {
             self.org_grouping,
         )
         .build();
+    }
+
+    /// Rebuild the tree after a snooze or mute action.
+    /// Re-reads snoozed IDs from disk (they were just updated), then reapplies filters.
+    pub fn rebuild_after_changes(&mut self) {
+        self.snoozed_ids =
+            crate::state_file::AppStateFile::load_snoozed_notifications().unwrap_or_default();
+        self.apply_filter();
     }
 
     pub fn selected_org(&self) -> Option<&str> {

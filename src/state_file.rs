@@ -1,6 +1,8 @@
 use crate::error::{Error, Result};
 use crate::models::Notification;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -47,6 +49,16 @@ fn get_state_path() -> Result<PathBuf> {
         .ok_or_else(|| Error::Config("State path not initialised".to_string()))
 }
 
+/// Snooze information for a notification thread
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SnoozeEntry {
+    /// When the notification should become visible again
+    pub wake_time: DateTime<Utc>,
+    /// Optional note about why it was snoozed
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppStateFile {
     #[serde(default = "default_auto_mark_read")]
@@ -55,6 +67,9 @@ pub struct AppStateFile {
     pub auto_archive: bool,
     #[serde(default)]
     pub pinned_notifications: Vec<Notification>,
+    /// Map of notification thread ID to snooze information
+    #[serde(default)]
+    pub snoozed_notifications: HashMap<String, SnoozeEntry>,
 }
 
 fn default_auto_mark_read() -> bool {
@@ -67,6 +82,7 @@ impl AppStateFile {
             auto_mark_read,
             auto_archive: false,
             pinned_notifications: Vec::new(),
+            snoozed_notifications: HashMap::new(),
         }
     }
 
@@ -100,9 +116,9 @@ impl AppStateFile {
         Self::load_full().unwrap_or_else(|_| Self::new(auto_mark_read))
     }
 
-    fn update_with<F>(mut update: F) -> Result<()>
+    fn update_with<F>(update: F) -> Result<()>
     where
-        F: FnMut(&mut AppStateFile),
+        F: FnOnce(&mut AppStateFile),
     {
         let mut state = Self::load_or_default(default_auto_mark_read());
         update(&mut state);
@@ -141,5 +157,143 @@ impl AppStateFile {
     pub fn load_pinned_notifications() -> Result<Vec<Notification>> {
         let state = Self::load_full()?;
         Ok(state.pinned_notifications)
+    }
+
+    /// Load snoozed notifications, filtering out expired entries
+    pub fn load_snoozed_notifications() -> Result<HashMap<String, SnoozeEntry>> {
+        let state = Self::load_full()?;
+        let now = Utc::now();
+
+        // Filter out expired snoozes
+        let active_snoozes = state
+            .snoozed_notifications
+            .into_iter()
+            .filter(|(_, entry)| entry.wake_time > now)
+            .collect();
+
+        Ok(active_snoozes)
+    }
+
+    /// Add or update a snooze entry for a notification
+    pub fn snooze_notification(
+        thread_id: String,
+        wake_time: DateTime<Utc>,
+        note: Option<String>,
+    ) -> Result<()> {
+        Self::update_with(|state| {
+            state
+                .snoozed_notifications
+                .insert(thread_id, SnoozeEntry { wake_time, note });
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Duration;
+
+    fn make_state_with_snoozes(entries: &[(&str, DateTime<Utc>)]) -> AppStateFile {
+        let mut state = AppStateFile::new(true);
+        for (id, wake_time) in entries {
+            state.snoozed_notifications.insert(
+                id.to_string(),
+                SnoozeEntry {
+                    wake_time: *wake_time,
+                    note: None,
+                },
+            );
+        }
+        state
+    }
+
+    #[test]
+    fn snooze_entry_is_stored() {
+        let wake_time = Utc::now() + Duration::hours(4);
+        let mut state = AppStateFile::new(true);
+        state.snoozed_notifications.insert(
+            "thread-1".to_string(),
+            SnoozeEntry {
+                wake_time,
+                note: None,
+            },
+        );
+        assert!(state.snoozed_notifications.contains_key("thread-1"));
+        assert_eq!(state.snoozed_notifications["thread-1"].wake_time, wake_time);
+    }
+
+    #[test]
+    fn expired_snoozes_filtered_on_load() {
+        let now = Utc::now();
+        let state = make_state_with_snoozes(&[
+            ("active", now + Duration::hours(1)),
+            ("expired", now - Duration::minutes(1)),
+        ]);
+
+        let active: HashMap<String, SnoozeEntry> = state
+            .snoozed_notifications
+            .into_iter()
+            .filter(|(_, e)| e.wake_time > now)
+            .collect();
+
+        assert!(active.contains_key("active"));
+        assert!(!active.contains_key("expired"));
+    }
+
+    #[test]
+    fn snooze_note_is_optional() {
+        let wake_time = Utc::now() + Duration::days(1);
+        let with_note = SnoozeEntry {
+            wake_time,
+            note: Some("waiting for review".to_string()),
+        };
+        let without_note = SnoozeEntry {
+            wake_time,
+            note: None,
+        };
+
+        assert_eq!(with_note.note.as_deref(), Some("waiting for review"));
+        assert!(without_note.note.is_none());
+    }
+
+    #[test]
+    fn snooze_serialises_and_deserialises() {
+        let wake_time = Utc::now() + Duration::hours(4);
+        let mut state = AppStateFile::new(true);
+        state.snoozed_notifications.insert(
+            "t1".to_string(),
+            SnoozeEntry {
+                wake_time,
+                note: Some("later".to_string()),
+            },
+        );
+
+        let toml_str = toml::to_string_pretty(&state).unwrap();
+        let restored: AppStateFile = toml::from_str(&toml_str).unwrap();
+
+        assert!(restored.snoozed_notifications.contains_key("t1"));
+        let entry = &restored.snoozed_notifications["t1"];
+        // Wake time round-trips (truncate to seconds for TOML precision)
+        assert_eq!(entry.wake_time.timestamp(), wake_time.timestamp());
+        assert_eq!(entry.note.as_deref(), Some("later"));
+    }
+
+    #[test]
+    fn state_without_snoozes_deserialises() {
+        // Minimal state with no snoozed_notifications key should default to empty map
+        let toml_str = "auto_mark_read = true\n";
+        let state: AppStateFile = toml::from_str(toml_str).unwrap();
+        assert!(state.snoozed_notifications.is_empty());
+    }
+
+    #[test]
+    fn multiple_snoozes_independent() {
+        let now = Utc::now();
+        let state = make_state_with_snoozes(&[
+            ("t1", now + Duration::hours(1)),
+            ("t2", now + Duration::hours(2)),
+            ("t3", now + Duration::days(7)),
+        ]);
+        assert_eq!(state.snoozed_notifications.len(), 3);
     }
 }
