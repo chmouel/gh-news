@@ -227,16 +227,16 @@ github_host = "github.com"
 #
 # Examples:
 
-# Copy notification URL to clipboard (Linux with xclip)
-# [[actions]]
-# name = "Copy URL"
-# command = "echo {url} | xclip -selection clipboard"
-
-# Copy notification URL to clipboard (macOS)
+# Copy notification URL to clipboard (on macOS use wl-copy for Linux)
 # [[actions]]
 # name = "Copy URL"
 # command = "echo {url} | pbcopy"
-
+#
+# Send a /lgtm comment on a PR
+# [[actions]]
+# name = "Send a /lgtm comment"
+# command = "gh pr comment {number} --repo {owner}/{repo} --body '/lgtm'"
+#
 # Open in VS Code
 # [[actions]]
 # name = "Open in VS Code"
