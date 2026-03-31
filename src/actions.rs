@@ -217,7 +217,22 @@ pub fn execute_and_capture(command: &str) -> std::result::Result<String, String>
             let mut combined = String::new();
             combined.push_str(&String::from_utf8_lossy(&output.stdout));
             combined.push_str(&String::from_utf8_lossy(&output.stderr));
-            Ok(combined)
+
+            if output.status.success() {
+                Ok(combined)
+            } else {
+                let status = match output.status.code() {
+                    Some(code) => format!("exit status {}", code),
+                    None => "terminated by signal".to_string(),
+                };
+                let combined = combined.trim();
+
+                if combined.is_empty() {
+                    Err(format!("Command failed ({})", status))
+                } else {
+                    Err(format!("Command failed ({}): {}", status, combined))
+                }
+            }
         }
         Err(e) => Err(format!("Failed to execute: {}", e)),
     }
@@ -757,6 +772,13 @@ mod tests {
 
         let result = execute_batch_action(&action, &notifications, "github.com");
         assert!(matches!(result, ActionResult::Spawned));
+    }
+
+    #[test]
+    fn test_execute_and_capture_returns_error_on_non_zero_exit() {
+        let error = execute_and_capture("printf '' >&2; exit 7").unwrap_err();
+
+        assert!(error.contains("Command failed (exit status 7)"));
     }
 
     #[test]

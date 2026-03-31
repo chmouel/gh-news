@@ -1232,6 +1232,53 @@ impl App {
         Ok(())
     }
 
+    fn capture_show_output_command(command: &str) -> std::result::Result<String, String> {
+        if command.trim().is_empty() {
+            return Err("Empty command".to_string());
+        }
+
+        let output = actions::execute_and_capture(command)?;
+        let output = output.trim_end();
+
+        if output.trim().is_empty() {
+            Ok("(no output)".to_string())
+        } else {
+            Ok(output.to_string())
+        }
+    }
+
+    fn capture_show_output_action(
+        action: &crate::config::Action,
+        notifications: &[Notification],
+        github_host: &str,
+    ) -> std::result::Result<String, String> {
+        if actions::has_batch_placeholders(&action.command) {
+            let command = actions::prepare_batch_command(action, notifications, github_host);
+            return Self::capture_show_output_command(&command);
+        }
+
+        let show_headers = notifications.len() > 1;
+        let mut outputs = Vec::with_capacity(notifications.len());
+
+        for notification in notifications {
+            let command = actions::prepare_command(action, notification, github_host);
+            let output = Self::capture_show_output_command(&command)?;
+
+            if show_headers {
+                outputs.push(format!(
+                    "{} ({})\n{}",
+                    notification.title(),
+                    notification.id,
+                    output
+                ));
+            } else {
+                outputs.push(output);
+            }
+        }
+
+        Ok(outputs.join("\n\n"))
+    }
+
     fn execute_selected_action(&mut self) {
         let action_index = self.state.action_menu_index;
         let all_actions = builtin_actions::get_all_actions(&self.config.actions);
@@ -1329,33 +1376,18 @@ impl App {
 
         // show_output actions: run synchronously and display output in a popup
         if custom_action.show_output {
-            let command = if is_batch {
-                actions::prepare_batch_command(&custom_action, &notifications, &github_host)
-            } else {
-                notifications
-                    .first()
-                    .map(|n| actions::prepare_command(&custom_action, n, &github_host))
-                    .unwrap_or_default()
-            };
-
-            if !command.trim().is_empty() {
-                match actions::execute_and_capture(&command) {
-                    Ok(output) => {
-                        let content = if output.trim().is_empty() {
-                            "(no output)".to_string()
-                        } else {
-                            output
-                        };
-                        self.state.command_output = Some(CommandOutputData {
-                            title: action_name,
-                            content,
-                            scroll: 0,
-                        });
-                        self.state.input_mode = InputMode::CommandOutput;
-                    }
-                    Err(e) => {
-                        self.state.status_message = Some(format!("{}: {}", action_name, e));
-                    }
+            match Self::capture_show_output_action(&custom_action, &notifications, &github_host) {
+                Ok(content) => {
+                    self.state.command_output = Some(CommandOutputData {
+                        title: action_name,
+                        content,
+                        scroll: 0,
+                    });
+                    self.state.input_mode = InputMode::CommandOutput;
+                }
+                Err(e) => {
+                    self.state.command_output = None;
+                    self.state.status_message = Some(format!("{}: {}", action_name, e));
                 }
             }
 
@@ -2761,5 +2793,105 @@ impl Drop for App {
         }
 
         self.preview_manager.take();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Action;
+    use crate::models::{NotificationType, Owner, Repository, Subject};
+
+    fn create_notification(id: &str, title: &str, number: u32) -> Notification {
+        Notification {
+            id: id.to_string(),
+            unread: true,
+            last_read_at: None,
+            updated_at: None,
+            reason: "mention".to_string(),
+            repository: Repository {
+                id: 1,
+                name: "gh-news".to_string(),
+                full_name: "chmouel/gh-news".to_string(),
+                owner: Owner {
+                    login: "chmouel".to_string(),
+                    id: 1,
+                    owner_type: "User".to_string(),
+                },
+                private: false,
+            },
+            subject: Subject {
+                title: title.to_string(),
+                subject_type: NotificationType::Issue,
+                url: Some(format!(
+                    "https://api.github.com/repos/chmouel/gh-news/issues/{}",
+                    number
+                )),
+                latest_comment_url: None,
+            },
+            latest_comment_url: None,
+        }
+    }
+
+    fn create_test_app(action: Action) -> App {
+        let config = Config {
+            actions: vec![action],
+            ..Config::default()
+        };
+        let mut app = App::new(config);
+        app.state.set_notifications(vec![
+            create_notification("12345", "First notification", 42),
+            create_notification("99999", "Second notification", 99),
+        ]);
+        app
+    }
+
+    fn custom_action_index() -> usize {
+        builtin_actions::BuiltinAction::all().len()
+    }
+
+    #[test]
+    fn test_action_menu_enter_preserves_command_output_mode() {
+        let action = Action {
+            name: "Show output".to_string(),
+            command: "printf 'hello'".to_string(),
+            interactive: false,
+            show_output: true,
+        };
+        let mut app = create_test_app(action);
+        app.state.action_menu_index = custom_action_index();
+        app.state.input_mode = InputMode::ActionMenu;
+
+        app.handle_action_menu_key(KeyEvent::from(KeyCode::Enter))
+            .unwrap();
+
+        assert_eq!(app.state.input_mode, InputMode::CommandOutput);
+        let output = app.state.command_output.as_ref().unwrap();
+        assert_eq!(output.title, "Show output");
+        assert_eq!(output.content, "hello");
+    }
+
+    #[test]
+    fn test_show_output_runs_for_each_selected_notification() {
+        let action = Action {
+            name: "Show ids".to_string(),
+            command: "printf {id}".to_string(),
+            interactive: false,
+            show_output: true,
+        };
+        let mut app = create_test_app(action);
+        app.state.action_menu_index = custom_action_index();
+        app.state.toggle_selection("12345".to_string());
+        app.state.toggle_selection("99999".to_string());
+
+        app.execute_selected_action();
+
+        let output = app.state.command_output.as_ref().unwrap();
+        assert_eq!(app.state.input_mode, InputMode::CommandOutput);
+        assert!(output.content.contains("First notification (12345)\n12345"));
+        assert!(output
+            .content
+            .contains("Second notification (99999)\n99999"));
+        assert!(!app.state.has_selection());
     }
 }
