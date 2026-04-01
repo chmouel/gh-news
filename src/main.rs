@@ -166,10 +166,17 @@ fn run() -> Result<()> {
     // Always use config's default preview mode on startup
     let preview_mode = config.get_default_preview_mode();
 
-    // Load auto-mark-read and auto-archive settings, with persisted state taking precedence.
-    let auto_mark_read =
-        state_file::AppStateFile::load_auto_mark_read().unwrap_or(opts.auto_mark_read);
-    let auto_archive = state_file::AppStateFile::load_auto_archive().unwrap_or(opts.auto_archive);
+    // Config/CLI disabling always wins; otherwise use the persisted toggle (m-key).
+    let auto_mark_read = if !opts.auto_mark_read {
+        false
+    } else {
+        state_file::AppStateFile::load_auto_mark_read().unwrap_or(true)
+    };
+    let auto_archive = if !opts.auto_archive {
+        false
+    } else {
+        state_file::AppStateFile::load_auto_archive().unwrap_or(false)
+    };
 
     // Set initial values. `set_auto_archive` will correctly enforce `auto_mark_read` if needed.
     app.set_auto_mark_read(auto_mark_read);
