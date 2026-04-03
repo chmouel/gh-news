@@ -73,9 +73,6 @@ gh-news shows a loading screen while fetching notifications during start-up and 
 - `-p, --participating` - Only show notifications where you're participating/mentioned
 - `-r, --mark-read` - Mark all notifications as read (non-interactive)
 - `-s, --static-display` - Print notifications and exit (for scripts)
-- `--no-auto-mark-read` - Disable auto-marking notifications as read when navigating
-- `--no-auto-archive` - Disable auto-archiving notifications when navigating
-- `--no-auto-mark-on-open` - Disable auto-marking notifications as read when opening them
 - `--no-cache` - Bypass notification cache and always fetch fresh from the API
 - `--state-file <PATH>` - Use a custom state file path (overrides config and default)
 

@@ -45,16 +45,10 @@ struct RuntimeOptions {
     participating: bool,
     max_notifications: Option<usize>,
     filter_pattern: Option<String>,
-    auto_mark_read: bool,
-    auto_archive: bool,
-    auto_mark_on_open: bool,
 }
 
 impl RuntimeOptions {
     fn from_args_and_config(args: &Args, config: &Config) -> Self {
-        let auto_archive = !args.no_auto_archive && config.auto_archive;
-        // When auto_archive is enabled, auto_mark_read is implicitly forced on
-        let auto_mark_read = auto_archive || (!args.no_auto_mark_read && config.auto_mark_read);
         Self {
             // CLI flags override config (for booleans, CLI true wins)
             show_all: args.all || config.show_read,
@@ -62,9 +56,6 @@ impl RuntimeOptions {
             // CLI takes precedence if provided
             max_notifications: args.max_notifications.or(config.max_notifications),
             filter_pattern: args.filter.clone().or(config.default_filter.clone()),
-            auto_mark_read,
-            auto_archive,
-            auto_mark_on_open: !args.no_auto_mark_on_open && config.auto_mark_on_open,
         }
     }
 }
@@ -168,13 +159,13 @@ fn run() -> Result<()> {
     // Always use config's default preview mode on startup
     let preview_mode = config.get_default_preview_mode();
 
-    // Config/CLI disabling always wins; otherwise use the persisted toggle (m-key).
-    let auto_mark_read = if !opts.auto_mark_read {
+    // Config disabling always wins; otherwise use the persisted toggle (m-key).
+    let auto_mark_read = if !config.auto_mark_read {
         false
     } else {
         state_file::AppStateFile::load_auto_mark_read().unwrap_or(true)
     };
-    let auto_archive = if !opts.auto_archive {
+    let auto_archive = if !config.auto_archive {
         false
     } else {
         state_file::AppStateFile::load_auto_archive().unwrap_or(false)
@@ -183,7 +174,7 @@ fn run() -> Result<()> {
     // Set initial values. `set_auto_archive` will correctly enforce `auto_mark_read` if needed.
     app.set_auto_mark_read(auto_mark_read);
     app.set_auto_archive(auto_archive);
-    app.set_auto_mark_on_open(opts.auto_mark_on_open);
+    app.set_auto_mark_on_open(config.auto_mark_on_open);
 
     let settings = PendingStateSettings {
         filter,
