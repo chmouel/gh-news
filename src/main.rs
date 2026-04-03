@@ -47,6 +47,7 @@ struct RuntimeOptions {
     filter_pattern: Option<String>,
     auto_mark_read: bool,
     auto_archive: bool,
+    auto_mark_on_open: bool,
 }
 
 impl RuntimeOptions {
@@ -63,6 +64,7 @@ impl RuntimeOptions {
             filter_pattern: args.filter.clone().or(config.default_filter.clone()),
             auto_mark_read,
             auto_archive,
+            auto_mark_on_open: !args.no_auto_mark_on_open && config.auto_mark_on_open,
         }
     }
 }
@@ -181,6 +183,7 @@ fn run() -> Result<()> {
     // Set initial values. `set_auto_archive` will correctly enforce `auto_mark_read` if needed.
     app.set_auto_mark_read(auto_mark_read);
     app.set_auto_archive(auto_archive);
+    app.set_auto_mark_on_open(opts.auto_mark_on_open);
 
     let settings = PendingStateSettings {
         filter,

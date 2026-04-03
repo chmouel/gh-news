@@ -45,6 +45,7 @@ pub struct Config {
     // Behaviour
     pub auto_mark_read: bool,
     pub auto_archive: bool,
+    pub auto_mark_on_open: bool,
 
     // External commands
     pub browser_command: Option<String>,
@@ -120,6 +121,7 @@ impl Default for Config {
             org_grouping: OrgGroupingMode::default(),
             auto_mark_read: true,
             auto_archive: false,
+            auto_mark_on_open: true,
             cache_file: None,
             browser_command: None,
             on_new_notification_command: None,

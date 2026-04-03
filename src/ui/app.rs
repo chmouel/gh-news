@@ -106,6 +106,7 @@ pub struct App {
     // Auto-mark-read state
     auto_mark_read_enabled: bool,
     auto_archive_enabled: bool,
+    auto_mark_on_open: bool,
     pending_mark_read: Option<(String, Instant)>, // (notification_id, timestamp)
     // Track if pinned notifications need to be saved
     pinned_state_dirty: bool,
@@ -118,6 +119,7 @@ pub struct App {
 impl App {
     pub fn new(config: Config) -> Self {
         let auto_mark_read = config.auto_mark_read;
+        let auto_mark_on_open = config.auto_mark_on_open;
         let org_grouping = config.org_grouping;
         let mut state = AppState::new();
         state.org_grouping = org_grouping;
@@ -146,6 +148,7 @@ impl App {
             pending_interactive_action: None,
             auto_mark_read_enabled: auto_mark_read,
             auto_archive_enabled: false,
+            auto_mark_on_open,
             pending_mark_read: None,
             pinned_state_dirty: false,
             cache_path: None,
@@ -156,6 +159,10 @@ impl App {
 
     pub fn set_auto_mark_read(&mut self, enabled: bool) {
         self.auto_mark_read_enabled = enabled;
+    }
+
+    pub fn set_auto_mark_on_open(&mut self, enabled: bool) {
+        self.auto_mark_on_open = enabled;
     }
 
     pub fn set_auto_archive(&mut self, enabled: bool) {
@@ -1879,26 +1886,32 @@ impl App {
                                 }
                             }
 
-                            if notif.is_unread() {
+                            if self.auto_mark_on_open && notif.is_unread() {
                                 marked_count += 1;
                             }
                         }
 
-                        self.state.mark_notification_read(notification_id);
-                        if !is_synthetic_id(notification_id) {
-                            if let Some(ref client) = self.api_client {
-                                let _ = client.mark_notification_read(notification_id);
+                        if self.auto_mark_on_open {
+                            self.state.mark_notification_read(notification_id);
+                            if !is_synthetic_id(notification_id) {
+                                if let Some(ref client) = self.api_client {
+                                    let _ = client.mark_notification_read(notification_id);
+                                }
                             }
                         }
                     }
 
                     self.state.clear_selection();
-                    self.state.status_message = Some(format!(
-                        "Opened {} notification{}, marked {} as read",
-                        opened_count,
-                        if opened_count == 1 { "" } else { "s" },
-                        marked_count
-                    ));
+                    self.state.status_message = if self.auto_mark_on_open {
+                        Some(format!(
+                            "Opened {} notification{}, marked {} as read",
+                            opened_count,
+                            if opened_count == 1 { "" } else { "s" },
+                            marked_count
+                        ))
+                    } else {
+                        Some(format!("Opened {} notifications", opened_count))
+                    };
                 } else if let Some(org_name) = self.state.selected_org() {
                     let org_name = org_name.to_string();
                     self.state.toggle_org_expansion(&org_name);
@@ -1910,8 +1923,8 @@ impl App {
                     // Open the notification URL in the browser
                     self.open_notification_url(notification);
 
-                    // Mark notification as read if it's unread
-                    if notification.is_unread() {
+                    // Mark notification as read if it's unread and auto_mark_on_open is enabled
+                    if self.auto_mark_on_open && notification.is_unread() {
                         let notification_id = notification.id.clone();
 
                         // Update local state optimistically (for better UX)

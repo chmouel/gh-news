@@ -75,6 +75,7 @@ gh-news shows a loading screen while fetching notifications during start-up and 
 - `-s, --static-display` - Print notifications and exit (for scripts)
 - `--no-auto-mark-read` - Disable auto-marking notifications as read when navigating
 - `--no-auto-archive` - Disable auto-archiving notifications when navigating
+- `--no-auto-mark-on-open` - Disable auto-marking notifications as read when opening them
 - `--no-cache` - Bypass notification cache and always fetch fresh from the API
 - `--state-file <PATH>` - Use a custom state file path (overrides config and default)
 
@@ -174,6 +175,7 @@ org_grouping = "auto"               # "off", "auto", or "always"
 # Behaviour
 auto_mark_read = true                # mark notifications read when navigating to them
 auto_archive = false                 # archive notifications when navigating away (implies auto_mark_read)
+auto_mark_on_open = true             # mark notifications read when opening them in the browser
 
 # Notification cache (cached data is shown instantly on startup, then refreshed)
 cache_file = ""              # custom cache path (default: ~/.cache/gh-news/notifications_cache.json)

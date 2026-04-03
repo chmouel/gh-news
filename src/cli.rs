@@ -45,6 +45,10 @@ pub struct Args {
     #[arg(long)]
     pub no_auto_archive: bool,
 
+    /// Disable auto-marking notifications as read when opening them
+    #[arg(long)]
+    pub no_auto_mark_on_open: bool,
+
     /// Bypass notification cache and always fetch fresh from the API
     #[arg(long)]
     pub no_cache: bool,
