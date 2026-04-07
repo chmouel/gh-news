@@ -349,6 +349,7 @@ mod tests {
         let action = Action {
             name: "Test".to_string(),
             command: "true".to_string(),
+            priority: None,
             interactive: false,
             show_output: false,
         };
@@ -362,6 +363,7 @@ mod tests {
         let action = Action {
             name: "Test".to_string(),
             command: "echo {id}".to_string(),
+            priority: None,
             interactive: true,
             show_output: false,
         };
@@ -375,6 +377,7 @@ mod tests {
         let action = Action {
             name: "Empty".to_string(),
             command: "".to_string(),
+            priority: None,
             interactive: false,
             show_output: false,
         };
@@ -388,6 +391,7 @@ mod tests {
         let action = Action {
             name: "Whitespace".to_string(),
             command: "   ".to_string(),
+            priority: None,
             interactive: false,
             show_output: false,
         };
@@ -475,6 +479,7 @@ mod tests {
         let action = Action {
             name: "PipePlaceholder".to_string(),
             command: "echo {id} | rev".to_string(),
+            priority: None,
             interactive: false,
             show_output: false,
         };
@@ -744,6 +749,7 @@ mod tests {
         let action = Action {
             name: "Open all".to_string(),
             command: "firefox {urls}".to_string(),
+            priority: None,
             interactive: true,
             show_output: false,
         };
@@ -763,6 +769,7 @@ mod tests {
         let action = Action {
             name: "Echo".to_string(),
             command: "true {ids}".to_string(),
+            priority: None,
             interactive: false,
             show_output: false,
         };

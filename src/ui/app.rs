@@ -3110,6 +3110,7 @@ mod action_tests {
         let action = Action {
             name: "Show output".to_string(),
             command: "printf 'hello'".to_string(),
+            priority: None,
             interactive: false,
             show_output: true,
         };
@@ -3131,6 +3132,7 @@ mod action_tests {
         let action = Action {
             name: "Show ids".to_string(),
             command: "printf {id}".to_string(),
+            priority: None,
             interactive: false,
             show_output: true,
         };

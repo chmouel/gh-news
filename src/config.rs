@@ -12,6 +12,9 @@ pub struct Action {
     pub name: String,
     /// Command template with placeholders like {url}, {title}, {repo}, etc.
     pub command: String,
+    /// Lower numbers sort earlier in the action menu. Unset keeps default order.
+    #[serde(default)]
+    pub priority: Option<i32>,
     /// If true, suspend TUI and run command interactively with full terminal access.
     /// This allows running TUI-based tools like fzf, vim, etc. Default: false.
     #[serde(default)]
@@ -287,10 +290,12 @@ interactive = true
 
         assert_eq!(config.actions[0].name, "Copy URL");
         assert_eq!(config.actions[0].command, "echo {url}");
+        assert_eq!(config.actions[0].priority, None);
         assert!(!config.actions[0].interactive);
 
         assert_eq!(config.actions[1].name, "Interactive action");
         assert_eq!(config.actions[1].command, "vim {title}");
+        assert_eq!(config.actions[1].priority, None);
         assert!(config.actions[1].interactive);
     }
 
@@ -303,6 +308,7 @@ command = "echo test"
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert!(!config.actions[0].interactive);
+        assert_eq!(config.actions[0].priority, None);
     }
 
     #[test]
@@ -314,6 +320,19 @@ command = "true"
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.actions.len(), 1);
+        assert_eq!(config.actions[0].priority, None);
+    }
+
+    #[test]
+    fn test_parse_action_priority_from_toml() {
+        let toml_str = r#"
+[[actions]]
+name = "Pinned to top"
+command = "echo test"
+priority = 1
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.actions[0].priority, Some(1));
     }
 
     #[test]

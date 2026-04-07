@@ -266,6 +266,7 @@ Define custom actions that can be run on notifications via the action menu (pres
 [[actions]]
 name = "Copy URL"
 command = "echo {url} | xclip -selection clipboard"
+priority = 1  # Lower numbers sort earlier in the action menu
 
 [[actions]]
 name = "Open in editor"
@@ -280,6 +281,11 @@ name = "Browse with fzf"
 command = "echo {url} | fzf --preview 'curl -s {}'"
 interactive = true  # Suspend TUI for interactive commands
 ```
+
+Custom actions appear after the built-in actions by default. Set `priority` to a
+number to move a custom action earlier in the menu; lower numbers sort first.
+For example, `priority = 1` places an action above the built-in mute and snooze
+entries.
 
 Actions support placeholder substitution:
 
@@ -327,6 +333,7 @@ When you select multiple notifications and run this action, it executes once as 
 |--------|---------|-------------|
 | `name` | required | Display name in the action menu |
 | `command` | required | Command template with placeholders |
+| `priority` | unset | Lower numbers sort earlier in the action menu |
 | `interactive` | `false` | Suspend TUI and run command with full terminal access (for TUI tools like fzf, vim) |
 | `show_output` | `false` | Capture command output and display it in a scrollable TUI popup (incompatible with `interactive`) |
 

@@ -256,6 +256,8 @@ github_host = "github.com"
 # Options:
 #   - name:        Display name in the action menu (required)
 #   - command:     Command template with placeholders (required)
+#   - priority:    Lower numbers sort earlier in the action menu. Unset keeps
+#                  the default order. Example: 1
 #   - interactive: Suspend TUI and run with full terminal access for interactive
 #                  tools like vim, fzf, etc. (default: false)
 #   - show_output: Capture command output and display it in a scrollable TUI
@@ -267,6 +269,7 @@ github_host = "github.com"
 # [[actions]]
 # name = "Copy URL"
 # command = "echo {url} | pbcopy"
+# priority = 1
 #
 # Send a /lgtm comment on a PR
 # [[actions]]

@@ -1,4 +1,5 @@
 use crate::api::GitHubClient;
+use crate::config::Action;
 use crate::error::Result;
 use crate::models::Notification;
 use crate::state_file::AppStateFile;
@@ -119,7 +120,7 @@ impl BuiltinAction {
 #[derive(Debug, Clone)]
 pub enum CombinedAction {
     Builtin(BuiltinAction),
-    Custom(crate::config::Action),
+    Custom(Action),
 }
 
 impl CombinedAction {
@@ -170,18 +171,102 @@ pub fn index_for_shortcut(c: char) -> Option<usize> {
 }
 
 /// Get all actions (built-in + custom)
-pub fn get_all_actions(custom_actions: &[crate::config::Action]) -> Vec<CombinedAction> {
+pub fn get_all_actions(custom_actions: &[Action]) -> Vec<CombinedAction> {
+    #[derive(Debug)]
+    struct OrderedAction {
+        sort_bucket: u8,
+        priority: Option<i32>,
+        original_index: usize,
+        action: CombinedAction,
+    }
+
     let mut actions = Vec::new();
 
-    // Add built-in actions first
-    for builtin in BuiltinAction::all() {
-        actions.push(CombinedAction::Builtin(builtin));
+    for (original_index, builtin) in BuiltinAction::all().into_iter().enumerate() {
+        actions.push(OrderedAction {
+            sort_bucket: 1,
+            priority: None,
+            original_index,
+            action: CombinedAction::Builtin(builtin),
+        });
     }
 
-    // Add custom actions
-    for custom in custom_actions {
-        actions.push(CombinedAction::Custom(custom.clone()));
+    let builtin_count = actions.len();
+    for (index, custom) in custom_actions.iter().enumerate() {
+        let sort_bucket = if custom.priority.is_some() { 0 } else { 2 };
+        actions.push(OrderedAction {
+            sort_bucket,
+            priority: custom.priority,
+            original_index: builtin_count + index,
+            action: CombinedAction::Custom(custom.clone()),
+        });
     }
 
-    actions
+    actions.sort_by_key(|entry| (entry.sort_bucket, entry.priority, entry.original_index));
+    actions.into_iter().map(|entry| entry.action).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn custom_action(name: &str, priority: Option<i32>) -> Action {
+        Action {
+            name: name.to_string(),
+            command: "true".to_string(),
+            priority,
+            interactive: false,
+            show_output: false,
+        }
+    }
+
+    fn action_names(actions: Vec<CombinedAction>) -> Vec<String> {
+        actions
+            .into_iter()
+            .map(|action| action.name().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn test_get_all_actions_puts_prioritised_custom_actions_before_builtins() {
+        let actions = get_all_actions(&[custom_action("Top action", Some(1))]);
+
+        assert_eq!(action_names(actions)[0], "Top action");
+    }
+
+    #[test]
+    fn test_get_all_actions_sorts_custom_actions_by_priority() {
+        let actions = get_all_actions(&[
+            custom_action("Priority 20", Some(20)),
+            custom_action("Priority 1", Some(1)),
+            custom_action("Priority 5", Some(5)),
+        ]);
+
+        let names = action_names(actions);
+        assert_eq!(names[0], "Priority 1");
+        assert_eq!(names[1], "Priority 5");
+        assert_eq!(names[2], "Priority 20");
+    }
+
+    #[test]
+    fn test_get_all_actions_preserves_order_for_matching_priorities() {
+        let actions = get_all_actions(&[
+            custom_action("First", Some(1)),
+            custom_action("Second", Some(1)),
+        ]);
+
+        let names = action_names(actions);
+        assert_eq!(names[0], "First");
+        assert_eq!(names[1], "Second");
+    }
+
+    #[test]
+    fn test_get_all_actions_keeps_unprioritised_custom_actions_after_builtins() {
+        let actions = get_all_actions(&[custom_action("Default custom", None)]);
+
+        let names = action_names(actions);
+        let builtins = BuiltinAction::all();
+        assert_eq!(names[builtins.len() - 1], builtins.last().unwrap().name());
+        assert_eq!(names[builtins.len()], "Default custom");
+    }
 }
