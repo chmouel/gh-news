@@ -1336,6 +1336,17 @@ impl App {
                     self.state.input_mode = InputMode::Normal;
                 }
             }
+            KeyCode::Char(c) => {
+                if let Some(index) = builtin_actions::index_for_shortcut(c) {
+                    if index < action_count {
+                        self.state.action_menu_index = index;
+                        self.execute_selected_action();
+                        if self.state.input_mode == InputMode::ActionMenu {
+                            self.state.input_mode = InputMode::Normal;
+                        }
+                    }
+                }
+            }
             _ => {}
         }
         Ok(())

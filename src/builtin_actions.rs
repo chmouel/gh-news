@@ -132,6 +132,43 @@ impl CombinedAction {
     }
 }
 
+/// Map an action index to a keyboard shortcut character.
+/// Indices 0-8 map to '1'-'9', indices 9+ map to 'a'-'z' (skipping 'j' and
+/// 'k' which are reserved for navigation).
+pub fn shortcut_for_index(index: usize) -> Option<char> {
+    match index {
+        0..=8 => Some((b'1' + index as u8) as char),
+        9.. => {
+            // Skip 'j' (9th letter) and 'k' (10th letter)
+            let offset = index - 9;
+            let c = match offset {
+                0..=8 => b'a' + offset as u8, // a-i
+                9.. => {
+                    let shifted = offset + 2; // skip j, k
+                    if shifted > 25 {
+                        return None;
+                    }
+                    b'a' + shifted as u8 // l-z
+                }
+            };
+            Some(c as char)
+        }
+    }
+}
+
+/// Find the action index for a given shortcut character.
+/// Accepts both upper and lowercase letters; 'j' and 'k' are excluded
+/// because they are used for navigation in the action menu.
+pub fn index_for_shortcut(c: char) -> Option<usize> {
+    let c = c.to_ascii_lowercase();
+    match c {
+        '1'..='9' => Some((c as u8 - b'1') as usize),
+        'a'..='i' => Some((c as u8 - b'a') as usize + 9),
+        'l'..='z' => Some((c as u8 - b'a' - 2) as usize + 9), // subtract 2 for skipped j,k
+        _ => None,
+    }
+}
+
 /// Get all actions (built-in + custom)
 pub fn get_all_actions(custom_actions: &[crate::config::Action]) -> Vec<CombinedAction> {
     let mut actions = Vec::new();

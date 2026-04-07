@@ -1,4 +1,4 @@
-use crate::builtin_actions::CombinedAction;
+use crate::builtin_actions::{shortcut_for_index, CombinedAction};
 use crate::ui::theme::{Theme, TokyoNight};
 use ratatui::{
     prelude::*,
@@ -28,7 +28,7 @@ impl ActionMenuWidget {
 
         // Calculate box dimensions based on content
         let max_name_len = actions.iter().map(|a| a.name().len()).max().unwrap_or(10);
-        let box_width = (max_name_len + 10).clamp(30, 60) as u16;
+        let box_width = (max_name_len + 13).clamp(30, 60) as u16;
         let box_width = box_width.min(area.width.saturating_sub(4));
 
         // Height: 2 for borders + 1 for header + actions + 2 for keybindings
@@ -55,6 +55,9 @@ impl ActionMenuWidget {
         for (i, action) in actions.iter().enumerate() {
             let is_selected = i == selected_index;
             let indicator = if is_selected { ">" } else { " " };
+            let shortcut_label = shortcut_for_index(i)
+                .map(|c| format!("{}.", c))
+                .unwrap_or_else(|| "  ".to_string());
 
             let style = if is_selected {
                 Style::default()
@@ -64,8 +67,15 @@ impl ActionMenuWidget {
                 self.theme.title
             };
 
+            let shortcut_style = if is_selected {
+                style
+            } else {
+                Style::default().fg(colors.blue)
+            };
+
             content.push(Line::from(vec![
                 Span::styled(format!(" {} ", indicator), style),
+                Span::styled(format!("{} ", shortcut_label), shortcut_style),
                 Span::styled(action.name(), style),
             ]));
         }
@@ -73,10 +83,10 @@ impl ActionMenuWidget {
         content.push(Line::from(""));
         content.push(Line::from(vec![
             Span::raw("  "),
+            Span::styled("1-9/a-z", Style::default().fg(colors.blue)),
+            Span::raw(" run  "),
             Span::styled("j/k", Style::default().fg(colors.blue)),
             Span::raw(" select  "),
-            Span::styled("Enter", Style::default().fg(colors.green)),
-            Span::raw(" run  "),
             Span::styled("Esc", Style::default().fg(colors.red)),
             Span::raw(" cancel"),
         ]));
