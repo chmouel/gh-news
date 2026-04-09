@@ -232,7 +232,7 @@ impl Default for Config {
             repos_collapsed: false,
             org_grouping: OrgGroupingMode::default(),
             list_layout: ListLayout::default(),
-            auto_mark_read: true,
+            auto_mark_read: false,
             auto_archive: false,
             auto_mark_on_open: true,
             cache_file: None,
