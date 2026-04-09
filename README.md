@@ -466,6 +466,9 @@ Bulk actions without a manual selection also follow the current view/search filt
 
 <img width="3730" height="2484" alt="image" src="https://github.com/user-attachments/assets/0179bf1c-1ef8-437b-86e7-60bdf993f423" />
 
+### one_light
+
+<img width="3730" height="2484" alt="image" src="https://github.com/user-attachments/assets/9e7e5f22-a108-4262-9eab-7c5d1f7d2aff" />
 
 ## License
 
