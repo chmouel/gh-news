@@ -605,9 +605,8 @@ impl App {
             .iter()
             .filter_map(|n| {
                 let needs_author = n.author.is_none() && n.latest_comment_url.is_some();
-                let needs_context = n.context.is_none()
-                    && n.reason_enum() == NotificationReason::StateChange
-                    && n.subject_url().is_some();
+                let needs_context =
+                    n.reason_enum() == NotificationReason::StateChange && n.subject_url().is_some();
 
                 if !needs_author && !needs_context {
                     return None;
@@ -3781,6 +3780,20 @@ mod tests {
     }
 
     #[test]
+    fn state_change_enrichment_runs_with_cached_context() {
+        let mut app = App::new(Config::default());
+        app.set_api_client(GitHubClient::new_test());
+
+        let mut notification = notification_with("1", "State changed", "state_change", None);
+        notification.context = Some("closed".to_string());
+        notification.subject.url = Some("http://127.0.0.1:9/repos/owner/repo/issues/1".to_string());
+
+        app.merge_refreshed_notifications(vec![notification]);
+
+        assert!(app.author_enrichment_rx.is_some());
+    }
+
+    #[test]
     fn mark_all_confirm_message_mentions_filtered_notifications() {
         let mut app = App::new(Config::default());
         app.base_filter = Some(Filter::from_pattern(Some("Alpha")).unwrap());
@@ -3806,9 +3819,10 @@ mod tests {
 
     #[test]
     fn open_selection_prints_pluralised_status_for_print_method() {
-        let mut config = Config::default();
-        config.open_method = OpenMethod::Print;
-        let mut app = App::new(config);
+        let mut app = App::new(Config {
+            open_method: OpenMethod::Print,
+            ..Config::default()
+        });
         app.state.set_notifications(vec![
             test_notification("1", true),
             test_notification("2", true),
@@ -3828,10 +3842,11 @@ mod tests {
 
     #[test]
     fn enter_selection_pluralises_without_auto_mark_on_open() {
-        let mut config = Config::default();
-        config.open_method = OpenMethod::Print;
-        config.auto_mark_on_open = false;
-        let mut app = App::new(config);
+        let mut app = App::new(Config {
+            open_method: OpenMethod::Print,
+            auto_mark_on_open: false,
+            ..Config::default()
+        });
         app.state
             .set_notifications(vec![test_notification("1", true)]);
         app.state.toggle_selection("1".to_string());
