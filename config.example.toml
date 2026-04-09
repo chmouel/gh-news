@@ -170,7 +170,7 @@ org_grouping = "auto"
 # Default: true
 # CLI flag: --no-auto-mark-read
 # Note: Can be toggled at runtime with M key and saved to state file.
-auto_mark_read = true
+auto_mark_read = false
 
 # Automatically archive (mark as done) notifications when navigating away.
 # When enabled, auto_mark_read is also forced on.

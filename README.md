@@ -178,7 +178,7 @@ org_grouping = "auto"               # "off", "auto", or "always"
 list_layout = "right_aligned"       # "right_aligned", "icon_only", or "two_line"
 
 # Behaviour
-auto_mark_read = true                # mark notifications read when navigating to them
+auto_mark_read = false                # mark notifications read when navigating to them
 auto_archive = false                 # archive notifications when navigating away (implies auto_mark_read)
 auto_mark_on_open = true             # mark notifications read when opening them in the browser
 
