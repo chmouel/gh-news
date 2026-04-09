@@ -1,5 +1,6 @@
 use crate::error::{Error, Result};
 use crate::state::{OrgGroupingMode, PreviewMode};
+use crate::ui::theme::{parse_hex_color, ColorPalette};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
@@ -73,6 +74,53 @@ pub struct View {
     pub exclude_subjects: Option<Vec<String>>,
 }
 
+/// Per-colour overrides applied on top of a built-in theme palette.
+/// Each field accepts a hex colour string (e.g. "#7aa2f7" or "7aa2f7").
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ThemeColors {
+    pub bg: Option<String>,
+    pub bg_dark: Option<String>,
+    pub bg_highlight: Option<String>,
+    pub fg: Option<String>,
+    pub fg_muted: Option<String>,
+    pub fg_dim: Option<String>,
+    pub blue: Option<String>,
+    pub cyan: Option<String>,
+    pub green: Option<String>,
+    pub yellow: Option<String>,
+    pub red: Option<String>,
+    pub magenta: Option<String>,
+    pub orange: Option<String>,
+}
+
+impl ThemeColors {
+    /// Apply overrides to a mutable palette, skipping invalid hex values.
+    pub fn apply_to(&self, palette: &mut ColorPalette) {
+        macro_rules! apply {
+            ($field:ident) => {
+                if let Some(ref hex) = self.$field {
+                    if let Some(color) = parse_hex_color(hex) {
+                        palette.$field = color;
+                    }
+                }
+            };
+        }
+        apply!(bg);
+        apply!(bg_dark);
+        apply!(bg_highlight);
+        apply!(fg);
+        apply!(fg_muted);
+        apply!(fg_dim);
+        apply!(blue);
+        apply!(cyan);
+        apply!(green);
+        apply!(yellow);
+        apply!(red);
+        apply!(magenta);
+        apply!(orange);
+    }
+}
+
 /// Application configuration loaded from config file and environment variables.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -87,6 +135,11 @@ pub struct Config {
     pub show_read: bool,
     pub participating_only: bool,
     pub default_filter: Option<String>,
+
+    // Theme
+    pub theme: String,
+    #[serde(default)]
+    pub theme_colors: Option<ThemeColors>,
 
     // Display defaults
     pub default_preview_mode: String,
@@ -173,6 +226,8 @@ impl Default for Config {
             show_read: false,
             participating_only: false,
             default_filter: None,
+            theme: "tokyo_night".to_string(),
+            theme_colors: None,
             default_preview_mode: "vertical".to_string(),
             repos_collapsed: false,
             org_grouping: OrgGroupingMode::default(),
@@ -241,6 +296,15 @@ impl Config {
         let content = fs::read_to_string(&path).ok()?;
         let config: Config = toml::from_str(&content).ok()?;
         Some(config)
+    }
+
+    /// Build the colour palette from the configured theme name and any overrides.
+    pub fn color_palette(&self) -> ColorPalette {
+        let mut palette = ColorPalette::from_name(&self.theme);
+        if let Some(ref overrides) = self.theme_colors {
+            overrides.apply_to(&mut palette);
+        }
+        palette
     }
 
     /// Get the GitHub API base URL based on github_host config.
@@ -427,5 +491,54 @@ command = "{id} {title} {url} {repo} {owner}"
         assert!(config.actions[0].command.contains("{id}"));
         assert!(config.actions[0].command.contains("{title}"));
         assert!(config.actions[0].command.contains("{url}"));
+    }
+
+    #[test]
+    fn test_default_theme() {
+        let config = Config::default();
+        assert_eq!(config.theme, "tokyo_night");
+        assert!(config.theme_colors.is_none());
+    }
+
+    #[test]
+    fn test_parse_theme_from_toml() {
+        let toml_str = r#"
+theme = "dracula"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.theme, "dracula");
+    }
+
+    #[test]
+    fn test_parse_theme_colors_from_toml() {
+        let toml_str = r##"
+theme = "nord"
+
+[theme_colors]
+blue = "#ff0000"
+bg = "1a1b26"
+"##;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.theme, "nord");
+        let overrides = config.theme_colors.as_ref().unwrap();
+        assert_eq!(overrides.blue.as_deref(), Some("#ff0000"));
+        assert_eq!(overrides.bg.as_deref(), Some("1a1b26"));
+        assert!(overrides.red.is_none());
+    }
+
+    #[test]
+    fn test_color_palette_override() {
+        let toml_str = r##"
+theme = "tokyo_night"
+
+[theme_colors]
+red = "#112233"
+"##;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let palette = config.color_palette();
+        assert_eq!(palette.red, ratatui::style::Color::Rgb(0x11, 0x22, 0x33));
+        // Other colours should remain unchanged from tokyo_night
+        let default = crate::ui::theme::ColorPalette::tokyo_night();
+        assert_eq!(palette.blue, default.blue);
     }
 }

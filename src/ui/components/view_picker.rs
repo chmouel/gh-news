@@ -1,5 +1,5 @@
 use crate::config::View;
-use crate::ui::theme::{Theme, TokyoNight};
+use crate::ui::theme::{ColorPalette, Theme};
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Clear, Paragraph},
@@ -7,12 +7,14 @@ use ratatui::{
 
 pub struct ViewPickerWidget {
     theme: Theme,
+    colors: ColorPalette,
 }
 
 impl ViewPickerWidget {
-    pub fn new() -> Self {
+    pub fn new(palette: &ColorPalette) -> Self {
         Self {
-            theme: Theme::default(),
+            theme: Theme::from_palette(palette),
+            colors: palette.clone(),
         }
     }
 
@@ -24,9 +26,6 @@ impl ViewPickerWidget {
         selected_index: usize,
         active_view_index: Option<usize>,
     ) {
-        let colors = TokyoNight::colors();
-
-        // Items: [0] Default, [1..] named views
         let total_items = views.len() + 1;
 
         let max_name_len = views
@@ -38,7 +37,6 @@ impl ViewPickerWidget {
         let box_width = (max_name_len + 13).clamp(30, 60) as u16;
         let box_width = box_width.min(area.width.saturating_sub(4));
 
-        // 2 borders + 1 blank + items + 1 blank + 1 footer
         let content_height = (total_items + 4) as u16;
         let box_height = content_height.min(area.height.saturating_sub(4));
 
@@ -74,7 +72,7 @@ impl ViewPickerWidget {
             let shortcut_style = if is_selected {
                 style
             } else {
-                Style::default().fg(colors.blue)
+                Style::default().fg(self.colors.blue)
             };
 
             content.push(Line::from(vec![
@@ -83,12 +81,11 @@ impl ViewPickerWidget {
                 Span::styled("Default", style),
                 Span::styled(
                     format!(" {}", active_mark),
-                    Style::default().fg(colors.cyan),
+                    Style::default().fg(self.colors.cyan),
                 ),
             ]));
         }
 
-        // Named views
         for (i, view) in views.iter().enumerate() {
             let item_index = i + 1;
             let is_selected = selected_index == item_index;
@@ -106,7 +103,7 @@ impl ViewPickerWidget {
             let shortcut_style = if is_selected {
                 style
             } else {
-                Style::default().fg(colors.blue)
+                Style::default().fg(self.colors.blue)
             };
 
             let shortcut_label = if item_index <= 9 {
@@ -121,7 +118,7 @@ impl ViewPickerWidget {
                 Span::styled(view.name.clone(), style),
                 Span::styled(
                     format!(" {}", active_mark),
-                    Style::default().fg(colors.cyan),
+                    Style::default().fg(self.colors.cyan),
                 ),
             ]));
         }
@@ -129,11 +126,11 @@ impl ViewPickerWidget {
         content.push(Line::from(""));
         content.push(Line::from(vec![
             Span::raw("  "),
-            Span::styled("0-9", Style::default().fg(colors.blue)),
+            Span::styled("0-9", Style::default().fg(self.colors.blue)),
             Span::raw(" select  "),
-            Span::styled("j/k", Style::default().fg(colors.blue)),
+            Span::styled("j/k", Style::default().fg(self.colors.blue)),
             Span::raw(" move  "),
-            Span::styled("Esc", Style::default().fg(colors.red)),
+            Span::styled("Esc", Style::default().fg(self.colors.red)),
             Span::raw(" cancel"),
         ]));
 
@@ -144,13 +141,13 @@ impl ViewPickerWidget {
                 Span::styled(
                     " Views ",
                     Style::default()
-                        .fg(colors.cyan)
+                        .fg(self.colors.cyan)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(" ", Style::default()),
             ])
             .title_alignment(Alignment::Center)
-            .border_style(Style::default().fg(colors.cyan))
+            .border_style(Style::default().fg(self.colors.cyan))
             .border_type(ratatui::widgets::BorderType::Rounded);
 
         let paragraph = Paragraph::new(content)

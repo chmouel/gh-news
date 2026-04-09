@@ -1,14 +1,19 @@
 use crate::state::{ConfirmAction, MarkAllOption};
+use crate::ui::theme::ColorPalette;
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
-pub struct ConfirmWidget;
+pub struct ConfirmWidget {
+    colors: ColorPalette,
+}
 
 impl ConfirmWidget {
-    pub fn new() -> Self {
-        Self
+    pub fn new(palette: &ColorPalette) -> Self {
+        Self {
+            colors: palette.clone(),
+        }
     }
 
     fn title_text(action: &ConfirmAction, count: usize, is_filtered: bool) -> String {
@@ -34,9 +39,8 @@ impl ConfirmWidget {
         count: usize,
         is_filtered: bool,
     ) {
-        let colors = crate::ui::theme::TokyoNight::colors();
+        let colors = &self.colors;
 
-        // Calculate centered box dimensions (compact dialog)
         let box_width = 50.min(area.width.saturating_sub(4));
         let box_height = 10.min(area.height.saturating_sub(4));
         let box_x = (area.width.saturating_sub(box_width)) / 2;
@@ -49,22 +53,18 @@ impl ConfirmWidget {
             height: box_height,
         };
 
-        // Clear the background area
         frame.render_widget(Clear, centered_area);
 
-        // Get the selected option from the action
         let selected = match action {
             ConfirmAction::MarkAllRead { selected } => *selected,
             ConfirmAction::ArchiveSelected { option, .. } => *option,
         };
 
-        // Selection indicators
         let (archive_indicator, read_indicator) = match selected {
             MarkAllOption::MarkReadAndArchive => ("[*]", "[ ]"),
             MarkAllOption::MarkReadOnly => ("[ ]", "[*]"),
         };
 
-        // Determine label text based on action type
         let is_selected_action = matches!(action, ConfirmAction::ArchiveSelected { .. });
 
         let content = vec![
@@ -110,10 +110,8 @@ impl ConfirmWidget {
             ]),
         ];
 
-        // Build title based on action type, count, and filter state
         let title_text = Self::title_text(action, count, is_filtered);
 
-        // Use magenta for selected action, yellow for mark all
         let border_color = if is_selected_action {
             colors.magenta
         } else {

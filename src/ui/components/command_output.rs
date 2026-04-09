@@ -1,25 +1,24 @@
 use crate::state::CommandOutputData;
-use crate::ui::theme::TokyoNight;
+use crate::ui::theme::ColorPalette;
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Clear, Paragraph, Scrollbar, ScrollbarState, Wrap},
 };
 
 pub struct CommandOutputWidget {
+    colors: ColorPalette,
     scrollbar_state: ScrollbarState,
 }
 
 impl CommandOutputWidget {
-    pub fn new() -> Self {
+    pub fn new(palette: &ColorPalette) -> Self {
         Self {
+            colors: palette.clone(),
             scrollbar_state: ScrollbarState::default(),
         }
     }
 
     pub fn render(&mut self, frame: &mut Frame, area: Rect, data: &CommandOutputData) {
-        let colors = TokyoNight::colors();
-
-        // Large centered popup: ~80% of terminal dimensions
         let box_width = (area.width * 4 / 5)
             .max(40)
             .min(area.width.saturating_sub(4));
@@ -38,11 +37,9 @@ impl CommandOutputWidget {
 
         frame.render_widget(Clear, popup_area);
 
-        // Inner area excluding border (1 cell) and footer line (1 cell)
         let inner_width = popup_area.width.saturating_sub(2) as usize;
-        let visible_lines = popup_area.height.saturating_sub(3) as usize; // border top/bottom + footer
+        let visible_lines = popup_area.height.saturating_sub(3) as usize;
 
-        // Wrap content into lines respecting inner width
         let content_lines: Vec<Line> = data
             .content
             .lines()
@@ -52,7 +49,6 @@ impl CommandOutputWidget {
                 } else if inner_width == 0 {
                     vec![Line::from(line.to_string())]
                 } else {
-                    // Split long lines at inner_width boundaries
                     line.as_bytes()
                         .chunks(inner_width)
                         .map(|chunk| Line::from(String::from_utf8_lossy(chunk).into_owned()))
@@ -66,27 +62,24 @@ impl CommandOutputWidget {
             .scroll
             .min(content_height.saturating_sub(visible_lines));
 
-        // Visible slice
         let visible: Vec<Line> = content_lines
             .into_iter()
             .skip(scroll)
             .take(visible_lines)
             .collect();
 
-        // Update scrollbar state
         self.scrollbar_state = self
             .scrollbar_state
             .content_length(content_height)
             .viewport_content_length(visible_lines)
             .position(scroll);
 
-        // Footer line
         let footer = Line::from(vec![
-            Span::styled("j/k", Style::default().fg(colors.blue)),
+            Span::styled("j/k", Style::default().fg(self.colors.blue)),
             Span::raw(" scroll  "),
-            Span::styled("PgUp/PgDn", Style::default().fg(colors.blue)),
+            Span::styled("PgUp/PgDn", Style::default().fg(self.colors.blue)),
             Span::raw(" page  "),
-            Span::styled("q/Esc", Style::default().fg(colors.red)),
+            Span::styled("q/Esc", Style::default().fg(self.colors.red)),
             Span::raw(" close"),
         ]);
 
@@ -97,14 +90,14 @@ impl CommandOutputWidget {
                 Span::styled(
                     format!(" {} ", data.title),
                     Style::default()
-                        .fg(colors.cyan)
+                        .fg(self.colors.cyan)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(" "),
             ])
             .title_alignment(Alignment::Center)
             .title_bottom(footer)
-            .border_style(Style::default().fg(colors.cyan))
+            .border_style(Style::default().fg(self.colors.cyan))
             .border_type(ratatui::widgets::BorderType::Rounded);
 
         let paragraph = Paragraph::new(visible)
@@ -113,7 +106,6 @@ impl CommandOutputWidget {
 
         frame.render_widget(paragraph, popup_area);
 
-        // Scrollbar
         if content_height > visible_lines {
             let scrollbar = Scrollbar::default()
                 .orientation(ratatui::widgets::ScrollbarOrientation::VerticalRight)

@@ -1,6 +1,6 @@
 use crate::models::{NotificationReason, NotificationType};
 use crate::state::AppState;
-use crate::ui::theme::{Theme, TokyoNight};
+use crate::ui::theme::{ColorPalette, Theme};
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
@@ -9,15 +9,17 @@ use ratatui::{
 pub struct ListWidget {
     state: ListState,
     theme: Theme,
+    colors: ColorPalette,
 }
 
 impl ListWidget {
-    pub fn new() -> Self {
+    pub fn new(palette: &ColorPalette) -> Self {
         let mut state = ListState::default();
         state.select(Some(0));
         Self {
             state,
-            theme: Theme::default(),
+            theme: Theme::from_palette(palette),
+            colors: palette.clone(),
         }
     }
 
@@ -42,13 +44,12 @@ impl ListWidget {
                 .filter(|item| matches!(item, crate::state::TreeItem::RepositoryHeader(_)))
                 .count();
 
-            let colors = TokyoNight::colors();
             let (empty_title, empty_title_fg, empty_border) =
                 if let Some(view_name) = app_state.active_view_name() {
                     (
                         format!(" 󰎟 {view_name} "),
-                        colors.cyan,
-                        Style::default().fg(colors.cyan),
+                        self.colors.cyan,
+                        Style::default().fg(self.colors.cyan),
                     )
                 } else {
                     (
@@ -101,7 +102,6 @@ impl ListWidget {
 
                 match item {
                     crate::state::TreeItem::PinnedHeader => {
-                        let colors = TokyoNight::colors();
                         let mut line = vec![];
 
                         line.push(Span::styled(
@@ -109,7 +109,7 @@ impl ListWidget {
                             if is_selected {
                                 Style::default().fg(self.theme.highlight_fg)
                             } else {
-                                Style::default().fg(colors.red)
+                                Style::default().fg(self.colors.red)
                             },
                         ));
 
@@ -120,14 +120,15 @@ impl ListWidget {
                                     .fg(self.theme.highlight_fg)
                                     .add_modifier(Modifier::BOLD)
                             } else {
-                                Style::default().fg(colors.red).add_modifier(Modifier::BOLD)
+                                Style::default()
+                                    .fg(self.colors.red)
+                                    .add_modifier(Modifier::BOLD)
                             },
                         ));
 
                         ListItem::new(Line::from(line))
                     }
                     crate::state::TreeItem::OrgHeader(org_info) => {
-                        let colors = TokyoNight::colors();
                         let mut line = vec![];
 
                         let is_org_expanded = app_state
@@ -141,7 +142,7 @@ impl ListWidget {
                             if is_selected {
                                 Style::default().fg(self.theme.highlight_fg)
                             } else {
-                                Style::default().fg(colors.magenta)
+                                Style::default().fg(self.colors.magenta)
                             },
                         ));
 
@@ -151,7 +152,7 @@ impl ListWidget {
                             if is_selected {
                                 Style::default().fg(self.theme.highlight_fg)
                             } else {
-                                Style::default().fg(colors.yellow)
+                                Style::default().fg(self.colors.yellow)
                             },
                         ));
 
@@ -163,7 +164,7 @@ impl ListWidget {
                                     .add_modifier(Modifier::BOLD)
                             } else {
                                 Style::default()
-                                    .fg(colors.magenta)
+                                    .fg(self.colors.magenta)
                                     .add_modifier(Modifier::BOLD)
                             },
                         ));
@@ -173,7 +174,7 @@ impl ListWidget {
                                 .fg(self.theme.highlight_fg)
                                 .bg(self.theme.highlight_bg)
                         } else {
-                            Style::default().fg(colors.fg).bg(colors.bg_dark)
+                            Style::default().fg(self.colors.fg).bg(self.colors.bg_dark)
                         };
                         line.push(Span::styled(
                             format!(" ({}) ", org_info.notification_count),
@@ -185,13 +186,12 @@ impl ListWidget {
                     crate::state::TreeItem::RepositoryHeader(repo_info) => {
                         let mut line = vec![];
 
-                        let colors = TokyoNight::colors();
                         line.push(Span::styled(
                             "",
                             if is_selected {
                                 Style::default().fg(self.theme.highlight_fg)
                             } else {
-                                Style::default().fg(colors.cyan)
+                                Style::default().fg(self.colors.cyan)
                             },
                         ));
 
@@ -201,7 +201,7 @@ impl ListWidget {
                             if is_selected {
                                 Style::default().fg(self.theme.highlight_fg)
                             } else {
-                                Style::default().fg(colors.yellow)
+                                Style::default().fg(self.colors.yellow)
                             },
                         ));
 
@@ -221,7 +221,7 @@ impl ListWidget {
                                 .fg(self.theme.highlight_fg)
                                 .bg(self.theme.highlight_bg)
                         } else {
-                            Style::default().fg(colors.fg).bg(colors.bg_dark)
+                            Style::default().fg(self.colors.fg).bg(self.colors.bg_dark)
                         };
                         line.push(Span::styled(
                             format!(" ({}) ", repo_info.notification_count),
@@ -235,24 +235,24 @@ impl ListWidget {
                             let time = notif.time_display();
                             let is_pinned = app_state.is_pinned(&notif.id);
                             let is_multi_selected = app_state.is_selected(&notif.id);
-                            let colors = TokyoNight::colors();
 
                             let notification_type = notif.notification_type();
                             let type_icon = Self::get_notification_type_icon(notification_type);
                             let type_style =
-                                Self::get_notification_type_style(notification_type, &colors);
+                                Self::get_notification_type_style(notification_type, &self.colors);
                             let reason = notif.reason_enum();
                             let reason_icon = Self::get_notification_reason_icon(reason);
-                            let reason_style = Self::get_notification_reason_style(reason, &colors);
+                            let reason_style =
+                                Self::get_notification_reason_style(reason, &self.colors);
 
                             let title_style = if is_pinned {
-                                Style::default().fg(colors.red)
+                                Style::default().fg(self.colors.red)
                             } else if notif.is_unread() {
                                 self.theme.title
                             } else {
                                 self.theme
                                     .title
-                                    .fg(colors.fg_dim)
+                                    .fg(self.colors.fg_dim)
                                     .add_modifier(Modifier::ITALIC)
                             };
 
@@ -260,7 +260,7 @@ impl ListWidget {
                                 Span::styled(
                                     "✓ ",
                                     Style::default()
-                                        .fg(colors.magenta)
+                                        .fg(self.colors.magenta)
                                         .add_modifier(Modifier::BOLD),
                                 )
                             } else {
@@ -270,26 +270,28 @@ impl ListWidget {
                             let dot_span = if is_pinned {
                                 Span::styled(
                                     "󰐃 ",
-                                    Style::default().fg(colors.red).add_modifier(Modifier::BOLD),
+                                    Style::default()
+                                        .fg(self.colors.red)
+                                        .add_modifier(Modifier::BOLD),
                                 )
                             } else {
                                 Span::styled(
                                     " ",
-                                    Style::default().fg(colors.red).add_modifier(Modifier::BOLD),
+                                    Style::default()
+                                        .fg(self.colors.red)
+                                        .add_modifier(Modifier::BOLD),
                                 )
                             };
 
                             let time_span = Span::styled(
                                 format!("{time} "),
-                                Style::default().fg(colors.fg_dim),
+                                Style::default().fg(self.colors.fg_dim),
                             );
                             let type_icon_span = Span::styled(format!("{type_icon} "), type_style);
 
                             match config.list_layout {
                                 crate::config::ListLayout::RightAligned => {
-                                    // Inner content width: area minus 2 borders and 2 padding chars
                                     let inner_width = area.width.saturating_sub(4) as usize;
-                                    // Fixed left width: checkbox(2) + dot(2) + time + space(1) + type_icon+space(2)
                                     let left_width = 2 + 2 + time.chars().count() + 1 + 2;
 
                                     let reason_str = format!("{reason}");
@@ -348,7 +350,7 @@ impl ListWidget {
                                     let line2 = Line::from(Span::styled(
                                         sub_text,
                                         Style::default()
-                                            .fg(colors.fg_dim)
+                                            .fg(self.colors.fg_dim)
                                             .add_modifier(Modifier::DIM),
                                     ));
                                     ListItem::new(vec![line1, line2])
@@ -388,7 +390,6 @@ impl ListWidget {
             })
             .count();
 
-        let colors = crate::ui::theme::TokyoNight::colors();
         let selection_count = app_state.selection_count();
 
         let mut title_spans = vec![
@@ -400,7 +401,9 @@ impl ListWidget {
             ),
             Span::styled(
                 format!(" {unread_count} "),
-                Style::default().fg(colors.red).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(self.colors.red)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 format!("󰉋{repo_count} "),
@@ -416,7 +419,7 @@ impl ListWidget {
                 Span::styled(
                     format!("✓{selection_count} "),
                     Style::default()
-                        .fg(colors.magenta)
+                        .fg(self.colors.magenta)
                         .add_modifier(Modifier::BOLD),
                 ),
             );
@@ -426,8 +429,8 @@ impl ListWidget {
             if let Some(view_name) = app_state.active_view_name() {
                 (
                     format!(" 󰎟 {view_name} "),
-                    colors.cyan,
-                    Style::default().fg(colors.cyan),
+                    self.colors.cyan,
+                    Style::default().fg(self.colors.cyan),
                 )
             } else {
                 (
@@ -498,7 +501,7 @@ impl ListWidget {
         }
     }
 
-    fn get_notification_type_style(nt: NotificationType, colors: &TokyoNight) -> Style {
+    fn get_notification_type_style(nt: NotificationType, colors: &ColorPalette) -> Style {
         match nt {
             NotificationType::PullRequest => Style::default()
                 .fg(colors.blue)
@@ -554,7 +557,7 @@ impl ListWidget {
         }
     }
 
-    fn get_notification_reason_style(reason: NotificationReason, colors: &TokyoNight) -> Style {
+    fn get_notification_reason_style(reason: NotificationReason, colors: &ColorPalette) -> Style {
         match reason {
             NotificationReason::ReviewRequested => Style::default()
                 .fg(colors.cyan)

@@ -1,20 +1,24 @@
 use crate::state::AppState;
+use crate::ui::theme::ColorPalette;
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
-pub struct FilterWidget;
+pub struct FilterWidget {
+    colors: ColorPalette,
+}
 
 impl FilterWidget {
-    pub fn new() -> Self {
-        Self
+    pub fn new(palette: &ColorPalette) -> Self {
+        Self {
+            colors: palette.clone(),
+        }
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect, state: &AppState) {
-        let colors = crate::ui::theme::TokyoNight::colors();
+        let colors = &self.colors;
 
-        // Small box in top-right corner
         let box_width = 50.min(area.width.saturating_sub(4));
         let box_height = 3;
         let box_x = area.width.saturating_sub(box_width).saturating_sub(2);
@@ -27,10 +31,8 @@ impl FilterWidget {
             height: box_height,
         };
 
-        // Clear the background
         frame.render_widget(Clear, filter_area);
 
-        // Build content with query and cursor
         let content = Line::from(vec![
             Span::styled(&state.search_query, Style::default().fg(colors.fg)),
             Span::styled(

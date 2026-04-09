@@ -1,4 +1,4 @@
-use crate::ui::theme::Theme;
+use crate::ui::theme::{ColorPalette, Theme};
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Paragraph},
@@ -18,6 +18,7 @@ pub struct HelpLayout {
 
 pub struct HelpWidget {
     theme: Theme,
+    colors: ColorPalette,
 }
 
 struct HelpLine {
@@ -33,9 +34,10 @@ struct HelpSection {
 }
 
 impl HelpWidget {
-    pub fn new() -> Self {
+    pub fn new(palette: &ColorPalette) -> Self {
         Self {
-            theme: Theme::default(),
+            theme: Theme::from_palette(palette),
+            colors: palette.clone(),
         }
     }
 
@@ -83,8 +85,8 @@ impl HelpWidget {
             .sum()
     }
 
-    pub fn build_content(filter: Option<&str>) -> HelpContent {
-        let colors = crate::ui::theme::TokyoNight::colors();
+    pub fn build_content(&self, filter: Option<&str>) -> HelpContent {
+        let colors = &self.colors;
         let filter = filter.map(str::trim).filter(|value| !value.is_empty());
         let filter_lower = filter.map(|value| value.to_lowercase());
 
@@ -345,33 +347,32 @@ impl HelpWidget {
         content: &HelpContent,
         scroll: usize,
     ) {
-        let colors = crate::ui::theme::TokyoNight::colors();
         let scroll = scroll.min(u16::MAX as usize) as u16;
 
         let footer = Line::from(vec![
-            Span::styled(" Press ", Style::default().fg(colors.fg_muted)),
+            Span::styled(" Press ", Style::default().fg(self.colors.fg_muted)),
             Span::styled(
                 "?",
                 Style::default()
-                    .fg(colors.yellow)
+                    .fg(self.colors.yellow)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" or ", Style::default().fg(colors.fg_muted)),
+            Span::styled(" or ", Style::default().fg(self.colors.fg_muted)),
             Span::styled(
                 "q",
                 Style::default()
-                    .fg(colors.yellow)
+                    .fg(self.colors.yellow)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" to close ", Style::default().fg(colors.fg_muted)),
-            Span::styled("•", Style::default().fg(colors.fg_muted)),
+            Span::styled(" to close ", Style::default().fg(self.colors.fg_muted)),
+            Span::styled("•", Style::default().fg(self.colors.fg_muted)),
             Span::styled(
                 " j/k",
                 Style::default()
-                    .fg(colors.yellow)
+                    .fg(self.colors.yellow)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" to scroll ", Style::default().fg(colors.fg_muted)),
+            Span::styled(" to scroll ", Style::default().fg(self.colors.fg_muted)),
         ]);
 
         let block = Block::default()
@@ -381,14 +382,14 @@ impl HelpWidget {
                 Span::styled(
                     "💡 Help",
                     Style::default()
-                        .fg(colors.yellow)
+                        .fg(self.colors.yellow)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(" ", Style::default()),
             ])
             .title_alignment(Alignment::Center)
             .title_bottom(footer)
-            .border_style(Style::default().fg(colors.cyan))
+            .border_style(Style::default().fg(self.colors.cyan))
             .border_type(ratatui::widgets::BorderType::Rounded)
             .padding(ratatui::widgets::Padding::new(2, 2, 2, 2));
 

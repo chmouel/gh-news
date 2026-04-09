@@ -166,6 +166,11 @@ exclude_reasons = ["subscribed"]         # by reason: subscribed, ci_activity, e
 exclude_repos = ["noisy-org/*"]          # by repo: exact or glob pattern
 exclude_subjects = ["^Bump ", "\\[bot\\]"] # by title: regex patterns (case-insensitive)
 
+# Theme
+theme = "tokyo_night"            # "tokyo_night", "catppuccin_mocha", "catppuccin_latte", "nord", "dracula", "gruvbox_dark"
+# [theme_colors]                 # override individual palette colours (hex)
+# blue = "#7aa2f7"
+
 # Display
 default_preview_mode = "vertical"    # "off", "horizontal", or "vertical"
 repos_collapsed = false              # start with repos collapsed
@@ -199,6 +204,38 @@ actions_repos = []           # repos to watch (empty = derive from your notifica
 enable_events = false        # set to true to show activity events
 event_types = []             # filter event types, e.g. ["WatchEvent", "ForkEvent"] (empty = all)
 ```
+
+### Themes
+
+gh-news ships with six built-in colour themes. Set the `theme` key in your
+config to switch:
+
+| Name | Style |
+|------|-------|
+| `tokyo_night` (default) | Dark blue with soft white text |
+| `catppuccin_mocha` | Warm dark (Catppuccin dark variant) |
+| `catppuccin_latte` | Light (Catppuccin light variant) |
+| `nord` | Arctic blue-grey |
+| `dracula` | Dark with vivid accents |
+| `gruvbox_dark` | Retro warm colours |
+
+```toml
+theme = "catppuccin_mocha"
+```
+
+You can also override individual palette colours on top of any theme using the
+`[theme_colors]` table. Each value is a hex string (`"#rrggbb"` or `"rrggbb"`):
+
+```toml
+theme = "nord"
+
+[theme_colors]
+blue = "#7aa2f7"
+red  = "#ff0000"
+```
+
+Available colour fields: `bg`, `bg_dark`, `bg_highlight`, `fg`, `fg_muted`,
+`fg_dim`, `blue`, `cyan`, `green`, `yellow`, `red`, `magenta`, `orange`.
 
 ### Notification Hooks
 

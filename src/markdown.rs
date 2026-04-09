@@ -1,3 +1,4 @@
+use crate::ui::theme::ColorPalette;
 use comrak::nodes::{AstNode, NodeValue};
 use comrak::{parse_document, Arena};
 use ratatui::prelude::*;
@@ -76,7 +77,7 @@ pub struct MarkdownRenderer;
 
 impl MarkdownRenderer {
     /// Render markdown to styled lines for Ratatui using comrak for proper parsing
-    pub fn render_simple(markdown: &str) -> Vec<Line<'static>> {
+    pub fn render_simple(markdown: &str, palette: &ColorPalette) -> Vec<Line<'static>> {
         // Configure comrak options
         let mut options = comrak::ComrakOptions::default();
         options.extension.strikethrough = true;
@@ -94,24 +95,24 @@ impl MarkdownRenderer {
         let arena = Arena::new();
         let root = parse_document(&arena, markdown, &options);
 
-        let mut renderer = MarkdownToRatatui::new();
+        let mut renderer = MarkdownToRatatui::new(palette);
         renderer.render(root)
     }
 }
 
 struct MarkdownToRatatui {
     lines: Vec<Line<'static>>,
-    colors: crate::ui::theme::TokyoNight,
+    colors: ColorPalette,
     list_depth: usize,
     list_markers: Vec<String>,
     last_was_blank: bool, // Track if last line was blank to avoid duplicates
 }
 
 impl MarkdownToRatatui {
-    fn new() -> Self {
+    fn new(palette: &ColorPalette) -> Self {
         Self {
             lines: Vec::new(),
-            colors: crate::ui::theme::TokyoNight::colors(),
+            colors: palette.clone(),
             list_depth: 0,
             list_markers: Vec::new(),
             last_was_blank: false,
@@ -256,7 +257,7 @@ impl MarkdownToRatatui {
                 let html = block.literal.as_str();
                 let markdown = strip_html_tags(html);
                 // Pass through comrak for proper styled rendering
-                let rendered_lines = MarkdownRenderer::render_simple(&markdown);
+                let rendered_lines = MarkdownRenderer::render_simple(&markdown, &self.colors);
                 for line in rendered_lines {
                     self.lines.push(line);
                 }
