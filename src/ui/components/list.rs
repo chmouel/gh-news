@@ -274,13 +274,15 @@ impl ListWidget {
                                         .fg(self.colors.red)
                                         .add_modifier(Modifier::BOLD),
                                 )
-                            } else {
+                            } else if notif.is_unread() {
                                 Span::styled(
-                                    " ",
+                                    "● ",
                                     Style::default()
-                                        .fg(self.colors.red)
+                                        .fg(self.colors.blue)
                                         .add_modifier(Modifier::BOLD),
                                 )
+                            } else {
+                                Span::styled("  ", Style::default().fg(self.colors.fg_dim))
                             };
 
                             let time_span = Span::styled(

@@ -229,19 +229,19 @@ impl ColorPalette {
 
     pub fn rose_pine_dawn() -> Self {
         Self {
-            bg: Color::Rgb(250, 244, 237),          // Base
-            bg_dark: Color::Rgb(255, 250, 243),     // Surface
-            bg_highlight: Color::Rgb(242, 233, 225),// Overlay
-            fg: Color::Rgb(87, 82, 121),            // Text
-            fg_muted: Color::Rgb(152, 147, 165),    // Muted
-            fg_dim: Color::Rgb(121, 117, 147),      // Subtle
-            blue: Color::Rgb(86, 148, 159),         // Foam
-            cyan: Color::Rgb(86, 148, 159),         // Foam
-            green: Color::Rgb(40, 105, 131),        // Pine
-            yellow: Color::Rgb(234, 157, 52),       // Gold
-            red: Color::Rgb(180, 99, 122),          // Love
-            magenta: Color::Rgb(144, 122, 169),     // Iris
-            orange: Color::Rgb(215, 130, 126),      // Rose
+            bg: Color::Rgb(250, 244, 237),           // Base
+            bg_dark: Color::Rgb(255, 250, 243),      // Surface
+            bg_highlight: Color::Rgb(242, 233, 225), // Overlay
+            fg: Color::Rgb(87, 82, 121),             // Text
+            fg_muted: Color::Rgb(152, 147, 165),     // Muted
+            fg_dim: Color::Rgb(121, 117, 147),       // Subtle
+            blue: Color::Rgb(86, 148, 159),          // Foam
+            cyan: Color::Rgb(86, 148, 159),          // Foam
+            green: Color::Rgb(40, 105, 131),         // Pine
+            yellow: Color::Rgb(234, 157, 52),        // Gold
+            red: Color::Rgb(180, 99, 122),           // Love
+            magenta: Color::Rgb(144, 122, 169),      // Iris
+            orange: Color::Rgb(215, 130, 126),       // Rose
         }
     }
 
@@ -319,19 +319,19 @@ impl ColorPalette {
 
     pub fn rose_pine() -> Self {
         Self {
-            bg: Color::Rgb(25, 23, 36),             // Base
-            bg_dark: Color::Rgb(31, 29, 46),        // Surface
-            bg_highlight: Color::Rgb(38, 35, 58),   // Overlay
-            fg: Color::Rgb(224, 222, 244),          // Text
-            fg_muted: Color::Rgb(110, 106, 134),    // Muted
-            fg_dim: Color::Rgb(144, 140, 170),      // Subtle
-            blue: Color::Rgb(156, 207, 216),        // Foam
-            cyan: Color::Rgb(156, 207, 216),        // Foam
-            green: Color::Rgb(49, 116, 143),        // Pine
-            yellow: Color::Rgb(246, 193, 119),      // Gold
-            red: Color::Rgb(235, 111, 146),         // Love
-            magenta: Color::Rgb(196, 167, 231),     // Iris
-            orange: Color::Rgb(235, 188, 186),      // Rose
+            bg: Color::Rgb(25, 23, 36),           // Base
+            bg_dark: Color::Rgb(31, 29, 46),      // Surface
+            bg_highlight: Color::Rgb(38, 35, 58), // Overlay
+            fg: Color::Rgb(224, 222, 244),        // Text
+            fg_muted: Color::Rgb(110, 106, 134),  // Muted
+            fg_dim: Color::Rgb(144, 140, 170),    // Subtle
+            blue: Color::Rgb(156, 207, 216),      // Foam
+            cyan: Color::Rgb(156, 207, 216),      // Foam
+            green: Color::Rgb(49, 116, 143),      // Pine
+            yellow: Color::Rgb(246, 193, 119),    // Gold
+            red: Color::Rgb(235, 111, 146),       // Love
+            magenta: Color::Rgb(196, 167, 231),   // Iris
+            orange: Color::Rgb(235, 188, 186),    // Rose
         }
     }
 
