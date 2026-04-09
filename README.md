@@ -460,6 +460,13 @@ Bulk actions without a manual selection also follow the current view/search filt
 - `GITHUB_TOKEN` - GitHub personal access token (fallback if `GH_TOKEN` not set)
 - `GH_NEWS_AUTO_REFRESH_INTERVAL` - Auto-refresh interval in seconds (default: 120). Set to 0 to disable.
 
+## Theme
+
+### rose_pine_dawn
+
+<img width="3730" height="2484" alt="image" src="https://github.com/user-attachments/assets/0179bf1c-1ef8-437b-86e7-60bdf993f423" />
+
+
 ## License
 
 [Apache 2.0](LICENSE)
