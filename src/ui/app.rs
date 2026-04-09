@@ -612,10 +612,7 @@ impl App {
                     return None;
                 }
 
-                let is_pr = n
-                    .subject_url()
-                    .map(|u| u.contains("/pulls/"))
-                    .unwrap_or(false);
+                let is_pr = n.notification_type() == NotificationType::PullRequest;
 
                 Some(FetchItem {
                     id: n.id.clone(),
