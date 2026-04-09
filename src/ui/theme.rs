@@ -61,7 +61,10 @@ impl ColorPalette {
             "solarized_light" => Self::solarized_light(),
             "gruvbox_light" => Self::gruvbox_light(),
             "monokai" => Self::monokai(),
-            _ => Self::tokyo_night(),
+            _ => {
+                eprintln!("Warning: unknown theme '{name}', falling back to tokyo_night");
+                Self::tokyo_night()
+            }
         }
     }
 
@@ -236,7 +239,7 @@ impl ColorPalette {
             fg_muted: Color::Rgb(152, 147, 165),     // Muted
             fg_dim: Color::Rgb(121, 117, 147),       // Subtle
             blue: Color::Rgb(86, 148, 159),          // Foam
-            cyan: Color::Rgb(86, 148, 159),          // Foam
+            cyan: Color::Rgb(40, 105, 131),          // Pine
             green: Color::Rgb(40, 105, 131),         // Pine
             yellow: Color::Rgb(234, 157, 52),        // Gold
             red: Color::Rgb(180, 99, 122),           // Love
@@ -272,7 +275,7 @@ impl ColorPalette {
             fg_muted: Color::Rgb(147, 159, 145),
             fg_dim: Color::Rgb(130, 145, 129),
             blue: Color::Rgb(58, 148, 197),
-            cyan: Color::Rgb(58, 148, 197),
+            cyan: Color::Rgb(53, 167, 124), // Aqua
             green: Color::Rgb(141, 161, 1),
             yellow: Color::Rgb(223, 160, 0),
             red: Color::Rgb(248, 85, 82),
