@@ -155,6 +155,13 @@ auto_archive = false
 # CLI flag: (not available as flag, set via env or config)
 # browser_command = ""
 
+# How `o`/Enter deliver URLs. Options:
+#   - "builtin": open in browser (default)
+#   - "osc":     copy via OSC 52 (works over SSH)
+#   - "print":   suspend UI and print URLs to stdout
+# Default: "builtin"
+# open_method = "builtin"
+
 # ─── Notification Cache ──────────────────────────────────────────────────
 # Cache notifications locally so subsequent launches display data instantly
 # instead of waiting for the GitHub API. A background refresh always fetches
