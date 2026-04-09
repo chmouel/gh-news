@@ -564,6 +564,7 @@ name = "gh-news"
 version = "0.14.0"
 dependencies = [
  "anyhow",
+ "base64",
  "chrono",
  "clap",
  "comrak",

@@ -77,6 +77,7 @@ pub struct AppState {
     pub loading_progress: Option<(usize, usize)>,
     // Action menu: index of selected action
     pub action_menu_index: usize,
+    pub url_menu_index: usize,
     // Cached snoozed notification IDs — refreshed on fetch and after snooze/mute actions
     pub snoozed_ids: HashMap<String, SnoozeEntry>,
     // Captured output from a show_output action
@@ -105,6 +106,7 @@ pub enum InputMode {
     Search,
     Confirm,
     ActionMenu,
+    UrlMenu,
     CommandOutput,
     ViewPicker,
 }
@@ -167,6 +169,7 @@ impl AppState {
             selected_notification_ids: HashSet::new(),
             loading_progress: None,
             action_menu_index: 0,
+            url_menu_index: 0,
             snoozed_ids: HashMap::new(),
             command_output: None,
             views: Vec::new(),

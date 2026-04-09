@@ -5,6 +5,19 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Method used when pressing `o` / Enter to open a notification URL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenMethod {
+    /// Open URL in the browser (webbrowser crate or `browser_command`).
+    #[default]
+    Builtin,
+    /// Copy URL to the system clipboard via OSC 52 escape sequence (works over SSH).
+    Osc,
+    /// Display the URL in the status bar so the user can copy it manually.
+    Print,
+}
+
 /// Layout mode for the notification list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -88,6 +101,7 @@ pub struct Config {
 
     // External commands
     pub browser_command: Option<String>,
+    pub open_method: OpenMethod,
 
     // Notification hooks
     pub on_new_notification_command: Option<String>,
@@ -168,6 +182,7 @@ impl Default for Config {
             auto_mark_on_open: true,
             cache_file: None,
             browser_command: None,
+            open_method: OpenMethod::default(),
             on_new_notification_command: None,
             github_host: "github.com".to_string(),
             state_file: None,
