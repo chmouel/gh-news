@@ -1,7 +1,7 @@
 use crate::markdown::MarkdownRenderer;
 use crate::preview::{PreviewData, PreviewHeaderKind, PreviewView};
 use crate::state::AppState;
-use crate::ui::theme::{Theme, TokyoNight};
+use crate::ui::theme::{ColorPalette, Theme};
 use ratatui::{
     prelude::*,
     widgets::{
@@ -12,15 +12,17 @@ use ratatui::{
 
 pub struct PreviewWidget {
     theme: Theme,
+    colors: ColorPalette,
     scrollbar_state: ScrollbarState,
     cached_lines: Vec<Line<'static>>,
     cached_signature: Option<String>,
 }
 
 impl PreviewWidget {
-    pub fn new() -> Self {
+    pub fn new(palette: &ColorPalette) -> Self {
         Self {
-            theme: Theme::default(),
+            theme: Theme::from_palette(palette),
+            colors: palette.clone(),
             scrollbar_state: ScrollbarState::default(),
             cached_lines: Vec::new(),
             cached_signature: None,
@@ -28,8 +30,6 @@ impl PreviewWidget {
     }
 
     pub fn render(&mut self, frame: &mut Frame, area: Rect, state: &AppState) {
-        let colors = TokyoNight::colors();
-
         // Main block with border
         let block = Block::default()
             .borders(Borders::ALL)
@@ -42,7 +42,7 @@ impl PreviewWidget {
             )
             .title(
                 Title::from(
-                    Line::from(" ? Help q Quit ").style(Style::default().fg(colors.fg_dim)),
+                    Line::from(" ? Help q Quit ").style(Style::default().fg(self.colors.fg_dim)),
                 )
                 .alignment(Alignment::Right)
                 .position(Position::Bottom),
@@ -55,7 +55,7 @@ impl PreviewWidget {
         frame.render_widget(block, area);
 
         if let Some(preview_data) = &state.preview_content {
-            self.render_preview_data(frame, inner_area, preview_data, state, &colors);
+            self.render_preview_data(frame, inner_area, preview_data, state);
         } else {
             // No preview available
             let empty_text =
@@ -64,12 +64,12 @@ impl PreviewWidget {
                         Line::from(""),
                         Line::from(vec![Span::styled(
                             "🔍 Filtering active",
-                            Style::default().fg(colors.fg_dim),
+                            Style::default().fg(self.colors.fg_dim),
                         )]),
                         Line::from(""),
                         Line::from(vec![Span::styled(
                             "No notifications match your filter",
-                            Style::default().fg(colors.fg_muted),
+                            Style::default().fg(self.colors.fg_muted),
                         )]),
                     ]
                 } else {
@@ -77,12 +77,12 @@ impl PreviewWidget {
                         Line::from(""),
                         Line::from(vec![Span::styled(
                             "📄 No preview available",
-                            Style::default().fg(colors.fg_dim),
+                            Style::default().fg(self.colors.fg_dim),
                         )]),
                         Line::from(""),
                         Line::from(vec![Span::styled(
                             "Select a notification to view its content",
-                            Style::default().fg(colors.fg_muted),
+                            Style::default().fg(self.colors.fg_muted),
                         )]),
                     ]
                 };
@@ -101,17 +101,12 @@ impl PreviewWidget {
         area: Rect,
         preview_data: &PreviewData,
         state: &AppState,
-        colors: &TokyoNight,
     ) {
-        // Render all content (header, separator, description) as scrollable
-        self.render_scrollable_content(frame, area, preview_data, state, colors);
+        self.render_scrollable_content(frame, area, preview_data, state);
     }
 
-    fn get_header_lines(
-        &self,
-        preview_view: &PreviewView,
-        colors: &TokyoNight,
-    ) -> Vec<Line<'static>> {
+    fn get_header_lines(&self, preview_view: &PreviewView) -> Vec<Line<'static>> {
+        let colors = &self.colors;
         preview_view
             .header
             .iter()
@@ -192,10 +187,10 @@ impl PreviewWidget {
             .collect()
     }
 
-    fn get_separator_line(&self, width: u16, colors: &TokyoNight) -> Line<'static> {
+    fn get_separator_line(&self, width: u16) -> Line<'static> {
         Line::from(vec![Span::styled(
             "─".repeat(width as usize),
-            Style::default().fg(colors.bg_dark),
+            Style::default().fg(self.colors.bg_dark),
         )])
     }
 
@@ -205,17 +200,12 @@ impl PreviewWidget {
         area: Rect,
         preview_data: &PreviewData,
         state: &AppState,
-        colors: &TokyoNight,
     ) {
         let preview_view = PreviewView::from(preview_data);
 
-        // Get header lines (3 lines)
-        let header_lines = self.get_header_lines(&preview_view, colors);
+        let header_lines = self.get_header_lines(&preview_view);
+        let separator_line = self.get_separator_line(area.width);
 
-        // Get separator line (1 line)
-        let separator_line = self.get_separator_line(area.width, colors);
-
-        // Get body content
         let body = preview_view.body.as_str();
         let header_signature = preview_view
             .header
@@ -225,9 +215,8 @@ impl PreviewWidget {
             .join("\n");
         let signature = format!("{header_signature}\n{body}");
 
-        // Only re-render markdown when content changes
         if self.cached_signature.as_ref() != Some(&signature) {
-            let body_lines = MarkdownRenderer::render_simple(body);
+            let body_lines = MarkdownRenderer::render_simple(body, &self.colors);
 
             let mut all_lines = Vec::new();
             all_lines.extend(header_lines);
@@ -247,7 +236,6 @@ impl PreviewWidget {
             .viewport_content_length(visible_height)
             .position(state.preview_scroll);
 
-        // Get visible lines based on scroll
         let start = state
             .preview_scroll
             .min(self.cached_lines.len().saturating_sub(1));
@@ -255,7 +243,7 @@ impl PreviewWidget {
         let visible_lines: Vec<Line> = if self.cached_lines.is_empty() {
             vec![Line::from(vec![Span::styled(
                 "No description",
-                Style::default().fg(colors.fg_dim),
+                Style::default().fg(self.colors.fg_dim),
             )])]
         } else {
             self.cached_lines[start..end].to_vec()
@@ -267,7 +255,6 @@ impl PreviewWidget {
 
         frame.render_widget(paragraph, area);
 
-        // Render scrollbar
         if content_height > visible_height {
             let scrollbar = Scrollbar::default()
                 .orientation(ratatui::widgets::ScrollbarOrientation::VerticalRight)

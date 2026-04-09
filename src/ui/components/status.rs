@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::state::AppState;
-use crate::ui::theme::Theme;
+use crate::ui::theme::{ColorPalette, Theme};
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Paragraph},
@@ -15,12 +15,14 @@ pub struct RefreshState {
 
 pub struct StatusWidget {
     theme: Theme,
+    colors: ColorPalette,
 }
 
 impl StatusWidget {
-    pub fn new() -> Self {
+    pub fn new(palette: &ColorPalette) -> Self {
         Self {
-            theme: Theme::default(),
+            theme: Theme::from_palette(palette),
+            colors: palette.clone(),
         }
     }
 
@@ -33,8 +35,6 @@ impl StatusWidget {
         auto_mark_read: bool,
         refresh: &RefreshState,
     ) {
-        let colors = crate::ui::theme::TokyoNight::colors();
-
         let interval_text = if config.auto_refresh_interval > 0 {
             if refresh.is_refreshing {
                 "🔄 refreshing…".to_string()
@@ -65,21 +65,20 @@ impl StatusWidget {
             .count();
 
         let status_parts = vec![
-            Span::styled("❓ ", Style::default().fg(colors.yellow)),
+            Span::styled("❓ ", Style::default().fg(self.colors.yellow)),
             Span::styled("help", self.theme.status_bar),
             Span::raw(" · "),
-            Span::styled("ESC ", Style::default().fg(colors.red)),
+            Span::styled("ESC ", Style::default().fg(self.colors.red)),
             Span::styled("quit", self.theme.status_bar),
         ];
 
         let mut status_line = Line::from(status_parts);
 
-        // Show status message if present (e.g., after marking all as read)
         if let Some(ref msg) = state.status_message {
             status_line.spans.push(Span::raw(" · "));
             status_line.spans.push(Span::styled(
                 format!("✓ {}", msg),
-                Style::default().fg(colors.green),
+                Style::default().fg(self.colors.green),
             ));
         }
 
@@ -87,7 +86,7 @@ impl StatusWidget {
             status_line.spans.push(Span::raw(" · "));
             let style = if refresh.is_refreshing {
                 Style::default()
-                    .fg(colors.cyan)
+                    .fg(self.colors.cyan)
                     .add_modifier(Modifier::ITALIC)
             } else {
                 self.theme.status_bar
@@ -95,26 +94,25 @@ impl StatusWidget {
             status_line.spans.push(Span::styled(interval_text, style));
         }
 
-        // Show active view name or filter indicator
         if let Some(view_name) = state.active_view_name() {
             status_line.spans.push(Span::raw(" · "));
             status_line
                 .spans
-                .push(Span::styled("👁 ", Style::default().fg(colors.cyan)));
+                .push(Span::styled("👁 ", Style::default().fg(self.colors.cyan)));
             status_line.spans.push(Span::styled(
                 view_name.to_string(),
                 Style::default()
-                    .fg(colors.cyan)
+                    .fg(self.colors.cyan)
                     .add_modifier(Modifier::BOLD),
             ));
         } else if let Some(ref pattern) = state.filter_pattern {
             status_line.spans.push(Span::raw(" · "));
             status_line
                 .spans
-                .push(Span::styled("🔍 ", Style::default().fg(colors.cyan)));
+                .push(Span::styled("🔍 ", Style::default().fg(self.colors.cyan)));
             status_line.spans.push(Span::styled(
                 format!("\"{}\"", pattern),
-                Style::default().fg(colors.cyan),
+                Style::default().fg(self.colors.cyan),
             ));
         }
 
@@ -128,19 +126,20 @@ impl StatusWidget {
             status_line.spans.push(Span::raw(" · "));
             status_line.spans.push(Span::styled(
                 format!("🔴 {} unread", unread_count),
-                Style::default().fg(colors.red).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(self.colors.red)
+                    .add_modifier(Modifier::BOLD),
             ));
         }
 
-        // Show auto-mark-read indicator
         let mode_label = if auto_mark_read { "M:read" } else { "M:off" };
         status_line.spans.push(Span::raw(" · "));
         status_line.spans.push(Span::styled(
             mode_label,
             if auto_mark_read {
-                Style::default().fg(colors.green)
+                Style::default().fg(self.colors.green)
             } else {
-                Style::default().fg(colors.fg_muted)
+                Style::default().fg(self.colors.fg_muted)
             },
         ));
 

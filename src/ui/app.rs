@@ -138,6 +138,7 @@ impl App {
         let auto_mark_read = config.auto_mark_read;
         let auto_mark_on_open = config.auto_mark_on_open;
         let org_grouping = config.org_grouping;
+        let palette = config.color_palette();
         let mut state = AppState::new();
         state.org_grouping = org_grouping;
         Self {
@@ -146,18 +147,18 @@ impl App {
             base_filter: None,
             base_filter_pattern: None,
             should_quit: false,
-            list_widget: list::ListWidget::new(),
-            preview_widget: preview::PreviewWidget::new(),
-            status_widget: status::StatusWidget::new(),
-            help_widget: help::HelpWidget::new(),
-            help_search_widget: help_search::HelpSearchWidget::new(),
-            confirm_widget: confirm::ConfirmWidget::new(),
-            loading_widget: loading::LoadingWidget::new(),
-            filter_widget: filter::FilterWidget::new(),
-            action_menu_widget: action_menu::ActionMenuWidget::new(),
-            url_menu_widget: url_menu::UrlMenuWidget::new(),
-            command_output_widget: command_output::CommandOutputWidget::new(),
-            view_picker_widget: view_picker::ViewPickerWidget::new(),
+            list_widget: list::ListWidget::new(&palette),
+            preview_widget: preview::PreviewWidget::new(&palette),
+            status_widget: status::StatusWidget::new(&palette),
+            help_widget: help::HelpWidget::new(&palette),
+            help_search_widget: help_search::HelpSearchWidget::new(&palette),
+            confirm_widget: confirm::ConfirmWidget::new(&palette),
+            loading_widget: loading::LoadingWidget::new(&palette),
+            filter_widget: filter::FilterWidget::new(&palette),
+            action_menu_widget: action_menu::ActionMenuWidget::new(&palette),
+            url_menu_widget: url_menu::UrlMenuWidget::new(&palette),
+            command_output_widget: command_output::CommandOutputWidget::new(&palette),
+            view_picker_widget: view_picker::ViewPickerWidget::new(&palette),
             api_client: None,
             last_refresh: Instant::now(),
             refresh_args: None,
@@ -1348,7 +1349,7 @@ impl App {
             } else {
                 Some(filter)
             };
-            let content = help::HelpWidget::build_content(filter);
+            let content = self.help_widget.build_content(filter);
             self.state.help_view_height = layout.inner_height;
             self.state.help_content_len =
                 help::HelpWidget::content_height(&content, layout.inner_width);

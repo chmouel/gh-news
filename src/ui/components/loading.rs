@@ -1,4 +1,4 @@
-use crate::ui::theme::Theme;
+use crate::ui::theme::{ColorPalette, Theme};
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Gauge, Paragraph},
@@ -9,9 +9,9 @@ pub struct LoadingWidget {
 }
 
 impl LoadingWidget {
-    pub fn new() -> Self {
+    pub fn new(palette: &ColorPalette) -> Self {
         Self {
-            theme: Theme::default(),
+            theme: Theme::from_palette(palette),
         }
     }
 

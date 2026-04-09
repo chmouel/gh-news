@@ -1,4 +1,4 @@
-use crate::ui::theme::{Theme, TokyoNight};
+use crate::ui::theme::{ColorPalette, Theme};
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Clear, Paragraph},
@@ -8,18 +8,18 @@ pub const URL_MENU_ITEMS: &[&str] = &["Open in browser", "Copy URL (OSC 52)", "P
 
 pub struct UrlMenuWidget {
     theme: Theme,
+    colors: ColorPalette,
 }
 
 impl UrlMenuWidget {
-    pub fn new() -> Self {
+    pub fn new(palette: &ColorPalette) -> Self {
         Self {
-            theme: Theme::default(),
+            theme: Theme::from_palette(palette),
+            colors: palette.clone(),
         }
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect, selected_index: usize) {
-        let colors = TokyoNight::colors();
-
         let box_width = 32u16.min(area.width.saturating_sub(4));
         let box_height = 8u16.min(area.height.saturating_sub(4));
 
@@ -54,7 +54,7 @@ impl UrlMenuWidget {
             let shortcut_style = if is_selected {
                 style
             } else {
-                Style::default().fg(colors.blue)
+                Style::default().fg(self.colors.blue)
             };
 
             content.push(Line::from(vec![
@@ -67,11 +67,11 @@ impl UrlMenuWidget {
         content.push(Line::from(""));
         content.push(Line::from(vec![
             Span::raw("  "),
-            Span::styled("1-3", Style::default().fg(colors.blue)),
+            Span::styled("1-3", Style::default().fg(self.colors.blue)),
             Span::raw(" run  "),
-            Span::styled("j/k", Style::default().fg(colors.blue)),
+            Span::styled("j/k", Style::default().fg(self.colors.blue)),
             Span::raw(" select  "),
-            Span::styled("Esc", Style::default().fg(colors.red)),
+            Span::styled("Esc", Style::default().fg(self.colors.red)),
             Span::raw(" cancel"),
         ]));
 
@@ -82,13 +82,13 @@ impl UrlMenuWidget {
                 Span::styled(
                     " Open URL ",
                     Style::default()
-                        .fg(colors.magenta)
+                        .fg(self.colors.magenta)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(" ", Style::default()),
             ])
             .title_alignment(Alignment::Center)
-            .border_style(Style::default().fg(colors.magenta))
+            .border_style(Style::default().fg(self.colors.magenta))
             .border_type(ratatui::widgets::BorderType::Rounded);
 
         let paragraph = Paragraph::new(content)

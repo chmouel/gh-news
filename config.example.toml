@@ -89,6 +89,29 @@ participating_only = false
 # exclude_subjects = ["\\[bot\\]", "^Bump ", "dependabot"]
 
 # ==============================================================================
+# THEME
+# ==============================================================================
+
+# Colour theme for the TUI. Built-in themes:
+#   - "tokyo_night"      (default) — dark blue with soft white text
+#   - "catppuccin_mocha" — warm dark palette (Catppuccin dark variant)
+#   - "catppuccin_latte" — light palette (Catppuccin light variant)
+#   - "nord"             — arctic blue-grey
+#   - "dracula"          — dark with vivid accents
+#   - "gruvbox_dark"     — retro warm colours
+# Unknown names fall back to tokyo_night.
+# Default: "tokyo_night"
+# theme = "tokyo_night"
+
+# Override individual palette colours on top of the chosen theme.
+# Each value is a hex colour string ("#rrggbb" or "rrggbb").
+# Available fields: bg, bg_dark, bg_highlight, fg, fg_muted, fg_dim,
+#   blue, cyan, green, yellow, red, magenta, orange
+# [theme_colors]
+# blue = "#7aa2f7"
+# red = "#ff0000"
+
+# ==============================================================================
 # DISPLAY SETTINGS
 # ==============================================================================
 

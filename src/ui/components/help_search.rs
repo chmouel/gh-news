@@ -1,13 +1,18 @@
+use crate::ui::theme::ColorPalette;
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
-pub struct HelpSearchWidget;
+pub struct HelpSearchWidget {
+    colors: ColorPalette,
+}
 
 impl HelpSearchWidget {
-    pub fn new() -> Self {
-        Self
+    pub fn new(palette: &ColorPalette) -> Self {
+        Self {
+            colors: palette.clone(),
+        }
     }
 
     pub fn render(
@@ -19,7 +24,7 @@ impl HelpSearchWidget {
         total_count: usize,
         active: bool,
     ) {
-        let colors = crate::ui::theme::TokyoNight::colors();
+        let colors = &self.colors;
 
         let box_width = 50.min(area.width.saturating_sub(4));
         let box_height = 3;

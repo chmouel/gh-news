@@ -1,5 +1,5 @@
 use crate::builtin_actions::{shortcut_for_index, CombinedAction};
-use crate::ui::theme::{Theme, TokyoNight};
+use crate::ui::theme::{ColorPalette, Theme};
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Clear, Paragraph},
@@ -7,12 +7,14 @@ use ratatui::{
 
 pub struct ActionMenuWidget {
     theme: Theme,
+    colors: ColorPalette,
 }
 
 impl ActionMenuWidget {
-    pub fn new() -> Self {
+    pub fn new(palette: &ColorPalette) -> Self {
         Self {
-            theme: Theme::default(),
+            theme: Theme::from_palette(palette),
+            colors: palette.clone(),
         }
     }
 
@@ -24,14 +26,10 @@ impl ActionMenuWidget {
         selected_index: usize,
         notification_count: usize,
     ) {
-        let colors = TokyoNight::colors();
-
-        // Calculate box dimensions based on content
         let max_name_len = actions.iter().map(|a| a.name().len()).max().unwrap_or(10);
         let box_width = (max_name_len + 13).clamp(30, 60) as u16;
         let box_width = box_width.min(area.width.saturating_sub(4));
 
-        // Height: 2 for borders + 1 for header + actions + 2 for keybindings
         let content_height = actions.len() as u16 + 4;
         let box_height = content_height.min(area.height.saturating_sub(4));
 
@@ -45,10 +43,8 @@ impl ActionMenuWidget {
             height: box_height,
         };
 
-        // Clear the background area
         frame.render_widget(Clear, centered_area);
 
-        // Build content lines
         let mut content = Vec::new();
         content.push(Line::from(""));
 
@@ -70,7 +66,7 @@ impl ActionMenuWidget {
             let shortcut_style = if is_selected {
                 style
             } else {
-                Style::default().fg(colors.blue)
+                Style::default().fg(self.colors.blue)
             };
 
             content.push(Line::from(vec![
@@ -83,15 +79,14 @@ impl ActionMenuWidget {
         content.push(Line::from(""));
         content.push(Line::from(vec![
             Span::raw("  "),
-            Span::styled("1-9/a-z", Style::default().fg(colors.blue)),
+            Span::styled("1-9/a-z", Style::default().fg(self.colors.blue)),
             Span::raw(" run  "),
-            Span::styled("j/k", Style::default().fg(colors.blue)),
+            Span::styled("j/k", Style::default().fg(self.colors.blue)),
             Span::raw(" select  "),
-            Span::styled("Esc", Style::default().fg(colors.red)),
+            Span::styled("Esc", Style::default().fg(self.colors.red)),
             Span::raw(" cancel"),
         ]));
 
-        // Build title
         let title_text = if notification_count > 1 {
             format!(" Run on {} Notifications ", notification_count)
         } else {
@@ -105,13 +100,13 @@ impl ActionMenuWidget {
                 Span::styled(
                     title_text,
                     Style::default()
-                        .fg(colors.magenta)
+                        .fg(self.colors.magenta)
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(" ", Style::default()),
             ])
             .title_alignment(Alignment::Center)
-            .border_style(Style::default().fg(colors.magenta))
+            .border_style(Style::default().fg(self.colors.magenta))
             .border_type(ratatui::widgets::BorderType::Rounded);
 
         let paragraph = Paragraph::new(content)
