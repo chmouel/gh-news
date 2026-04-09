@@ -5,6 +5,19 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Layout mode for the notification list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ListLayout {
+    /// Title in the middle, #{ID} and reason right-aligned. Default.
+    #[default]
+    RightAligned,
+    /// Compact single-line: icons only, no text labels for type/reason.
+    IconOnly,
+    /// Two-line: title on first line, metadata dimmed on second line.
+    TwoLine,
+}
+
 /// A user-defined action that can be executed on notifications.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Action {
@@ -66,6 +79,7 @@ pub struct Config {
     pub default_preview_mode: String,
     pub repos_collapsed: bool,
     pub org_grouping: OrgGroupingMode,
+    pub list_layout: ListLayout,
 
     // Behaviour
     pub auto_mark_read: bool,
@@ -148,6 +162,7 @@ impl Default for Config {
             default_preview_mode: "vertical".to_string(),
             repos_collapsed: false,
             org_grouping: OrgGroupingMode::default(),
+            list_layout: ListLayout::default(),
             auto_mark_read: true,
             auto_archive: false,
             auto_mark_on_open: true,

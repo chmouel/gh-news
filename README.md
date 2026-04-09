@@ -169,6 +169,7 @@ exclude_subjects = ["^Bump ", "\\[bot\\]"] # by title: regex patterns (case-inse
 default_preview_mode = "vertical"    # "off", "horizontal", or "vertical"
 repos_collapsed = false              # start with repos collapsed
 org_grouping = "auto"               # "off", "auto", or "always"
+list_layout = "right_aligned"       # "right_aligned", "icon_only", or "two_line"
 
 # Behaviour
 auto_mark_read = true                # mark notifications read when navigating to them

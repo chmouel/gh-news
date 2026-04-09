@@ -115,6 +115,14 @@ repos_collapsed = false
 # Default: "auto"
 org_grouping = "auto"
 
+# Layout mode for the notification list.
+# Options:
+#   - "right_aligned": title in the middle, ID and reason right-aligned (default)
+#   - "icon_only":     compact single line with icons only, no text labels
+#   - "two_line":      title on first line, metadata dimmed on second line
+# Default: "right_aligned"
+# list_layout = "right_aligned"
+
 # ==============================================================================
 # BEHAVIOR
 # ==============================================================================

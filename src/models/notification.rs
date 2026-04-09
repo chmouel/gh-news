@@ -90,10 +90,12 @@ impl Notification {
         let hours = duration.num_hours();
         let minutes = duration.num_minutes();
 
+        // "%d/%b %H:%M" produces e.g. "08/Apr 07:50" (12 chars); pad relative times to match.
+        const TIME_WIDTH: usize = 12;
         if hours < 1 {
-            format!("{}min ago", minutes)
+            format!("{:>width$}", format!("Today {}m", minutes), width = TIME_WIDTH)
         } else if hours < 24 {
-            format!("{}h ago", hours)
+            format!("{:>width$}", format!("Today {}h", hours), width = TIME_WIDTH)
         } else {
             let local_time = Local.from_utc_datetime(&time.naive_utc());
             local_time.format("%d/%b %H:%M").to_string()

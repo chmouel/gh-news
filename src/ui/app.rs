@@ -1348,7 +1348,8 @@ impl App {
         match self.state.focused_pane {
             PaneFocus::Pane1 => {
                 // Show only list widget in full screen
-                self.list_widget.render(frame, chunks[1], &self.state);
+                self.list_widget
+                    .render(frame, chunks[1], &self.state, &self.config);
             }
             PaneFocus::Pane2 => {
                 // Show only preview widget in full screen (if preview is enabled)
@@ -1356,7 +1357,8 @@ impl App {
                     self.preview_widget.render(frame, chunks[1], &self.state);
                 } else {
                     // If preview is off but pane 2 is focused, show list instead
-                    self.list_widget.render(frame, chunks[1], &self.state);
+                    self.list_widget
+                        .render(frame, chunks[1], &self.state, &self.config);
                 }
             }
             PaneFocus::None => {
@@ -1388,15 +1390,18 @@ impl App {
 
                 match preview_mode {
                     PreviewMode::Off => {
-                        self.list_widget.render(frame, main_chunks[0], &self.state);
+                        self.list_widget
+                            .render(frame, main_chunks[0], &self.state, &self.config);
                     }
                     PreviewMode::Horizontal => {
-                        self.list_widget.render(frame, main_chunks[0], &self.state);
+                        self.list_widget
+                            .render(frame, main_chunks[0], &self.state, &self.config);
                         self.preview_widget
                             .render(frame, main_chunks[1], &self.state);
                     }
                     PreviewMode::Vertical => {
-                        self.list_widget.render(frame, main_chunks[0], &self.state);
+                        self.list_widget
+                            .render(frame, main_chunks[0], &self.state, &self.config);
                         self.preview_widget
                             .render(frame, main_chunks[1], &self.state);
                     }

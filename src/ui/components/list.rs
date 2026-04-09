@@ -21,7 +21,13 @@ impl ListWidget {
         }
     }
 
-    pub fn render(&mut self, frame: &mut Frame, area: Rect, app_state: &AppState) {
+    pub fn render(
+        &mut self,
+        frame: &mut Frame,
+        area: Rect,
+        app_state: &AppState,
+        config: &crate::config::Config,
+    ) {
         if app_state.filtered_notifications.is_empty() {
             let empty_text = if app_state.notifications.is_empty() {
                 "✨ All caught up! No notifications."
@@ -229,64 +235,15 @@ impl ListWidget {
                             let time = notif.time_display();
                             let is_pinned = app_state.is_pinned(&notif.id);
                             let is_multi_selected = app_state.is_selected(&notif.id);
-
-                            let mut line = vec![];
-
                             let colors = TokyoNight::colors();
-                            if is_multi_selected {
-                                line.push(Span::styled(
-                                    "✓ ",
-                                    Style::default()
-                                        .fg(colors.magenta)
-                                        .add_modifier(Modifier::BOLD),
-                                ));
-                            } else {
-                                line.push(Span::styled("  ", Style::default()));
-                            }
-
-                            line.push(Span::styled("󰆍 ", Style::default().fg(Color::DarkGray)));
-
-                            let colors = TokyoNight::colors();
-                            if is_pinned {
-                                line.push(Span::styled(
-                                    "󰐃 ",
-                                    Style::default().fg(colors.red).add_modifier(Modifier::BOLD),
-                                ));
-                            } else if notif.is_unread() {
-                                line.push(Span::styled(
-                                    " ",
-                                    Style::default().fg(colors.red).add_modifier(Modifier::BOLD),
-                                ));
-                            } else {
-                                line.push(Span::styled(
-                                    " ",
-                                    Style::default().fg(colors.red).add_modifier(Modifier::BOLD),
-                                ));
-                            }
-
-                            line.push(Span::styled(
-                                format!("{time} "),
-                                Style::default().fg(colors.fg_dim),
-                            ));
 
                             let notification_type = notif.notification_type();
                             let type_icon = Self::get_notification_type_icon(notification_type);
                             let type_style =
                                 Self::get_notification_type_style(notification_type, &colors);
-                            line.push(Span::styled(format!("{} ", type_icon), type_style));
-                            line.push(Span::styled(
-                                format!("{} ", notif.notification_type()),
-                                type_style,
-                            ));
-
                             let reason = notif.reason_enum();
                             let reason_icon = Self::get_notification_reason_icon(reason);
                             let reason_style = Self::get_notification_reason_style(reason, &colors);
-                            line.push(Span::styled(format!("{} ", reason_icon), reason_style));
-                            line.push(Span::styled(
-                                format!("{} ", notif.reason_enum()),
-                                reason_style,
-                            ));
 
                             let title_style = if is_pinned {
                                 Style::default().fg(colors.red)
@@ -298,13 +255,105 @@ impl ListWidget {
                                     .fg(colors.fg_dim)
                                     .add_modifier(Modifier::ITALIC)
                             };
-                            let title_text = match notif.subject_number() {
-                                Some(n) => format!("#{n} {}", notif.title()),
-                                None => notif.title().to_string(),
-                            };
-                            line.push(Span::styled(title_text, title_style));
 
-                            ListItem::new(Line::from(line))
+                            let checkbox_span = if is_multi_selected {
+                                Span::styled(
+                                    "✓ ",
+                                    Style::default()
+                                        .fg(colors.magenta)
+                                        .add_modifier(Modifier::BOLD),
+                                )
+                            } else {
+                                Span::styled("  ", Style::default())
+                            };
+
+                            let dot_span = if is_pinned {
+                                Span::styled(
+                                    "󰐃 ",
+                                    Style::default().fg(colors.red).add_modifier(Modifier::BOLD),
+                                )
+                            } else {
+                                Span::styled(
+                                    " ",
+                                    Style::default().fg(colors.red).add_modifier(Modifier::BOLD),
+                                )
+                            };
+
+                            let time_span = Span::styled(
+                                format!("{time} "),
+                                Style::default().fg(colors.fg_dim),
+                            );
+                            let type_icon_span = Span::styled(format!("{type_icon} "), type_style);
+
+                            match config.list_layout {
+                                crate::config::ListLayout::RightAligned => {
+                                    // Inner content width: area minus 2 borders and 2 padding chars
+                                    let inner_width = area.width.saturating_sub(4) as usize;
+                                    // Fixed left width: checkbox(2) + dot(2) + time + space(1) + type_icon+space(2)
+                                    let left_width = 2 + 2 + time.chars().count() + 1 + 2;
+
+                                    let reason_str = format!("{reason}");
+                                    let right_text = match notif.subject_number() {
+                                        Some(ref n) => format!("#{n} {reason_str}"),
+                                        None => reason_str,
+                                    };
+                                    let right_width = right_text.chars().count();
+
+                                    let available =
+                                        inner_width.saturating_sub(left_width + right_width + 1);
+                                    let truncated: String =
+                                        notif.title().chars().take(available).collect();
+                                    let padding_count = inner_width.saturating_sub(
+                                        left_width + truncated.chars().count() + right_width,
+                                    );
+
+                                    ListItem::new(Line::from(vec![
+                                        checkbox_span,
+                                        dot_span,
+                                        time_span,
+                                        type_icon_span,
+                                        Span::styled(truncated, title_style),
+                                        Span::styled(" ".repeat(padding_count), Style::default()),
+                                        Span::styled(right_text, reason_style),
+                                    ]))
+                                }
+                                crate::config::ListLayout::IconOnly => {
+                                    let title_text = match notif.subject_number() {
+                                        Some(ref n) => format!("#{n} {}", notif.title()),
+                                        None => notif.title().to_string(),
+                                    };
+                                    ListItem::new(Line::from(vec![
+                                        checkbox_span,
+                                        dot_span,
+                                        time_span,
+                                        type_icon_span,
+                                        Span::styled(format!("{reason_icon} "), reason_style),
+                                        Span::styled(title_text, title_style),
+                                    ]))
+                                }
+                                crate::config::ListLayout::TwoLine => {
+                                    let line1 = Line::from(vec![
+                                        checkbox_span,
+                                        dot_span,
+                                        Span::styled(notif.title().to_string(), title_style),
+                                    ]);
+                                    let sub_text = match notif.subject_number() {
+                                        Some(ref n) => format!(
+                                            "  ↳ #{n} • {time} • {notification_type} • {reason}"
+                                        ),
+                                        None => {
+                                            format!("  ↳ {time} • {notification_type} • {reason}")
+                                        }
+                                    };
+                                    let line2 = Line::from(Span::styled(
+                                        sub_text,
+                                        Style::default()
+                                            .fg(colors.fg_dim)
+                                            .add_modifier(Modifier::DIM),
+                                    ));
+                                    ListItem::new(vec![line1, line2])
+                                }
+                            }
                         } else {
                             ListItem::new(Line::from("Invalid notification"))
                         }
@@ -436,15 +485,15 @@ impl ListWidget {
 
     fn get_notification_type_icon(nt: NotificationType) -> &'static str {
         match nt {
-            NotificationType::PullRequest => "",
-            NotificationType::Issue => "",
+            NotificationType::PullRequest => "",
+            NotificationType::Issue => "",
             NotificationType::Commit => "󰜘",
             NotificationType::Release => "󰓹",
             NotificationType::Discussion => "󰍦",
-            NotificationType::CheckSuite => "",
-            NotificationType::RepositoryVulnerabilityAlert => "",
-            NotificationType::WorkflowRun => "",
-            NotificationType::ActivityEvent => "",
+            NotificationType::CheckSuite => "",
+            NotificationType::RepositoryVulnerabilityAlert => "",
+            NotificationType::WorkflowRun => "",
+            NotificationType::ActivityEvent => "",
             NotificationType::Unknown => "󰌵",
         }
     }
@@ -498,9 +547,9 @@ impl ListWidget {
             NotificationReason::TeamMention => "󰓾",
             NotificationReason::Invitation => "󰓾",
             NotificationReason::Manual => "󰐕",
-            NotificationReason::ApprovalRequested => "",
-            NotificationReason::MemberFeatureRequested => "",
-            NotificationReason::SecurityAdvisoryCredit => "",
+            NotificationReason::ApprovalRequested => "",
+            NotificationReason::MemberFeatureRequested => "",
+            NotificationReason::SecurityAdvisoryCredit => "",
             NotificationReason::Unknown => "󰐕",
         }
     }
