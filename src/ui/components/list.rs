@@ -296,7 +296,7 @@ impl ListWidget {
                                     let inner_width = area.width.saturating_sub(4) as usize;
                                     let left_width = 2 + 2 + time.chars().count() + 1 + 2;
 
-                                    let reason_str = format!("{reason}");
+                                    let reason_str = notif.display_reason();
                                     let right_text = match notif.subject_number() {
                                         Some(ref n) => format!("#{n} {reason_str}"),
                                         None => reason_str,
@@ -341,12 +341,13 @@ impl ListWidget {
                                         dot_span,
                                         Span::styled(notif.title().to_string(), title_style),
                                     ]);
+                                    let display_reason = notif.display_reason();
                                     let sub_text = match notif.subject_number() {
                                         Some(ref n) => format!(
-                                            "  ↳ #{n} • {time} • {notification_type} • {reason}"
+                                            "  ↳ #{n} • {time} • {notification_type} • {display_reason}"
                                         ),
                                         None => {
-                                            format!("  ↳ {time} • {notification_type} • {reason}")
+                                            format!("  ↳ {time} • {notification_type} • {display_reason}")
                                         }
                                     };
                                     let line2 = Line::from(Span::styled(

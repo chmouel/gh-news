@@ -20,6 +20,11 @@ pub struct Notification {
     /// Not part of the GitHub API response — populated via background enrichment.
     #[serde(skip)]
     pub author: Option<String>,
+    /// Contextual state for state_change notifications (e.g. "merged", "closed", "open",
+    /// "closed:completed", "closed:not_planned").
+    /// Not part of the GitHub API response — populated via background enrichment.
+    #[serde(skip)]
+    pub context: Option<String>,
 }
 
 impl Notification {
@@ -107,6 +112,52 @@ impl Notification {
         } else {
             let local_time = Local.from_utc_datetime(&time.naive_utc());
             local_time.format("%d/%b %H:%M").to_string()
+        }
+    }
+
+    /// Return a human-readable description combining reason, type, author, and
+    /// enriched context — much more informative than the raw API reason string.
+    pub fn display_reason(&self) -> String {
+        let reason = self.reason_enum();
+        let ntype = self.notification_type();
+
+        match reason {
+            NotificationReason::StateChange => match self.context.as_deref() {
+                Some("merged") => match &self.author {
+                    Some(a) => format!("merged by @{a}"),
+                    None => "merged".to_string(),
+                },
+                Some("closed:completed") => "closed as completed".to_string(),
+                Some("closed:not_planned") => "closed as not planned".to_string(),
+                Some("closed") => "closed".to_string(),
+                Some("open") => "reopened".to_string(),
+                _ => "state changed".to_string(),
+            },
+            NotificationReason::Comment => match &self.author {
+                Some(a) => format!("@{a} commented"),
+                None => "new comment".to_string(),
+            },
+            NotificationReason::Mention => match &self.author {
+                Some(a) => format!("@{a} mentioned you"),
+                None => "you were mentioned".to_string(),
+            },
+            NotificationReason::ReviewRequested => "review requested".to_string(),
+            NotificationReason::Author => match ntype {
+                NotificationType::PullRequest => "your PR".to_string(),
+                NotificationType::Issue => "your issue".to_string(),
+                _ => "your thread".to_string(),
+            },
+            NotificationReason::Assign => "assigned to you".to_string(),
+            NotificationReason::Subscribed => "new activity".to_string(),
+            NotificationReason::CiActivity => "CI activity".to_string(),
+            NotificationReason::SecurityAlert => "security alert".to_string(),
+            NotificationReason::TeamMention => "team mentioned".to_string(),
+            NotificationReason::ApprovalRequested => "approval requested".to_string(),
+            NotificationReason::Invitation => "invitation".to_string(),
+            NotificationReason::Manual => "subscribed".to_string(),
+            NotificationReason::MemberFeatureRequested => "feature requested".to_string(),
+            NotificationReason::SecurityAdvisoryCredit => "security credit".to_string(),
+            NotificationReason::Unknown => self.reason.clone(),
         }
     }
 
@@ -323,6 +374,7 @@ mod tests {
             },
             latest_comment_url: None,
             author: None,
+            context: None,
         }
     }
 
@@ -422,5 +474,160 @@ mod tests {
             n.web_url("git.example.com"),
             Some("https://git.example.com/org/proj/discussions/99".to_string())
         );
+    }
+
+    fn make_reason_notification(
+        reason: &str,
+        subject_type: NotificationType,
+        author: Option<&str>,
+        context: Option<&str>,
+    ) -> Notification {
+        let mut n = make_notification_with_type(None, "test", subject_type);
+        n.reason = reason.to_string();
+        n.author = author.map(String::from);
+        n.context = context.map(String::from);
+        n
+    }
+
+    #[test]
+    fn display_reason_state_change_merged_with_author() {
+        let n = make_reason_notification(
+            "state_change",
+            NotificationType::PullRequest,
+            Some("alice"),
+            Some("merged"),
+        );
+        assert_eq!(n.display_reason(), "merged by @alice");
+    }
+
+    #[test]
+    fn display_reason_state_change_merged_no_author() {
+        let n = make_reason_notification(
+            "state_change",
+            NotificationType::PullRequest,
+            None,
+            Some("merged"),
+        );
+        assert_eq!(n.display_reason(), "merged");
+    }
+
+    #[test]
+    fn display_reason_state_change_closed() {
+        let n = make_reason_notification(
+            "state_change",
+            NotificationType::Issue,
+            None,
+            Some("closed"),
+        );
+        assert_eq!(n.display_reason(), "closed");
+    }
+
+    #[test]
+    fn display_reason_state_change_closed_completed() {
+        let n = make_reason_notification(
+            "state_change",
+            NotificationType::Issue,
+            None,
+            Some("closed:completed"),
+        );
+        assert_eq!(n.display_reason(), "closed as completed");
+    }
+
+    #[test]
+    fn display_reason_state_change_closed_not_planned() {
+        let n = make_reason_notification(
+            "state_change",
+            NotificationType::Issue,
+            None,
+            Some("closed:not_planned"),
+        );
+        assert_eq!(n.display_reason(), "closed as not planned");
+    }
+
+    #[test]
+    fn display_reason_state_change_reopened() {
+        let n = make_reason_notification(
+            "state_change",
+            NotificationType::PullRequest,
+            None,
+            Some("open"),
+        );
+        assert_eq!(n.display_reason(), "reopened");
+    }
+
+    #[test]
+    fn display_reason_state_change_no_context() {
+        let n = make_reason_notification("state_change", NotificationType::PullRequest, None, None);
+        assert_eq!(n.display_reason(), "state changed");
+    }
+
+    #[test]
+    fn display_reason_comment_with_author() {
+        let n = make_reason_notification("comment", NotificationType::Issue, Some("bob"), None);
+        assert_eq!(n.display_reason(), "@bob commented");
+    }
+
+    #[test]
+    fn display_reason_comment_no_author() {
+        let n = make_reason_notification("comment", NotificationType::Issue, None, None);
+        assert_eq!(n.display_reason(), "new comment");
+    }
+
+    #[test]
+    fn display_reason_mention_with_author() {
+        let n = make_reason_notification(
+            "mention",
+            NotificationType::PullRequest,
+            Some("carol"),
+            None,
+        );
+        assert_eq!(n.display_reason(), "@carol mentioned you");
+    }
+
+    #[test]
+    fn display_reason_review_requested() {
+        let n = make_reason_notification(
+            "review_requested",
+            NotificationType::PullRequest,
+            None,
+            None,
+        );
+        assert_eq!(n.display_reason(), "review requested");
+    }
+
+    #[test]
+    fn display_reason_author_pr() {
+        let n = make_reason_notification("author", NotificationType::PullRequest, None, None);
+        assert_eq!(n.display_reason(), "your PR");
+    }
+
+    #[test]
+    fn display_reason_author_issue() {
+        let n = make_reason_notification("author", NotificationType::Issue, None, None);
+        assert_eq!(n.display_reason(), "your issue");
+    }
+
+    #[test]
+    fn display_reason_assign() {
+        let n = make_reason_notification("assign", NotificationType::Issue, None, None);
+        assert_eq!(n.display_reason(), "assigned to you");
+    }
+
+    #[test]
+    fn display_reason_subscribed() {
+        let n = make_reason_notification("subscribed", NotificationType::PullRequest, None, None);
+        assert_eq!(n.display_reason(), "new activity");
+    }
+
+    #[test]
+    fn display_reason_ci_activity() {
+        let n = make_reason_notification("ci_activity", NotificationType::CheckSuite, None, None);
+        assert_eq!(n.display_reason(), "CI activity");
+    }
+
+    #[test]
+    fn display_reason_security_alert() {
+        let n = make_reason_notification("security_alert", NotificationType::Unknown, None, None);
+        assert_eq!(n.display_reason(), "security alert");
     }
 }

@@ -130,7 +130,14 @@ pub struct App {
     cache_path: Option<PathBuf>,
     cache_options_hash: Option<String>,
     background_refresh_rx: Option<Receiver<crate::error::Result<InitialLoadData>>>,
-    author_enrichment_rx: Option<Receiver<std::collections::HashMap<String, String>>>,
+    author_enrichment_rx: Option<Receiver<EnrichmentResult>>,
+}
+
+/// Results from the background enrichment thread that resolves author logins
+/// and subject state context for notifications.
+struct EnrichmentResult {
+    authors: std::collections::HashMap<String, String>,
+    contexts: std::collections::HashMap<String, String>,
 }
 
 impl App {
@@ -555,37 +562,76 @@ impl App {
         self.last_refresh = Instant::now();
     }
 
-    /// Spawn a background thread that resolves author logins for all notifications
-    /// via their `latest_comment_url`. Results are merged back on the next tick.
+    /// Spawn a background thread that resolves author logins and subject state
+    /// context for notifications. Results are merged back on the next tick.
     fn spawn_author_enrichment(&mut self) {
+        use crate::models::NotificationReason;
+
         self.author_enrichment_rx = None;
 
         let Some(client) = self.api_client.clone() else {
             return;
         };
 
-        // Load the persisted author cache and seed known authors into notifications.
-        let cached = crate::state_file::load_author_cache();
+        // Load persisted caches and seed known values into notifications.
+        let cached_authors = crate::state_file::load_author_cache();
+        let cached_contexts = crate::state_file::load_context_cache();
         for notif in &mut self.state.notifications {
             if notif.author.is_none() {
-                if let Some(author) = cached.get(&notif.id) {
+                if let Some(author) = cached_authors.get(&notif.id) {
                     notif.author = Some(author.clone());
                 }
             }
+            if notif.context.is_none() {
+                if let Some(ctx) = cached_contexts.get(&notif.id) {
+                    notif.context = Some(ctx.clone());
+                }
+            }
         }
-        // Re-apply filter so cached authors take effect immediately.
+        // Re-apply filter so cached values take effect immediately.
         self.reapply_filter_preserving_selection();
 
-        // Collect notifications that still need resolution.
-        let to_fetch: Vec<(String, String)> = self
+        // Each item: (id, comment_url_if_needed, subject_url_if_state_change, is_pr)
+        struct FetchItem {
+            id: String,
+            comment_url: Option<String>,
+            subject_url: Option<String>,
+            is_pr: bool,
+        }
+
+        let to_fetch: Vec<FetchItem> = self
             .state
             .notifications
             .iter()
-            .filter(|n| n.author.is_none())
             .filter_map(|n| {
-                n.latest_comment_url
-                    .as_ref()
-                    .map(|url| (n.id.clone(), url.clone()))
+                let needs_author = n.author.is_none() && n.latest_comment_url.is_some();
+                let needs_context = n.context.is_none()
+                    && n.reason_enum() == NotificationReason::StateChange
+                    && n.subject_url().is_some();
+
+                if !needs_author && !needs_context {
+                    return None;
+                }
+
+                let is_pr = n
+                    .subject_url()
+                    .map(|u| u.contains("/pulls/"))
+                    .unwrap_or(false);
+
+                Some(FetchItem {
+                    id: n.id.clone(),
+                    comment_url: if needs_author {
+                        n.latest_comment_url.clone()
+                    } else {
+                        None
+                    },
+                    subject_url: if needs_context {
+                        n.subject_url().map(String::from)
+                    } else {
+                        None
+                    },
+                    is_pr,
+                })
             })
             .collect();
 
@@ -593,25 +639,93 @@ impl App {
             return;
         }
 
-        let (tx, rx) = mpsc::channel::<std::collections::HashMap<String, String>>();
+        let (tx, rx) = mpsc::channel::<EnrichmentResult>();
 
         std::thread::spawn(move || {
-            let (inner_tx, inner_rx) = mpsc::channel::<(String, String)>();
+            // (id, "author"|"context", value)
+            let (inner_tx, inner_rx) = mpsc::channel::<(String, &'static str, String)>();
 
-            for (id, url) in to_fetch {
+            for item in to_fetch {
                 let client = client.clone();
                 let inner_tx = inner_tx.clone();
                 std::thread::spawn(move || {
-                    if let Ok(Some(author)) = client.get_comment_author(&url) {
-                        let _ = inner_tx.send((id, author));
+                    // Fetch author from latest_comment_url
+                    if let Some(url) = &item.comment_url {
+                        if let Ok(Some(author)) = client.get_comment_author(url) {
+                            let _ = inner_tx.send((item.id.clone(), "author", author));
+                        }
+                    }
+
+                    // Fetch subject state for state_change notifications
+                    if let Some(url) = &item.subject_url {
+                        if let Ok(value) = client.get_json_by_url(url) {
+                            let context = if item.is_pr {
+                                let merged = value
+                                    .get("merged")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false);
+                                if merged {
+                                    // Also extract merged_by as author fallback
+                                    if item.comment_url.is_none() {
+                                        if let Some(login) = value
+                                            .get("merged_by")
+                                            .and_then(|u| u.get("login"))
+                                            .and_then(|l| l.as_str())
+                                        {
+                                            let _ = inner_tx.send((
+                                                item.id.clone(),
+                                                "author",
+                                                login.to_string(),
+                                            ));
+                                        }
+                                    }
+                                    "merged".to_string()
+                                } else {
+                                    value
+                                        .get("state")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("open")
+                                        .to_lowercase()
+                                }
+                            } else {
+                                let state = value
+                                    .get("state")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("open")
+                                    .to_lowercase();
+                                if state == "closed" {
+                                    if let Some(reason) =
+                                        value.get("state_reason").and_then(|v| v.as_str())
+                                    {
+                                        format!("closed:{reason}")
+                                    } else {
+                                        state
+                                    }
+                                } else {
+                                    state
+                                }
+                            };
+                            let _ = inner_tx.send((item.id.clone(), "context", context));
+                        }
                     }
                 });
             }
-            // Drop the sender so inner_rx drains completely.
             drop(inner_tx);
 
-            let results: std::collections::HashMap<String, String> = inner_rx.into_iter().collect();
-            let _ = tx.send(results);
+            let mut authors = std::collections::HashMap::new();
+            let mut contexts = std::collections::HashMap::new();
+            for (id, kind, value) in inner_rx {
+                match kind {
+                    "author" => {
+                        authors.insert(id, value);
+                    }
+                    "context" => {
+                        contexts.insert(id, value);
+                    }
+                    _ => {}
+                }
+            }
+            let _ = tx.send(EnrichmentResult { authors, contexts });
         });
 
         self.author_enrichment_rx = Some(rx);
@@ -1143,18 +1257,21 @@ impl App {
                 }
             }
 
-            // Poll author enrichment results
+            // Poll enrichment results (authors + contexts)
             if let Some(ref rx) = self.author_enrichment_rx {
                 match rx.try_recv() {
-                    Ok(authors) => {
+                    Ok(result) => {
                         self.author_enrichment_rx = None;
                         for notif in &mut self.state.notifications {
-                            if let Some(author) = authors.get(&notif.id) {
+                            if let Some(author) = result.authors.get(&notif.id) {
                                 notif.author = Some(author.clone());
+                            }
+                            if let Some(ctx) = result.contexts.get(&notif.id) {
+                                notif.context = Some(ctx.clone());
                             }
                         }
                         self.reapply_filter_preserving_selection();
-                        // Persist resolved authors for future sessions.
+                        // Persist resolved authors and contexts for future sessions.
                         let all_authors: std::collections::HashMap<String, String> = self
                             .state
                             .notifications
@@ -1162,6 +1279,13 @@ impl App {
                             .filter_map(|n| n.author.as_ref().map(|a| (n.id.clone(), a.clone())))
                             .collect();
                         let _ = crate::state_file::save_author_cache(&all_authors);
+                        let all_contexts: std::collections::HashMap<String, String> = self
+                            .state
+                            .notifications
+                            .iter()
+                            .filter_map(|n| n.context.as_ref().map(|c| (n.id.clone(), c.clone())))
+                            .collect();
+                        let _ = crate::state_file::save_context_cache(&all_contexts);
                     }
                     Err(TryRecvError::Disconnected) => {
                         self.author_enrichment_rx = None;
@@ -3441,6 +3565,7 @@ mod tests {
             },
             latest_comment_url: None,
             author: None,
+            context: None,
         }
     }
 
@@ -3475,6 +3600,7 @@ mod tests {
             },
             latest_comment_url: latest_comment_url.map(str::to_string),
             author: None,
+            context: None,
         }
     }
 
@@ -3772,6 +3898,7 @@ mod action_tests {
             },
             latest_comment_url: None,
             author: None,
+            context: None,
         }
     }
 
