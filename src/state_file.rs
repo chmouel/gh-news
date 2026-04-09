@@ -257,6 +257,31 @@ pub fn load_author_cache() -> HashMap<String, String> {
         .unwrap_or_default()
 }
 
+/// Path of the context cache file (sibling of the state file).
+fn get_context_cache_path() -> Result<PathBuf> {
+    let cache_dir = dirs::cache_dir()
+        .ok_or_else(|| Error::Config("Could not determine cache directory".to_string()))?;
+    let dir = cache_dir.join("gh-news");
+    fs::create_dir_all(&dir).map_err(Error::Io)?;
+    Ok(dir.join("contexts.json"))
+}
+
+/// Persist a notification-id → context mapping to disk.
+pub fn save_context_cache(contexts: &HashMap<String, String>) -> Result<()> {
+    let path = get_context_cache_path()?;
+    let json = serde_json::to_string(contexts).map_err(|e| Error::Config(e.to_string()))?;
+    fs::write(&path, json).map_err(Error::Io)
+}
+
+/// Load the previously persisted context cache, returning an empty map on any error.
+pub fn load_context_cache() -> HashMap<String, String> {
+    get_context_cache_path()
+        .ok()
+        .and_then(|p| fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
