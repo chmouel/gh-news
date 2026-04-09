@@ -95,8 +95,19 @@ impl StatusWidget {
             status_line.spans.push(Span::styled(interval_text, style));
         }
 
-        // Show active filter indicator when not in search mode
-        if let Some(ref pattern) = state.filter_pattern {
+        // Show active view name or filter indicator
+        if let Some(view_name) = state.active_view_name() {
+            status_line.spans.push(Span::raw(" · "));
+            status_line
+                .spans
+                .push(Span::styled("👁 ", Style::default().fg(colors.cyan)));
+            status_line.spans.push(Span::styled(
+                view_name.to_string(),
+                Style::default()
+                    .fg(colors.cyan)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        } else if let Some(ref pattern) = state.filter_pattern {
             status_line.spans.push(Span::raw(" · "));
             status_line
                 .spans

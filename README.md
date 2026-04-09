@@ -8,7 +8,6 @@ GitHub notifications TUI built with Rust and ratatui.
 
 <img width="1920" height="1279" alt="ghnews" src="https://github.com/user-attachments/assets/d4b57404-ea06-46bf-a0ab-1d46ab4eedb5" />
 
-
 ## Features
 
 - Terminal-based UI for GitHub notifications using Ratatui
@@ -24,6 +23,7 @@ GitHub notifications TUI built with Rust and ratatui.
 - Mute threads and repositories via the GitHub API
 - Snooze notifications locally until a chosen time
 - Custom actions with command templates
+- Named views for instant filter preset switching
 - Mark notifications read/unread individually or in bulk
 - Static display mode for scripting and pipelines
 - GitHub Actions workflow run notifications (opt-in)
@@ -68,7 +68,7 @@ gh-news shows a loading screen while fetching notifications during start-up and 
 
 - `-a, --all` - Show all notifications (not just unread)
 - `-c, --config <PATH>` - Use a custom config file instead of the default
-- `-f, --filter <PATTERN>` - Only show notifications matching this regex
+- `-f, --filter <PATTERN>` - Only show notifications matching this regex (matched against repo, title, type, reason, and author)
 - `-n, --max-notifications <N>` - Limit how many to fetch
 - `-p, --participating` - Only show notifications where you're participating/mentioned
 - `-r, --mark-read` - Mark all notifications as read (non-interactive)
@@ -119,6 +119,7 @@ gh news --static-display | grep "something" # List notifications without TUI
 - `A` - Toggle showing read notifications
 - `E` - Expunge read notifications
 - `/` - Filter notifications (type to search, Enter to keep, Esc to clear)
+- `V` - Switch named view (built-in and custom filter presets)
 - `Tab` - Cycle preview modes (Off → Horizontal → Vertical)
 - `J`/`K` - Scroll preview (line by line)
 - `Shift+U`/`Shift+D` - Scroll preview (5 lines)
@@ -156,7 +157,7 @@ pagination_size = 50         # notifications per API page
 # Default filters (same as CLI flags)
 show_read = false            # show read notifications (like --all)
 participating_only = false   # only participating (like --participating)
-default_filter = ""          # regex filter always applied
+default_filter = ""          # regex filter always applied (matched against: repo title type reason author)
 
 # Structured exclude filters
 exclude_types = ["CheckSuite"]           # by type: Issue, PR, Release, CheckSuite, etc.
@@ -338,6 +339,60 @@ When you select multiple notifications and run this action, it executes once as 
 | `show_output` | `false` | Capture command output and display it in a scrollable TUI popup (incompatible with `interactive`) |
 
 Actions work with multi-select: select multiple notifications with `Space`, then press `x` to run an action on all of them. With singular placeholders, the command runs once per notification. With plural placeholders (e.g., `{urls}`), the command runs once with all values.
+
+### Named Views
+
+Named views are saved filter presets you can switch between instantly with `V`. Six built-in views are always available, and you can add your own in `config.toml`.
+
+**Built-in views:**
+
+| View | What it shows |
+|------|---------------|
+| Participating | Everything except passive subscriptions and CI noise (`subscribed`, `ci_activity` reasons excluded) |
+| Mentions | Direct `@mention` and team mention notifications |
+| Review Requests | PRs where your review has been requested |
+| Assigned | Issues and PRs assigned to you |
+| My Activity | Notifications on threads you opened or created |
+| Security | Security alerts and advisories |
+| Dependabot | Dependabot version-bump PRs (titles matching "Bump X from Y to Z") and any notification where "dependabot" appears |
+| Bots | Activity from bots whose GitHub login ends in `[bot]` (e.g. `copilot-pull-request-reviewer[bot]`, `dependabot[bot]`, `github-actions[bot]`). Matched against the author field — notifications appear here after background enrichment completes. |
+
+When a view is active, the list panel title and border turn cyan and show the view name, so it is always clear what is being filtered.
+
+**Custom views:**
+
+Define your own in `config.toml` using `[[views]]` sections. All filter fields are optional — unset fields inherit from the global config defaults.
+
+```toml
+[[views]]
+name = "Fires"
+exclude_types = ["Release", "RepositoryVulnerabilityAlert"]
+exclude_reasons = ["subscribed"]
+
+[[views]]
+name = "My Org"
+exclude_repos = ["*"]          # exclude everything …
+filter = "my-org/"             # … that doesn't match this repo pattern
+
+[[views]]
+name = "Dependabot"
+filter = "dependabot"
+```
+
+**View fields:**
+
+| Field | Description |
+|-------|-------------|
+| `name` | Display name shown in the picker (required) |
+| `filter` | Regex applied to `repo title type reason author` (author populated by background enrichment) |
+| `exclude_types` | Override global `exclude_types` for this view |
+| `exclude_reasons` | Override global `exclude_reasons` for this view |
+| `exclude_repos` | Override global `exclude_repos` for this view (glob patterns) |
+| `exclude_subjects` | Override global `exclude_subjects` for this view (regex, case-insensitive) |
+
+User-defined views appear after the built-in views in the picker. Press `V` to open the picker, navigate with `j`/`k` or press the item number, and `Esc` to close without changing. Selecting `0. Default` clears the active view and restores the session's base filter, including any CLI `--filter` supplied at launch.
+
+The `/` search filter works within the active view — pressing `Esc` in search mode returns to the view filter rather than clearing it entirely.
 
 ## Environment Variables
 

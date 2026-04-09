@@ -16,6 +16,10 @@ pub struct Notification {
     pub subject: crate::models::Subject,
     #[serde(rename = "latest_comment_url")]
     pub latest_comment_url: Option<String>,
+    /// Login of the user who triggered the latest activity on this thread.
+    /// Not part of the GitHub API response — populated via background enrichment.
+    #[serde(skip)]
+    pub author: Option<String>,
 }
 
 impl Notification {
@@ -308,6 +312,7 @@ mod tests {
                 latest_comment_url: None,
             },
             latest_comment_url: None,
+            author: None,
         }
     }
 

@@ -157,6 +157,17 @@ impl GitHubClient {
             .map_err(|_| Error::Api(ApiError::InvalidResponse))
     }
 
+    /// Fetch the author login from a comment or issue/PR API URL.
+    /// Returns `None` if the URL is inaccessible or has no user field.
+    pub fn get_comment_author(&self, url: &str) -> Result<Option<String>> {
+        let value: Value = self.get_json(url)?;
+        Ok(value
+            .get("user")
+            .and_then(|u| u.get("login"))
+            .and_then(|l| l.as_str())
+            .map(|s| s.to_string()))
+    }
+
     pub fn mark_all_read(&self, last_read_at: Option<&str>) -> Result<()> {
         let url = format!("{}/notifications", self.api_base);
         let payload = if let Some(last_read_at) = last_read_at {

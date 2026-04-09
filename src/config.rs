@@ -25,6 +25,28 @@ pub struct Action {
     pub show_output: bool,
 }
 
+/// A named filter preset that can be switched to interactively.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct View {
+    /// Display name shown in the view picker.
+    pub name: String,
+    /// Regex filter pattern. None inherits the global `default_filter`.
+    #[serde(default)]
+    pub filter: Option<String>,
+    /// Override global `exclude_types`. None inherits the global value.
+    #[serde(default)]
+    pub exclude_types: Option<Vec<String>>,
+    /// Override global `exclude_reasons`. None inherits the global value.
+    #[serde(default)]
+    pub exclude_reasons: Option<Vec<String>>,
+    /// Override global `exclude_repos`. None inherits the global value.
+    #[serde(default)]
+    pub exclude_repos: Option<Vec<String>>,
+    /// Override global `exclude_subjects`. None inherits the global value.
+    #[serde(default)]
+    pub exclude_subjects: Option<Vec<String>>,
+}
+
 /// Application configuration loaded from config file and environment variables.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -103,6 +125,10 @@ pub struct Config {
     // User-defined actions for notifications
     #[serde(default)]
     pub actions: Vec<Action>,
+
+    // Named filter presets (views)
+    #[serde(default)]
+    pub views: Vec<View>,
 }
 
 fn default_actions_failed_only() -> bool {
@@ -140,6 +166,7 @@ impl Default for Config {
             enable_events: false,
             event_types: Vec::new(),
             actions: Vec::new(),
+            views: Vec::new(),
         }
     }
 }

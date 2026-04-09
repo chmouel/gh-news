@@ -1,4 +1,4 @@
-use crate::config::Config;
+use crate::config::{Config, View};
 use crate::error::Result;
 use crate::models::enums::{NotificationReason, NotificationType};
 use crate::models::Notification;
@@ -35,7 +35,7 @@ impl RepoPattern {
 
 #[derive(Debug, Clone)]
 pub struct Filter {
-    pattern: Option<Regex>,
+    patterns: Vec<Regex>,
     exclude_types: Vec<NotificationType>,
     exclude_reasons: Vec<NotificationReason>,
     exclude_repo_patterns: Vec<RepoPattern>,
@@ -84,11 +84,13 @@ impl Filter {
             .filter_map(|s| Regex::new(&format!("(?i){s}")).ok())
             .collect();
 
+        let mut patterns = Vec::new();
+        if let Some(pattern) = pattern {
+            patterns.push(Regex::new(pattern)?);
+        }
+
         Ok(Self {
-            pattern: match pattern {
-                Some(p) => Some(Regex::new(p)?),
-                None => None,
-            },
+            patterns,
             exclude_types: parsed_types,
             exclude_reasons: parsed_reasons,
             exclude_repo_patterns: parsed_repos,
@@ -96,10 +98,49 @@ impl Filter {
         })
     }
 
+    pub fn and(mut self, mut other: Self) -> Self {
+        self.patterns.append(&mut other.patterns);
+        self.exclude_types.append(&mut other.exclude_types);
+        self.exclude_reasons.append(&mut other.exclude_reasons);
+        self.exclude_repo_patterns
+            .append(&mut other.exclude_repo_patterns);
+        self.exclude_subjects.append(&mut other.exclude_subjects);
+        self
+    }
+
     /// Create a filter with only a regex pattern (no structured excludes).
     /// Used for interactive search within the TUI.
     pub fn from_pattern(pattern: Option<&str>) -> Result<Self> {
         Self::new(pattern, &[], &[], &[], &[])
+    }
+
+    /// Create a filter from a named view, inheriting unset fields from the provided
+    /// runtime default pattern and global structured excludes.
+    pub fn from_view(view: &View, default_pattern: Option<&str>, config: &Config) -> Result<Self> {
+        let pattern = view.filter.as_deref().or(default_pattern);
+        let exclude_types = view
+            .exclude_types
+            .as_deref()
+            .unwrap_or(&config.exclude_types);
+        let exclude_reasons = view
+            .exclude_reasons
+            .as_deref()
+            .unwrap_or(&config.exclude_reasons);
+        let exclude_repos = view
+            .exclude_repos
+            .as_deref()
+            .unwrap_or(&config.exclude_repos);
+        let exclude_subjects = view
+            .exclude_subjects
+            .as_deref()
+            .unwrap_or(&config.exclude_subjects);
+        Self::new(
+            pattern,
+            exclude_types,
+            exclude_reasons,
+            exclude_repos,
+            exclude_subjects,
+        )
     }
 
     /// Create a filter from config settings.
@@ -134,18 +175,15 @@ impl Filter {
         }
 
         // Then apply regex include filter (existing behaviour)
-        if let Some(ref pattern) = self.pattern {
-            let text = format!(
-                "{} {} {} {}",
-                notification.repo_full_name(),
-                notification.title(),
-                notification.notification_type(),
-                notification.reason_enum()
-            );
-            pattern.is_match(&text)
-        } else {
-            true
-        }
+        let text = format!(
+            "{} {} {} {} {}",
+            notification.repo_full_name(),
+            notification.title(),
+            notification.notification_type(),
+            notification.reason_enum(),
+            notification.author.as_deref().unwrap_or("")
+        );
+        self.patterns.iter().all(|pattern| pattern.is_match(&text))
     }
 }
 
@@ -186,6 +224,7 @@ mod tests {
                 latest_comment_url: None,
             },
             latest_comment_url: None,
+            author: None,
         }
     }
 

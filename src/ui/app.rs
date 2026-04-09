@@ -15,7 +15,8 @@ use crate::state::{
 use crate::state_file::AppStateFile;
 use crate::terminal::Terminal;
 use crate::ui::components::{
-    action_menu, command_output, confirm, filter, help, help_search, list, loading, preview, status,
+    action_menu, command_output, confirm, filter, help, help_search, list, loading, preview,
+    status, view_picker,
 };
 use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
@@ -83,6 +84,8 @@ fn filter_dismissed_synthetic(notifications: &mut Vec<Notification>) {
 pub struct App {
     state: AppState,
     config: Config,
+    base_filter: Option<Filter>,
+    base_filter_pattern: Option<String>,
     should_quit: bool,
     list_widget: list::ListWidget,
     preview_widget: preview::PreviewWidget,
@@ -94,6 +97,7 @@ pub struct App {
     filter_widget: filter::FilterWidget,
     action_menu_widget: action_menu::ActionMenuWidget,
     command_output_widget: command_output::CommandOutputWidget,
+    view_picker_widget: view_picker::ViewPickerWidget,
     api_client: Option<crate::api::GitHubClient>,
     last_refresh: Instant,
     refresh_args: Option<(bool, bool, Option<usize>)>, // (all, participating, max_notifications)
@@ -114,6 +118,7 @@ pub struct App {
     cache_path: Option<PathBuf>,
     cache_options_hash: Option<String>,
     background_refresh_rx: Option<Receiver<crate::error::Result<InitialLoadData>>>,
+    author_enrichment_rx: Option<Receiver<std::collections::HashMap<String, String>>>,
 }
 
 impl App {
@@ -126,6 +131,8 @@ impl App {
         Self {
             state,
             config,
+            base_filter: None,
+            base_filter_pattern: None,
             should_quit: false,
             list_widget: list::ListWidget::new(),
             preview_widget: preview::PreviewWidget::new(),
@@ -137,6 +144,7 @@ impl App {
             filter_widget: filter::FilterWidget::new(),
             action_menu_widget: action_menu::ActionMenuWidget::new(),
             command_output_widget: command_output::CommandOutputWidget::new(),
+            view_picker_widget: view_picker::ViewPickerWidget::new(),
             api_client: None,
             last_refresh: Instant::now(),
             refresh_args: None,
@@ -154,6 +162,7 @@ impl App {
             cache_path: None,
             cache_options_hash: None,
             background_refresh_rx: None,
+            author_enrichment_rx: None,
         }
     }
 
@@ -273,11 +282,18 @@ impl App {
                 preview_mode: self.config.get_default_preview_mode(),
             });
 
+        self.base_filter = settings.filter.clone();
+        self.base_filter_pattern = settings.filter_pattern.clone();
+
         let mut notifications = data.notifications;
         filter_dismissed_synthetic(&mut notifications);
 
         let mut app_state = AppState::new();
         app_state.org_grouping = self.config.org_grouping;
+        app_state.views = crate::builtin_views::builtin_views()
+            .into_iter()
+            .chain(self.config.views.iter().cloned())
+            .collect();
         app_state.set_notifications(notifications);
         app_state.set_filter(settings.filter);
         app_state.set_filter_pattern(settings.filter_pattern);
@@ -307,6 +323,7 @@ impl App {
 
         self.update_state(app_state);
         self.fetch_preview_for_selected();
+        self.spawn_author_enrichment();
 
         // Warm the cache for all notifications at low priority so navigation feels instant.
         // The selected notification is already queued at high priority above.
@@ -315,6 +332,82 @@ impl App {
         }
 
         self.last_refresh = Instant::now();
+    }
+
+    fn reapply_filter_preserving_selection(&mut self) {
+        let selected_id = self.state.selected_notification().map(|n| n.id.clone());
+        self.state.reapply_filter();
+
+        if let Some(selected_id) = selected_id {
+            if !self.state.select_notification_by_id(&selected_id) {
+                self.state.select_first_notification();
+            }
+        } else {
+            self.state.select_first_notification();
+        }
+
+        if self.state.show_preview() {
+            self.fetch_preview_for_selected_notification();
+        }
+    }
+
+    fn build_search_filter(&self) -> Result<Option<Filter>> {
+        if self.state.search_query.is_empty() {
+            return Ok(None);
+        }
+
+        let pattern = &self.state.search_query;
+        let filter = Filter::from_pattern(Some(&format!("(?i){}", pattern)))
+            .or_else(|_| Filter::from_pattern(Some(&format!("(?i){}", regex::escape(pattern)))))?;
+        Ok(Some(filter))
+    }
+
+    fn build_active_view_filter(&self) -> Result<Option<Filter>> {
+        let Some(view_idx) = self.state.active_view_index else {
+            return Ok(self.base_filter.clone());
+        };
+        let Some(view) = self.state.views.get(view_idx) else {
+            return Ok(self.base_filter.clone());
+        };
+
+        Ok(Some(Filter::from_view(
+            view,
+            self.base_filter_pattern.as_deref(),
+            &self.config,
+        )?))
+    }
+
+    fn build_effective_filter(&self) -> Result<Option<Filter>> {
+        let filter = self.build_active_view_filter()?;
+
+        if let Some(search_filter) = self.build_search_filter()? {
+            Ok(Some(match filter {
+                Some(filter) => filter.and(search_filter),
+                None => search_filter,
+            }))
+        } else {
+            Ok(filter)
+        }
+    }
+
+    fn refresh_filter_state(&mut self) -> Result<()> {
+        let filter = self.build_effective_filter()?;
+        self.state.set_filter(filter);
+
+        let pattern = if self.state.search_query.is_empty() {
+            if let Some(view_idx) = self.state.active_view_index {
+                self.state
+                    .views
+                    .get(view_idx)
+                    .and_then(|view| view.filter.clone())
+            } else {
+                self.base_filter_pattern.clone()
+            }
+        } else {
+            Some(self.state.search_query.clone())
+        };
+        self.state.set_filter_pattern(pattern);
+        Ok(())
     }
 
     /// Open a URL in the browser using custom command if configured, otherwise system default.
@@ -418,6 +511,68 @@ impl App {
 
         self.background_refresh_rx = Some(rx);
         self.last_refresh = Instant::now();
+    }
+
+    /// Spawn a background thread that resolves author logins for all notifications
+    /// via their `latest_comment_url`. Results are merged back on the next tick.
+    fn spawn_author_enrichment(&mut self) {
+        self.author_enrichment_rx = None;
+
+        let Some(client) = self.api_client.clone() else {
+            return;
+        };
+
+        // Load the persisted author cache and seed known authors into notifications.
+        let cached = crate::state_file::load_author_cache();
+        for notif in &mut self.state.notifications {
+            if notif.author.is_none() {
+                if let Some(author) = cached.get(&notif.id) {
+                    notif.author = Some(author.clone());
+                }
+            }
+        }
+        // Re-apply filter so cached authors take effect immediately.
+        self.reapply_filter_preserving_selection();
+
+        // Collect notifications that still need resolution.
+        let to_fetch: Vec<(String, String)> = self
+            .state
+            .notifications
+            .iter()
+            .filter(|n| n.author.is_none())
+            .filter_map(|n| {
+                n.latest_comment_url
+                    .as_ref()
+                    .map(|url| (n.id.clone(), url.clone()))
+            })
+            .collect();
+
+        if to_fetch.is_empty() {
+            return;
+        }
+
+        let (tx, rx) = mpsc::channel::<std::collections::HashMap<String, String>>();
+
+        std::thread::spawn(move || {
+            let (inner_tx, inner_rx) = mpsc::channel::<(String, String)>();
+
+            for (id, url) in to_fetch {
+                let client = client.clone();
+                let inner_tx = inner_tx.clone();
+                std::thread::spawn(move || {
+                    if let Ok(Some(author)) = client.get_comment_author(&url) {
+                        let _ = inner_tx.send((id, author));
+                    }
+                });
+            }
+            // Drop the sender so inner_rx drains completely.
+            drop(inner_tx);
+
+            let results: std::collections::HashMap<String, String> = inner_rx.into_iter().collect();
+            let _ = tx.send(results);
+        });
+
+        self.author_enrichment_rx = Some(rx);
     }
 
     fn queue_blocking_action(&mut self, action: BlockingAction, message: &str) {
@@ -701,6 +856,7 @@ impl App {
 
                 // Prefetch neighbours regardless of preview visibility.
                 self.prefetch_neighbour_previews();
+                self.spawn_author_enrichment();
 
                 self.state.loading = false;
                 self.last_refresh = Instant::now();
@@ -802,6 +958,7 @@ impl App {
             self.fetch_preview_for_selected_notification();
         }
 
+        self.spawn_author_enrichment();
         self.prefetch_neighbour_previews();
         self.last_refresh = Instant::now();
     }
@@ -932,6 +1089,33 @@ impl App {
                         return Err(crate::error::Error::Terminal(
                             "Initial load channel closed unexpectedly".to_string(),
                         ));
+                    }
+                    Err(TryRecvError::Empty) => {}
+                }
+            }
+
+            // Poll author enrichment results
+            if let Some(ref rx) = self.author_enrichment_rx {
+                match rx.try_recv() {
+                    Ok(authors) => {
+                        self.author_enrichment_rx = None;
+                        for notif in &mut self.state.notifications {
+                            if let Some(author) = authors.get(&notif.id) {
+                                notif.author = Some(author.clone());
+                            }
+                        }
+                        self.reapply_filter_preserving_selection();
+                        // Persist resolved authors for future sessions.
+                        let all_authors: std::collections::HashMap<String, String> = self
+                            .state
+                            .notifications
+                            .iter()
+                            .filter_map(|n| n.author.as_ref().map(|a| (n.id.clone(), a.clone())))
+                            .collect();
+                        let _ = crate::state_file::save_author_cache(&all_authors);
+                    }
+                    Err(TryRecvError::Disconnected) => {
+                        self.author_enrichment_rx = None;
                     }
                     Err(TryRecvError::Empty) => {}
                 }
@@ -1125,6 +1309,15 @@ impl App {
                 &self.state.loading_message,
                 self.state.loading_progress,
             );
+            if self.state.input_mode == InputMode::ViewPicker {
+                self.view_picker_widget.render(
+                    frame,
+                    size,
+                    &self.state.views.clone(),
+                    self.state.view_picker_index,
+                    self.state.active_view_index,
+                );
+            }
             return;
         }
 
@@ -1257,6 +1450,17 @@ impl App {
                 self.command_output_widget.render(frame, size, out);
             }
         }
+
+        // Render view picker popup as overlay (if active)
+        if self.state.input_mode == InputMode::ViewPicker {
+            self.view_picker_widget.render(
+                frame,
+                size,
+                &self.state.views.clone(),
+                self.state.view_picker_index,
+                self.state.active_view_index,
+            );
+        }
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
@@ -1268,6 +1472,7 @@ impl App {
             InputMode::Confirm => self.handle_confirm_key(key),
             InputMode::ActionMenu => self.handle_action_menu_key(key),
             InputMode::CommandOutput => self.handle_command_output_key(key),
+            InputMode::ViewPicker => self.handle_view_picker_key(key),
         }
     }
 
@@ -1349,6 +1554,64 @@ impl App {
             }
             _ => {}
         }
+        Ok(())
+    }
+
+    fn handle_view_picker_key(&mut self, key: KeyEvent) -> Result<()> {
+        let total_items = self.state.views.len() + 1;
+
+        match key.code {
+            KeyCode::Esc => {
+                self.state.input_mode = InputMode::Normal;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.state.view_picker_index > 0 {
+                    self.state.view_picker_index -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.state.view_picker_index + 1 < total_items {
+                    self.state.view_picker_index += 1;
+                }
+            }
+            KeyCode::Enter => {
+                let index = self.state.view_picker_index;
+                self.apply_view(index)?;
+                self.state.input_mode = InputMode::Normal;
+            }
+            KeyCode::Char(c) if c.is_ascii_digit() => {
+                let digit = (c as usize).saturating_sub('0' as usize);
+                if digit < total_items {
+                    self.apply_view(digit)?;
+                    self.state.input_mode = InputMode::Normal;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Apply a named view by picker index (0 = default, 1+ = views[index-1]).
+    fn apply_view(&mut self, index: usize) -> Result<()> {
+        if index == 0 {
+            self.state.active_view_index = None;
+            self.refresh_filter_state()?;
+        } else {
+            let view_idx = index - 1;
+            if let Some(view) = self.state.views.get(view_idx).cloned() {
+                match Filter::from_view(&view, self.base_filter_pattern.as_deref(), &self.config) {
+                    Ok(_) => {
+                        self.state.active_view_index = Some(view_idx);
+                        self.refresh_filter_state()?;
+                    }
+                    Err(err) => {
+                        self.state.status_message =
+                            Some(format!("View '{}' is invalid: {}", view.name, err));
+                    }
+                }
+            }
+        }
+        self.state.view_picker_index = 0;
         Ok(())
     }
 
@@ -2452,6 +2715,10 @@ impl App {
                     self.state.input_mode = InputMode::ActionMenu;
                 }
             }
+            KeyCode::Char('V') => {
+                self.state.view_picker_index = 0;
+                self.state.input_mode = InputMode::ViewPicker;
+            }
             _ => {}
         }
         Ok(())
@@ -2460,11 +2727,10 @@ impl App {
     fn handle_search_key(&mut self, key: KeyEvent) -> Result<()> {
         match key.code {
             KeyCode::Esc => {
-                // Clear filter and exit search mode
+                // Exit search mode; restore view filter if one is active
                 self.state.input_mode = InputMode::Normal;
                 self.state.search_query.clear();
-                self.state.set_filter(None);
-                self.state.set_filter_pattern(None);
+                self.refresh_filter_state()?;
             }
             KeyCode::Enter => {
                 // Keep current filter and exit search mode
@@ -2484,21 +2750,8 @@ impl App {
     }
 
     fn apply_search_filter(&mut self) {
-        if self.state.search_query.is_empty() {
-            self.state.set_filter(None);
-            self.state.set_filter_pattern(None);
-        } else {
-            // Try as regex first, fall back to case-insensitive literal match
-            let pattern = &self.state.search_query;
-            let filter = Filter::from_pattern(Some(&format!("(?i){}", pattern)))
-                .or_else(|_| {
-                    // Invalid regex, escape it and use as literal
-                    Filter::from_pattern(Some(&format!("(?i){}", regex::escape(pattern))))
-                })
-                .ok();
-            self.state.set_filter(filter);
-            self.state
-                .set_filter_pattern(Some(self.state.search_query.clone()));
+        if let Err(err) = self.refresh_filter_state() {
+            self.state.status_message = Some(format!("Search filter error: {}", err));
         }
     }
 
@@ -2960,6 +3213,8 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::GitHubClient;
+    use crate::config::View;
     use crate::models::{Notification, NotificationType, Owner, Repository, Subject};
 
     fn test_notification(id: &str, unread: bool) -> Notification {
@@ -2987,6 +3242,41 @@ mod tests {
                 latest_comment_url: None,
             },
             latest_comment_url: None,
+            author: None,
+        }
+    }
+
+    fn notification_with(
+        id: &str,
+        title: &str,
+        reason: &str,
+        latest_comment_url: Option<&str>,
+    ) -> Notification {
+        Notification {
+            id: id.to_string(),
+            unread: true,
+            last_read_at: None,
+            updated_at: None,
+            reason: reason.to_string(),
+            repository: Repository {
+                id: 1,
+                name: "repo".to_string(),
+                full_name: "owner/repo".to_string(),
+                owner: Owner {
+                    login: "owner".to_string(),
+                    id: 1,
+                    owner_type: "User".to_string(),
+                },
+                private: false,
+            },
+            subject: Subject {
+                title: title.to_string(),
+                subject_type: NotificationType::Issue,
+                url: Some("https://github.com/owner/repo/issues/1".to_string()),
+                latest_comment_url: latest_comment_url.map(str::to_string),
+            },
+            latest_comment_url: latest_comment_url.map(str::to_string),
+            author: None,
         }
     }
 
@@ -3031,6 +3321,139 @@ mod tests {
 
         // Synthetic notification should be removed locally (no API call)
         assert_eq!(app.state.notifications.len(), 0);
+    }
+
+    #[test]
+    fn search_keeps_active_view_constraints() {
+        let mut app = App::new(Config::default());
+        app.state.views = vec![View {
+            name: "Participating".to_string(),
+            filter: None,
+            exclude_types: None,
+            exclude_reasons: Some(vec!["subscribed".to_string()]),
+            exclude_repos: None,
+            exclude_subjects: None,
+        }];
+        app.state.set_notifications(vec![
+            notification_with("1", "Alpha thread", "subscribed", None),
+            notification_with("2", "Alpha thread", "mention", None),
+        ]);
+
+        app.apply_view(1).unwrap();
+        assert_eq!(app.state.filtered_notifications.len(), 1);
+
+        app.state.search_query = "Alpha".to_string();
+        app.apply_search_filter();
+
+        assert_eq!(app.state.filtered_notifications.len(), 1);
+        assert_eq!(app.state.active_view_index, Some(0));
+        let visible_idx = app.state.filtered_notifications[0];
+        assert_eq!(app.state.notifications[visible_idx].id, "2");
+    }
+
+    #[test]
+    fn clearing_view_restores_runtime_base_filter() {
+        let mut app = App::new(Config::default());
+        app.base_filter = Some(Filter::from_pattern(Some("CLI only")).unwrap());
+        app.base_filter_pattern = Some("CLI only".to_string());
+        app.state.views = vec![View {
+            name: "Mentions".to_string(),
+            filter: Some("mention$".to_string()),
+            exclude_types: None,
+            exclude_reasons: None,
+            exclude_repos: None,
+            exclude_subjects: None,
+        }];
+        app.state.set_notifications(vec![
+            notification_with("1", "CLI only", "subscribed", None),
+            notification_with("2", "Different", "mention", None),
+        ]);
+        app.state.set_filter(app.base_filter.clone());
+        app.state
+            .set_filter_pattern(app.base_filter_pattern.clone());
+
+        app.apply_view(1).unwrap();
+        app.apply_view(0).unwrap();
+
+        assert_eq!(app.state.filtered_notifications.len(), 1);
+        let visible_idx = app.state.filtered_notifications[0];
+        assert_eq!(app.state.notifications[visible_idx].id, "1");
+        assert_eq!(app.state.filter_pattern.as_deref(), Some("CLI only"));
+    }
+
+    #[test]
+    fn exiting_search_restores_runtime_base_filter() {
+        let mut app = App::new(Config::default());
+        app.base_filter = Some(Filter::from_pattern(Some("CLI only")).unwrap());
+        app.base_filter_pattern = Some("CLI only".to_string());
+        app.state.set_notifications(vec![
+            notification_with("1", "CLI only", "mention", None),
+            notification_with("2", "Other", "mention", None),
+        ]);
+        app.state.set_filter(app.base_filter.clone());
+        app.state
+            .set_filter_pattern(app.base_filter_pattern.clone());
+        app.state.input_mode = InputMode::Search;
+        app.state.search_query = "Other".to_string();
+        app.apply_search_filter();
+
+        app.handle_search_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .unwrap();
+
+        assert_eq!(app.state.filtered_notifications.len(), 1);
+        let visible_idx = app.state.filtered_notifications[0];
+        assert_eq!(app.state.notifications[visible_idx].id, "1");
+        assert_eq!(app.state.filter_pattern.as_deref(), Some("CLI only"));
+    }
+
+    #[test]
+    fn invalid_view_preserves_existing_filter() {
+        let mut app = App::new(Config::default());
+        app.base_filter = Some(Filter::from_pattern(Some("Alpha")).unwrap());
+        app.base_filter_pattern = Some("Alpha".to_string());
+        app.state.views = vec![View {
+            name: "Broken".to_string(),
+            filter: Some("[".to_string()),
+            exclude_types: None,
+            exclude_reasons: None,
+            exclude_repos: None,
+            exclude_subjects: None,
+        }];
+        app.state.set_notifications(vec![
+            notification_with("1", "Alpha", "mention", None),
+            notification_with("2", "Beta", "mention", None),
+        ]);
+        app.state.set_filter(app.base_filter.clone());
+        app.state
+            .set_filter_pattern(app.base_filter_pattern.clone());
+
+        app.apply_view(1).unwrap();
+
+        assert_eq!(app.state.active_view_index, None);
+        assert_eq!(app.state.filtered_notifications.len(), 1);
+        let visible_idx = app.state.filtered_notifications[0];
+        assert_eq!(app.state.notifications[visible_idx].id, "1");
+        assert!(app
+            .state
+            .status_message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Broken"));
+    }
+
+    #[test]
+    fn refresh_restarts_author_enrichment() {
+        let mut app = App::new(Config::default());
+        app.set_api_client(GitHubClient::new_test());
+
+        app.merge_refreshed_notifications(vec![notification_with(
+            "1",
+            "Needs author",
+            "mention",
+            Some("http://127.0.0.1/comment"),
+        )]);
+
+        assert!(app.author_enrichment_rx.is_some());
     }
 }
 
@@ -3085,6 +3508,7 @@ mod action_tests {
                 latest_comment_url: None,
             },
             latest_comment_url: None,
+            author: None,
         }
     }
 

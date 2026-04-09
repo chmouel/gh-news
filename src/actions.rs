@@ -285,6 +285,7 @@ mod tests {
                 latest_comment_url: None,
             },
             latest_comment_url: None,
+            author: None,
         }
     }
 
@@ -555,6 +556,7 @@ mod tests {
                 latest_comment_url: None,
             },
             latest_comment_url: None,
+            author: None,
         }
     }
 

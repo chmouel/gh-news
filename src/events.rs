@@ -80,6 +80,7 @@ fn event_to_notification(event: &serde_json::Value, event_type: &str) -> Option<
             latest_comment_url: None,
         },
         latest_comment_url: None,
+        author: None,
     })
 }
 

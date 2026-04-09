@@ -115,5 +115,6 @@ fn run_to_notification(
             latest_comment_url: None,
         },
         latest_comment_url: None,
+        author: None,
     })
 }

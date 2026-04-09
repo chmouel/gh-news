@@ -81,6 +81,12 @@ pub struct AppState {
     pub snoozed_ids: HashMap<String, SnoozeEntry>,
     // Captured output from a show_output action
     pub command_output: Option<CommandOutputData>,
+    // Named view presets (cloned from config at startup)
+    pub views: Vec<crate::config::View>,
+    // Index of the active view (None = global config filter)
+    pub active_view_index: Option<usize>,
+    // Cursor position in the view picker popup
+    pub view_picker_index: usize,
 }
 
 /// State for displaying captured command output in a scrollable popup.
@@ -100,6 +106,7 @@ pub enum InputMode {
     Confirm,
     ActionMenu,
     CommandOutput,
+    ViewPicker,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -162,7 +169,16 @@ impl AppState {
             action_menu_index: 0,
             snoozed_ids: HashMap::new(),
             command_output: None,
+            views: Vec::new(),
+            active_view_index: None,
+            view_picker_index: 0,
         }
+    }
+
+    pub fn active_view_name(&self) -> Option<&str> {
+        self.active_view_index
+            .and_then(|i| self.views.get(i))
+            .map(|v| v.name.as_str())
     }
 
     pub fn toggle_pin(&mut self, notification: Notification) -> bool {
@@ -202,6 +218,11 @@ impl AppState {
 
     pub fn set_filter(&mut self, filter: Option<Filter>) {
         self.filter = filter;
+        self.apply_filter();
+    }
+
+    /// Re-run the current filter without changing it (e.g. after author enrichment).
+    pub fn reapply_filter(&mut self) {
         self.apply_filter();
     }
 

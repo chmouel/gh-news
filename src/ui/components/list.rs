@@ -36,14 +36,30 @@ impl ListWidget {
                 .filter(|item| matches!(item, crate::state::TreeItem::RepositoryHeader(_)))
                 .count();
 
+            let colors = TokyoNight::colors();
+            let (empty_title, empty_title_fg, empty_border) =
+                if let Some(view_name) = app_state.active_view_name() {
+                    (
+                        format!(" 󰎟 {view_name} "),
+                        colors.cyan,
+                        Style::default().fg(colors.cyan),
+                    )
+                } else {
+                    (
+                        " 󰨞1 Notifications ".to_string(),
+                        self.theme.highlight_fg,
+                        self.theme.border,
+                    )
+                };
+
             let paragraph = Paragraph::new(empty_text)
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
                         .title(
-                            Line::from(" 󰨞1 Notifications ").left_aligned().style(
+                            Line::from(empty_title).left_aligned().style(
                                 Style::default()
-                                    .fg(self.theme.highlight_fg)
+                                    .fg(empty_title_fg)
                                     .add_modifier(Modifier::BOLD),
                             ),
                         )
@@ -59,7 +75,7 @@ impl ListWidget {
                                     .add_modifier(Modifier::BOLD),
                             ),
                         )
-                        .border_style(self.theme.border)
+                        .border_style(empty_border)
                         .border_type(ratatui::widgets::BorderType::Rounded)
                         .padding(ratatui::widgets::Padding::new(1, 1, 1, 1)),
                 )
@@ -357,21 +373,34 @@ impl ListWidget {
             );
         }
 
+        let (left_title_text, left_title_fg, border_style) =
+            if let Some(view_name) = app_state.active_view_name() {
+                (
+                    format!(" 󰎟 {view_name} "),
+                    colors.cyan,
+                    Style::default().fg(colors.cyan),
+                )
+            } else {
+                (
+                    " 󰎟 Notifications ".to_string(),
+                    self.theme.highlight_fg,
+                    self.theme.border,
+                )
+            };
+
         let list = List::new(items)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .title(
-                        Line::from(" 󰎟 Notifications ".to_string())
-                            .left_aligned()
-                            .style(
-                                Style::default()
-                                    .fg(self.theme.highlight_fg)
-                                    .add_modifier(Modifier::BOLD),
-                            ),
+                        Line::from(left_title_text).left_aligned().style(
+                            Style::default()
+                                .fg(left_title_fg)
+                                .add_modifier(Modifier::BOLD),
+                        ),
                     )
                     .title(Line::from(title_spans).right_aligned())
-                    .border_style(self.theme.border)
+                    .border_style(border_style)
                     .border_type(ratatui::widgets::BorderType::Rounded)
                     .padding(ratatui::widgets::Padding::new(1, 1, 1, 1)),
             )

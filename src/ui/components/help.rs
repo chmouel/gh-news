@@ -195,6 +195,10 @@ impl HelpWidget {
                         key: "M",
                         desc: "Toggle auto-mark-read (persisted)",
                     },
+                    HelpLine {
+                        key: "V",
+                        desc: "Switch named view (filter preset)",
+                    },
                 ],
             },
             HelpSection {
