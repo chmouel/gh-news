@@ -181,7 +181,7 @@ cache_file = ""              # custom cache path (default: ~/.cache/gh-news/noti
 
 # External commands
 browser_command = ""         # custom browser, e.g. "firefox" (uses system default if empty)
-open_method = "builtin"      # how `o`/Enter delivers URLs: "builtin" (browser), "osc" (OSC 52 clipboard), "print" (status bar)
+open_method = "builtin"      # how `o`/Enter delivers URLs: "builtin" (browser), "osc" (OSC 52 clipboard), "print" (suspend UI, print to stdout)
 
 # Notification hooks
 on_new_notification_command = ""  # command to run when new notifications appear

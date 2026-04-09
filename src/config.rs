@@ -14,7 +14,7 @@ pub enum OpenMethod {
     Builtin,
     /// Copy URL to the system clipboard via OSC 52 escape sequence (works over SSH).
     Osc,
-    /// Display the URL in the status bar so the user can copy it manually.
+    /// Suspend the TUI and print the URL to stdout so the user can copy it manually.
     Print,
 }
 
