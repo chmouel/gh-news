@@ -437,6 +437,16 @@ impl App {
         webbrowser::open(url).map_err(std::io::Error::other)
     }
 
+    /// Returns the user-facing verb for the current `open_method`.
+    fn open_method_verb(&self) -> &'static str {
+        use crate::config::OpenMethod;
+        match self.config.open_method {
+            OpenMethod::Builtin => "Opened",
+            OpenMethod::Osc => "Copied",
+            OpenMethod::Print => "Printed",
+        }
+    }
+
     /// Deliver a URL according to the configured `open_method`.
     fn deliver_url(&mut self, url: &str) {
         use crate::config::OpenMethod;
@@ -1216,9 +1226,8 @@ impl App {
                 for url in &urls {
                     println!("{url}");
                 }
-                println!("\nPress any key to return...");
-                // Wait for a single keypress (raw mode is off after suspend)
-                let _ = std::io::Read::read(&mut std::io::stdin(), &mut [0u8]);
+                println!("\nPress Enter to return...");
+                let _ = std::io::stdin().read_line(&mut String::new());
 
                 terminal.resume()?;
             }
@@ -1671,7 +1680,10 @@ impl App {
                         .notifications
                         .iter()
                         .find(|n| &n.id == id)
-                        .and_then(|n| n.web_url(&self.config.github_host))
+                        .and_then(|n| {
+                            self.discussion_url_from_preview(n)
+                                .or_else(|| n.web_url(&self.config.github_host))
+                        })
                 })
                 .collect()
         } else if let Some(notification) = self.state.selected_notification() {
@@ -2312,7 +2324,10 @@ impl App {
                                 .notifications
                                 .iter()
                                 .find(|n| &n.id == id)
-                                .and_then(|n| n.web_url(&self.config.github_host))
+                                .and_then(|n| {
+                                    self.discussion_url_from_preview(n)
+                                        .or_else(|| n.web_url(&self.config.github_host))
+                                })
                         })
                         .collect();
                     let opened_count = urls.len();
@@ -2342,15 +2357,17 @@ impl App {
                     }
 
                     self.state.clear_selection();
+                    let verb = self.open_method_verb();
                     self.state.status_message = if self.auto_mark_on_open {
                         Some(format!(
-                            "Opened {} notification{}, marked {} as read",
+                            "{} {} notification{}, marked {} as read",
+                            verb,
                             opened_count,
                             if opened_count == 1 { "" } else { "s" },
                             marked_count
                         ))
                     } else {
-                        Some(format!("Opened {} notifications", opened_count))
+                        Some(format!("{} {} notifications", verb, opened_count))
                     };
                 } else if let Some(org_name) = self.state.selected_org() {
                     let org_name = org_name.to_string();
@@ -2391,7 +2408,10 @@ impl App {
                                 .notifications
                                 .iter()
                                 .find(|n| &n.id == id)
-                                .and_then(|n| n.web_url(&self.config.github_host))
+                                .and_then(|n| {
+                                    self.discussion_url_from_preview(n)
+                                        .or_else(|| n.web_url(&self.config.github_host))
+                                })
                         })
                         .collect();
                     let count = urls.len();
@@ -2399,7 +2419,8 @@ impl App {
                         self.deliver_url(url);
                     }
                     self.state.clear_selection();
-                    self.state.status_message = Some(format!("Opened {} notifications", count));
+                    let verb = self.open_method_verb();
+                    self.state.status_message = Some(format!("{} {} notifications", verb, count));
                 } else if let Some(notification) = self.state.selected_notification().cloned() {
                     self.open_notification_url(&notification);
                 }
