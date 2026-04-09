@@ -1027,6 +1027,13 @@ impl App {
         self.auto_fetch_preview_for_selected();
     }
 
+    fn is_preview_showing_loading_placeholder(&self) -> bool {
+        matches!(
+            &self.state.preview_content,
+            Some(PreviewData::Generic { title, .. }) if title == "Loading details..."
+        )
+    }
+
     /// Prefetch the notification immediately before and after the current selection.
     ///
     /// Runs regardless of whether the preview pane is currently visible so that opening
@@ -1193,6 +1200,12 @@ impl App {
                         }
                     }
                 }
+            }
+
+            // Safety net: if the preview is stuck on the loading placeholder,
+            // re-check cache status for the currently selected notification.
+            if self.is_preview_showing_loading_placeholder() {
+                self.fetch_preview_for_selected_notification();
             }
 
             // Process pending auto-mark-read (debounced)

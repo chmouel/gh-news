@@ -129,6 +129,9 @@ fn preview_worker_thread(
             let cache_lock = cache.lock();
             if cache_lock.contains_key(&request.notification_id) {
                 loading.lock().remove(&request.notification_id);
+                let _ = tx.send(FetchResult {
+                    notification_id: request.notification_id,
+                });
                 continue;
             }
         }
@@ -141,6 +144,9 @@ fn preview_worker_thread(
             .unwrap_or(0);
         if current_gen != request.generation {
             loading.lock().remove(&request.notification_id);
+            let _ = tx.send(FetchResult {
+                notification_id: request.notification_id,
+            });
             continue;
         }
 
@@ -155,6 +161,9 @@ fn preview_worker_thread(
             .unwrap_or(0);
         if current_gen != request.generation {
             loading.lock().remove(&request.notification_id);
+            let _ = tx.send(FetchResult {
+                notification_id: request.notification_id,
+            });
             continue;
         }
 
