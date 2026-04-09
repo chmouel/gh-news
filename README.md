@@ -218,6 +218,22 @@ config to switch:
 | `nord` | Arctic blue-grey |
 | `dracula` | Dark with vivid accents |
 | `gruvbox_dark` | Retro warm colours |
+| `dracula_light` | Dracula light variant |
+| `narna` | Balanced dark theme with blue accents |
+| `clean_light` | Optimized for light terminal backgrounds |
+| `rose_pine_dawn` | Rosé Pine Dawn (Light) |
+| `one_light` | Atom One Light |
+| `everforest_light` | Everforest Light (Medium) |
+| `everforest_dark` | Everforest Dark (Medium) |
+| `one_dark` | One Dark |
+| `rose_pine` | Rosé Pine (Dark) |
+| `ayu_mirage` | Ayu Mirage |
+| `modern` | Sleek, modern dark theme with vibrant accents |
+| `kanagawa` | Kanagawa (Wave) |
+| `solarized_dark` | Solarized dark |
+| `solarized_light` | Solarized light |
+| `gruvbox_light` | Gruvbox light |
+| `monokai` | Monokai |
 
 ```toml
 theme = "catppuccin_mocha"
