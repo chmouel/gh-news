@@ -2367,7 +2367,12 @@ impl App {
                             marked_count
                         ))
                     } else {
-                        Some(format!("{} {} notifications", verb, opened_count))
+                        Some(format!(
+                            "{} {} notification{}",
+                            verb,
+                            opened_count,
+                            if opened_count == 1 { "" } else { "s" }
+                        ))
                     };
                 } else if let Some(org_name) = self.state.selected_org() {
                     let org_name = org_name.to_string();
@@ -2420,7 +2425,12 @@ impl App {
                     }
                     self.state.clear_selection();
                     let verb = self.open_method_verb();
-                    self.state.status_message = Some(format!("{} {} notifications", verb, count));
+                    self.state.status_message = Some(format!(
+                        "{} {} notification{}",
+                        verb,
+                        count,
+                        if count == 1 { "" } else { "s" }
+                    ));
                 } else if let Some(notification) = self.state.selected_notification().cloned() {
                     self.open_notification_url(&notification);
                 }
@@ -3401,7 +3411,7 @@ impl App {
 mod tests {
     use super::*;
     use crate::api::GitHubClient;
-    use crate::config::View;
+    use crate::config::{OpenMethod, View};
     use crate::models::{Notification, NotificationType, Owner, Repository, Subject};
 
     fn test_notification(id: &str, unread: bool) -> Notification {
@@ -3664,6 +3674,47 @@ mod tests {
         assert_eq!(
             app.state.loading_message,
             "Marking filtered notifications as read"
+        );
+    }
+
+    #[test]
+    fn open_selection_prints_pluralised_status_for_print_method() {
+        let mut config = Config::default();
+        config.open_method = OpenMethod::Print;
+        let mut app = App::new(config);
+        app.state.set_notifications(vec![
+            test_notification("1", true),
+            test_notification("2", true),
+        ]);
+        app.state.toggle_selection("1".to_string());
+        app.state.toggle_selection("2".to_string());
+
+        app.handle_normal_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE))
+            .unwrap();
+
+        assert_eq!(
+            app.state.status_message.as_deref(),
+            Some("Printed 2 notifications")
+        );
+        assert_eq!(app.pending_print_urls.len(), 2);
+    }
+
+    #[test]
+    fn enter_selection_pluralises_without_auto_mark_on_open() {
+        let mut config = Config::default();
+        config.open_method = OpenMethod::Print;
+        config.auto_mark_on_open = false;
+        let mut app = App::new(config);
+        app.state
+            .set_notifications(vec![test_notification("1", true)]);
+        app.state.toggle_selection("1".to_string());
+
+        app.handle_normal_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+
+        assert_eq!(
+            app.state.status_message.as_deref(),
+            Some("Printed 1 notification")
         );
     }
 }
