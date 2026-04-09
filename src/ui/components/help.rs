@@ -147,7 +147,7 @@ impl HelpWidget {
                     },
                     HelpLine {
                         key: "Ctrl+A",
-                        desc: "Archive selected (or mark all read)",
+                        desc: "Act on selection, or on filtered list",
                     },
                     HelpLine {
                         key: "Ctrl+R",

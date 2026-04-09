@@ -1985,9 +1985,11 @@ impl App {
         match action {
             ConfirmAction::MarkAllRead { selected } => {
                 // Queue the blocking action to be handled by the main loop with progress
-                let msg = match selected {
-                    MarkAllOption::MarkReadAndArchive => "Archiving notifications",
-                    MarkAllOption::MarkReadOnly => "Marking notifications as read",
+                let msg = match (selected, self.state.filter.is_some()) {
+                    (MarkAllOption::MarkReadAndArchive, true) => "Archiving filtered notifications",
+                    (MarkAllOption::MarkReadAndArchive, false) => "Archiving notifications",
+                    (MarkAllOption::MarkReadOnly, true) => "Marking filtered notifications as read",
+                    (MarkAllOption::MarkReadOnly, false) => "Marking notifications as read",
                 };
                 self.queue_blocking_action(BlockingAction::MarkAllRead { selected }, msg);
             }
@@ -3454,6 +3456,30 @@ mod tests {
         )]);
 
         assert!(app.author_enrichment_rx.is_some());
+    }
+
+    #[test]
+    fn mark_all_confirm_message_mentions_filtered_notifications() {
+        let mut app = App::new(Config::default());
+        app.base_filter = Some(Filter::from_pattern(Some("Alpha")).unwrap());
+        app.base_filter_pattern = Some("Alpha".to_string());
+        app.state.set_notifications(vec![
+            notification_with("1", "Alpha", "mention", None),
+            notification_with("2", "Beta", "mention", None),
+        ]);
+        app.state.set_filter(app.base_filter.clone());
+        app.state
+            .set_filter_pattern(app.base_filter_pattern.clone());
+
+        app.execute_confirmed_action(ConfirmAction::MarkAllRead {
+            selected: MarkAllOption::MarkReadOnly,
+        })
+        .unwrap();
+
+        assert_eq!(
+            app.state.loading_message,
+            "Marking filtered notifications as read"
+        );
     }
 }
 

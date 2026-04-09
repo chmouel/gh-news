@@ -11,6 +11,21 @@ impl ConfirmWidget {
         Self
     }
 
+    fn title_text(action: &ConfirmAction, count: usize, is_filtered: bool) -> String {
+        match action {
+            ConfirmAction::ArchiveSelected { count, .. } => {
+                format!(" Archive {} Selected Notifications ", count)
+            }
+            ConfirmAction::MarkAllRead { .. } => {
+                if is_filtered {
+                    format!(" Mark {} Filtered Notifications ", count)
+                } else {
+                    format!(" Mark {} Notifications ", count)
+                }
+            }
+        }
+    }
+
     pub fn render(
         &self,
         frame: &mut Frame,
@@ -96,18 +111,7 @@ impl ConfirmWidget {
         ];
 
         // Build title based on action type, count, and filter state
-        let title_text = match action {
-            ConfirmAction::ArchiveSelected { count, .. } => {
-                format!(" Archive {} Selected Notifications ", count)
-            }
-            ConfirmAction::MarkAllRead { .. } => {
-                if is_filtered {
-                    format!(" Mark {} Filtered Notifications ", count)
-                } else {
-                    format!(" Mark {} Notifications ", count)
-                }
-            }
-        };
+        let title_text = Self::title_text(action, count, is_filtered);
 
         // Use magenta for selected action, yellow for mark all
         let border_color = if is_selected_action {
@@ -137,5 +141,35 @@ impl ConfirmWidget {
             .alignment(Alignment::Left);
 
         frame.render_widget(paragraph, centered_area);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn title_mentions_filtered_notifications_for_mark_all() {
+        let title = ConfirmWidget::title_text(
+            &ConfirmAction::MarkAllRead {
+                selected: MarkAllOption::MarkReadOnly,
+            },
+            23,
+            true,
+        );
+        assert_eq!(title, " Mark 23 Filtered Notifications ");
+    }
+
+    #[test]
+    fn title_mentions_selected_notifications_for_manual_selection() {
+        let title = ConfirmWidget::title_text(
+            &ConfirmAction::ArchiveSelected {
+                count: 4,
+                option: MarkAllOption::MarkReadAndArchive,
+            },
+            4,
+            true,
+        );
+        assert_eq!(title, " Archive 4 Selected Notifications ");
     }
 }

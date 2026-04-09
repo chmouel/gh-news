@@ -111,7 +111,7 @@ gh news --static-display | grep "something" # List notifications without TUI
 - `o` - Open all selected without marking as read
 - `.` - Mark all selected as read
 - `d` - Archive all selected
-- `Ctrl+A` - Archive selected (or all if none selected)
+- `Ctrl+A` - Act on selected notifications, or on the current filtered list if none are selected
 - `Ctrl+Alt+A` - Toggle select all notifications in current repository
 
 ### View & Filter
@@ -259,6 +259,8 @@ Snoozed notifications are hidden from the default view and stored locally. They 
 
 All built-in actions support multi-select: select notifications with `Space`, then press `x` and choose an action to apply it to all selected notifications.
 
+Without a manual selection, bulk actions such as `Ctrl+A` apply to the current filtered list, including any active named view and `/` search.
+
 ### Custom Actions
 
 Define custom actions that can be run on notifications via the action menu (press `x`):
@@ -393,6 +395,8 @@ filter = "dependabot"
 User-defined views appear after the built-in views in the picker. Press `V` to open the picker, navigate with `j`/`k` or press the item number, and `Esc` to close without changing. Selecting `0. Default` clears the active view and restores the session's base filter, including any CLI `--filter` supplied at launch.
 
 The `/` search filter works within the active view — pressing `Esc` in search mode returns to the view filter rather than clearing it entirely.
+
+Bulk actions without a manual selection also follow the current view/search filter, so `Ctrl+A` acts on the visible filtered result set rather than the whole inbox.
 
 ## Environment Variables
 
