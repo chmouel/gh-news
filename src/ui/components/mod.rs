@@ -8,4 +8,5 @@ pub mod list;
 pub mod loading;
 pub mod preview;
 pub mod status;
+pub mod url_menu;
 pub mod view_picker;

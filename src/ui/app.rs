@@ -16,7 +16,7 @@ use crate::state_file::AppStateFile;
 use crate::terminal::Terminal;
 use crate::ui::components::{
     action_menu, command_output, confirm, filter, help, help_search, list, loading, preview,
-    status, view_picker,
+    status, url_menu, view_picker,
 };
 use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
@@ -81,6 +81,16 @@ fn filter_dismissed_synthetic(notifications: &mut Vec<Notification>) {
     }
 }
 
+/// Copy text to the system clipboard via the OSC 52 terminal escape sequence.
+fn osc52_copy(text: &str) {
+    use base64::Engine;
+    use std::io::Write;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(text);
+    let mut stdout = std::io::stdout();
+    let _ = stdout.write_all(format!("\x1b]52;c;{}\x07", encoded).as_bytes());
+    let _ = stdout.flush();
+}
+
 pub struct App {
     state: AppState,
     config: Config,
@@ -96,6 +106,7 @@ pub struct App {
     loading_widget: loading::LoadingWidget,
     filter_widget: filter::FilterWidget,
     action_menu_widget: action_menu::ActionMenuWidget,
+    url_menu_widget: url_menu::UrlMenuWidget,
     command_output_widget: command_output::CommandOutputWidget,
     view_picker_widget: view_picker::ViewPickerWidget,
     api_client: Option<crate::api::GitHubClient>,
@@ -107,6 +118,7 @@ pub struct App {
     pending_state_settings: Option<PendingStateSettings>,
     pending_blocking_action: Option<BlockingAction>,
     pending_interactive_action: Option<PendingInteractiveAction>,
+    pending_print_urls: Vec<String>,
     // Auto-mark-read state
     auto_mark_read_enabled: bool,
     auto_archive_enabled: bool,
@@ -143,6 +155,7 @@ impl App {
             loading_widget: loading::LoadingWidget::new(),
             filter_widget: filter::FilterWidget::new(),
             action_menu_widget: action_menu::ActionMenuWidget::new(),
+            url_menu_widget: url_menu::UrlMenuWidget::new(),
             command_output_widget: command_output::CommandOutputWidget::new(),
             view_picker_widget: view_picker::ViewPickerWidget::new(),
             api_client: None,
@@ -154,6 +167,7 @@ impl App {
             pending_state_settings: None,
             pending_blocking_action: None,
             pending_interactive_action: None,
+            pending_print_urls: Vec::new(),
             auto_mark_read_enabled: auto_mark_read,
             auto_archive_enabled: false,
             auto_mark_on_open,
@@ -411,7 +425,7 @@ impl App {
     }
 
     /// Open a URL in the browser using custom command if configured, otherwise system default.
-    fn open_url(&self, url: &str) -> std::io::Result<()> {
+    fn open_url_in_browser(&self, url: &str) -> std::io::Result<()> {
         if let Some(ref browser_cmd) = self.config.browser_command {
             if !browser_cmd.is_empty() {
                 return std::process::Command::new(browser_cmd)
@@ -423,18 +437,35 @@ impl App {
         webbrowser::open(url).map_err(std::io::Error::other)
     }
 
-    /// Open notification URL in browser, handling errors with user-friendly messages.
+    /// Deliver a URL according to the configured `open_method`.
+    fn deliver_url(&mut self, url: &str) {
+        use crate::config::OpenMethod;
+        match self.config.open_method {
+            OpenMethod::Builtin => {
+                if let Err(e) = self.open_url_in_browser(url) {
+                    eprintln!("Failed to open URL {}: {}", url, e);
+                }
+            }
+            OpenMethod::Osc => {
+                osc52_copy(url);
+                self.state.status_message = Some("Copied URL to clipboard".to_string());
+            }
+            OpenMethod::Print => {
+                self.pending_print_urls.push(url.to_string());
+            }
+        }
+    }
+
+    /// Open notification URL using the configured method.
     /// For Discussion notifications, prefer the URL from the cached preview data
     /// (fetched via GraphQL) since `web_url()` may not resolve optimally.
-    fn open_notification_url(&self, notification: &Notification) {
+    fn open_notification_url(&mut self, notification: &Notification) {
         let url = self
             .discussion_url_from_preview(notification)
             .or_else(|| notification.web_url(&self.config.github_host));
 
         if let Some(url) = url {
-            if let Err(e) = self.open_url(&url) {
-                eprintln!("Failed to open URL {}: {}", url, e);
-            }
+            self.deliver_url(&url);
         } else {
             eprintln!("No URL available for this notification");
         }
@@ -1177,6 +1208,21 @@ impl App {
                 });
             }
 
+            // Handle pending print URLs (suspend TUI, print, wait for keypress)
+            if !self.pending_print_urls.is_empty() {
+                let urls = std::mem::take(&mut self.pending_print_urls);
+                terminal.suspend()?;
+
+                for url in &urls {
+                    println!("{url}");
+                }
+                println!("\nPress any key to return...");
+                // Wait for a single keypress (raw mode is off after suspend)
+                let _ = std::io::Read::read(&mut std::io::stdin(), &mut [0u8]);
+
+                terminal.resume()?;
+            }
+
             // Check for auto-refresh signal (non-blocking background fetch)
             if self.config.auto_refresh_interval > 0
                 && !self.state.loading
@@ -1462,6 +1508,12 @@ impl App {
             );
         }
 
+        // Render URL menu as overlay (if active)
+        if self.state.input_mode == InputMode::UrlMenu {
+            self.url_menu_widget
+                .render(frame, size, self.state.url_menu_index);
+        }
+
         // Render command output popup as overlay (if active)
         if self.state.input_mode == InputMode::CommandOutput {
             if let Some(ref out) = self.state.command_output {
@@ -1489,6 +1541,7 @@ impl App {
             InputMode::HelpSearch => self.handle_help_search_key(key),
             InputMode::Confirm => self.handle_confirm_key(key),
             InputMode::ActionMenu => self.handle_action_menu_key(key),
+            InputMode::UrlMenu => self.handle_url_menu_key(key),
             InputMode::CommandOutput => self.handle_command_output_key(key),
             InputMode::ViewPicker => self.handle_view_picker_key(key),
         }
@@ -1573,6 +1626,93 @@ impl App {
             _ => {}
         }
         Ok(())
+    }
+
+    fn handle_url_menu_key(&mut self, key: KeyEvent) -> Result<()> {
+        let item_count = url_menu::URL_MENU_ITEMS.len();
+        match key.code {
+            KeyCode::Esc => {
+                self.state.input_mode = InputMode::Normal;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.state.url_menu_index > 0 {
+                    self.state.url_menu_index -= 1;
+                }
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.state.url_menu_index < item_count - 1 {
+                    self.state.url_menu_index += 1;
+                }
+            }
+            KeyCode::Enter => {
+                self.execute_url_menu_action(self.state.url_menu_index);
+                self.state.input_mode = InputMode::Normal;
+            }
+            KeyCode::Char(c @ '1'..='3') => {
+                let index = (c as usize) - ('1' as usize);
+                if index < item_count {
+                    self.execute_url_menu_action(index);
+                    self.state.input_mode = InputMode::Normal;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn execute_url_menu_action(&mut self, index: usize) {
+        // Collect URLs first to avoid borrow issues
+        let urls: Vec<String> = if self.state.has_selection() {
+            let selected_ids = self.state.get_selected_notification_ids();
+            selected_ids
+                .iter()
+                .filter_map(|id| {
+                    self.state
+                        .notifications
+                        .iter()
+                        .find(|n| &n.id == id)
+                        .and_then(|n| n.web_url(&self.config.github_host))
+                })
+                .collect()
+        } else if let Some(notification) = self.state.selected_notification() {
+            self.discussion_url_from_preview(notification)
+                .or_else(|| notification.web_url(&self.config.github_host))
+                .into_iter()
+                .collect()
+        } else {
+            return;
+        };
+
+        if urls.is_empty() {
+            return;
+        }
+
+        match index {
+            0 => {
+                // Open in browser
+                for url in &urls {
+                    if let Err(e) = self.open_url_in_browser(url) {
+                        eprintln!("Failed to open URL {}: {}", url, e);
+                    }
+                }
+            }
+            1 => {
+                // Copy via OSC 52
+                for url in &urls {
+                    osc52_copy(url);
+                }
+                self.state.status_message = Some("Copied URL to clipboard".to_string());
+            }
+            2 => {
+                // Print URL
+                self.pending_print_urls.extend(urls);
+            }
+            _ => {}
+        }
+
+        if self.state.has_selection() {
+            self.state.clear_selection();
+        }
     }
 
     fn handle_view_picker_key(&mut self, key: KeyEvent) -> Result<()> {
@@ -2163,29 +2303,35 @@ impl App {
                 if self.state.has_selection() {
                     // Open all selected notifications and mark as read
                     let selected_ids = self.state.get_selected_notification_ids();
-                    let mut opened_count = 0;
                     let mut marked_count = 0;
 
+                    let urls: Vec<String> = selected_ids
+                        .iter()
+                        .filter_map(|id| {
+                            self.state
+                                .notifications
+                                .iter()
+                                .find(|n| &n.id == id)
+                                .and_then(|n| n.web_url(&self.config.github_host))
+                        })
+                        .collect();
+                    let opened_count = urls.len();
+                    for url in &urls {
+                        self.deliver_url(url);
+                    }
+
                     for notification_id in &selected_ids {
-                        // Find the notification by ID
-                        if let Some(notif) = self
-                            .state
-                            .notifications
-                            .iter()
-                            .find(|n| &n.id == notification_id)
-                        {
-                            if let Some(url) = notif.web_url(&self.config.github_host) {
-                                if self.open_url(&url).is_ok() {
-                                    opened_count += 1;
+                        if self.auto_mark_on_open {
+                            if let Some(notif) = self
+                                .state
+                                .notifications
+                                .iter()
+                                .find(|n| &n.id == notification_id)
+                            {
+                                if notif.is_unread() {
+                                    marked_count += 1;
                                 }
                             }
-
-                            if self.auto_mark_on_open && notif.is_unread() {
-                                marked_count += 1;
-                            }
-                        }
-
-                        if self.auto_mark_on_open {
                             self.state.mark_notification_read(notification_id);
                             if !is_synthetic_id(notification_id) {
                                 if let Some(ref client) = self.api_client {
@@ -2213,9 +2359,9 @@ impl App {
                     // If selected item is a repository header, toggle expansion
                     let repo_name = repo_name.to_string();
                     self.state.toggle_repo_expansion(&repo_name);
-                } else if let Some(notification) = self.state.selected_notification() {
-                    // Open the notification URL in the browser
-                    self.open_notification_url(notification);
+                } else if let Some(notification) = self.state.selected_notification().cloned() {
+                    // Open the notification URL
+                    self.open_notification_url(&notification);
 
                     // Mark notification as read if it's unread and auto_mark_on_open is enabled
                     if self.auto_mark_on_open && notification.is_unread() {
@@ -2237,31 +2383,31 @@ impl App {
             }
             KeyCode::Char('o') => {
                 if self.state.has_selection() {
-                    // Open all selected notifications without marking as read
                     let selected_ids = self.state.get_selected_notification_ids();
-                    let mut opened_count = 0;
-
-                    for notification_id in &selected_ids {
-                        if let Some(notif) = self
-                            .state
-                            .notifications
-                            .iter()
-                            .find(|n| &n.id == notification_id)
-                        {
-                            if let Some(url) = notif.web_url(&self.config.github_host) {
-                                if self.open_url(&url).is_ok() {
-                                    opened_count += 1;
-                                }
-                            }
-                        }
+                    let urls: Vec<String> = selected_ids
+                        .iter()
+                        .filter_map(|id| {
+                            self.state
+                                .notifications
+                                .iter()
+                                .find(|n| &n.id == id)
+                                .and_then(|n| n.web_url(&self.config.github_host))
+                        })
+                        .collect();
+                    let count = urls.len();
+                    for url in &urls {
+                        self.deliver_url(url);
                     }
-
                     self.state.clear_selection();
-                    self.state.status_message =
-                        Some(format!("Opened {} notifications", opened_count));
-                } else if let Some(notification) = self.state.selected_notification() {
-                    // Open notification URL without marking as read
-                    self.open_notification_url(notification);
+                    self.state.status_message = Some(format!("Opened {} notifications", count));
+                } else if let Some(notification) = self.state.selected_notification().cloned() {
+                    self.open_notification_url(&notification);
+                }
+            }
+            KeyCode::Char('O') => {
+                if self.state.has_selection() || self.state.selected_notification().is_some() {
+                    self.state.url_menu_index = 0;
+                    self.state.input_mode = InputMode::UrlMenu;
                 }
             }
             KeyCode::Char(' ') => {

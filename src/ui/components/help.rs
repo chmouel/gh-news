@@ -115,11 +115,15 @@ impl HelpWidget {
                 lines: vec![
                     HelpLine {
                         key: "Enter",
-                        desc: "Open in browser (or all selected, toggle repo header)",
+                        desc: "Open URL (or all selected, toggle repo header)",
                     },
                     HelpLine {
                         key: "o",
-                        desc: "Open without marking read",
+                        desc: "Open URL without marking read",
+                    },
+                    HelpLine {
+                        key: "O",
+                        desc: "URL menu (open, copy, print)",
                     },
                     HelpLine {
                         key: ".",
