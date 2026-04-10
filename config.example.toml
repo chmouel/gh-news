@@ -288,6 +288,16 @@ github_host = "github.com"
 # Default: [] (all events)
 # event_types = ["WatchEvent", "ForkEvent", "ReleaseEvent"]
 
+# ─── Repository Event Watching ──────────────────────────────────────────
+# Watch specific repositories for all events via the Repository Events API.
+# Unlike enable_events (which shows your personal activity feed), this fetches
+# every event that occurs on the specified repositories.
+# Supports glob patterns (e.g., "org/*") expanded via the GitHub API.
+# The event_types filter above also applies to watched repos.
+#
+# Default: [] (disabled)
+# watch_repos = ["torvalds/linux", "rust-lang/rust", "my-org/*"]
+
 # ==============================================================================
 # CUSTOM ACTIONS
 # ==============================================================================
