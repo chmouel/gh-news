@@ -68,6 +68,25 @@ pub fn fetch_extra_sources(
         }
     }
 
+    if !config.watch_repos.is_empty() {
+        let repos = expand_repo_globs(client, &config.watch_repos);
+        if let Ok(events) =
+            crate::events::fetch_watch_repo_events(client, &repos, &config.event_types)
+        {
+            extra.extend(events);
+        }
+    }
+
+    // Deduplicate events that appear in both received_events and repo events.
+    let mut seen_event_ids = std::collections::HashSet::new();
+    extra.retain(|n| {
+        let raw_id =
+            n.id.strip_prefix("event-")
+                .or_else(|| n.id.strip_prefix("repo-event-"))
+                .unwrap_or(&n.id);
+        seen_event_ids.insert(raw_id.to_string())
+    });
+
     extra
 }
 

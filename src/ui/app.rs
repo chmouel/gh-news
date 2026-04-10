@@ -69,7 +69,7 @@ const AUTO_MARK_READ_DWELL_MS: u64 = 400;
 /// Synthetic notification IDs (from Actions/Events) that have no real
 /// GitHub thread and must not be marked read, toggled, or archived.
 fn is_synthetic_id(id: &str) -> bool {
-    id.starts_with("actions-") || id.starts_with("event-")
+    id.starts_with("actions-") || id.starts_with("event-") || id.starts_with("repo-event-")
 }
 
 /// Remove previously dismissed synthetic notifications from a list.
@@ -232,9 +232,7 @@ impl App {
                 self.state.mark_notification_read(notification_id);
 
                 if is_synthetic_id(notification_id) {
-                    if self.auto_archive_enabled {
-                        let _ = AppStateFile::dismiss_synthetic_id(notification_id);
-                    }
+                    let _ = AppStateFile::dismiss_synthetic_id(notification_id);
                 } else if let Some(ref client) = self.api_client {
                     if self.auto_archive_enabled {
                         if let Err(e) = client.mark_thread_done(notification_id) {
@@ -2469,10 +2467,10 @@ impl App {
                                 }
                             }
                             self.state.mark_notification_read(notification_id);
-                            if !is_synthetic_id(notification_id) {
-                                if let Some(ref client) = self.api_client {
-                                    let _ = client.mark_notification_read(notification_id);
-                                }
+                            if is_synthetic_id(notification_id) {
+                                let _ = AppStateFile::dismiss_synthetic_id(notification_id);
+                            } else if let Some(ref client) = self.api_client {
+                                let _ = client.mark_notification_read(notification_id);
                             }
                         }
                     }
@@ -2513,12 +2511,12 @@ impl App {
                         // Update local state optimistically (for better UX)
                         self.state.mark_notification_read(&notification_id);
 
-                        // Call API to mark as read (skip synthetic — no real thread)
-                        if !is_synthetic_id(&notification_id) {
-                            if let Some(ref client) = self.api_client {
-                                if let Err(e) = client.mark_notification_read(&notification_id) {
-                                    eprintln!("Failed to mark notification as read: {}", e);
-                                }
+                        // Persist read state
+                        if is_synthetic_id(&notification_id) {
+                            let _ = AppStateFile::dismiss_synthetic_id(&notification_id);
+                        } else if let Some(ref client) = self.api_client {
+                            if let Err(e) = client.mark_notification_read(&notification_id) {
+                                eprintln!("Failed to mark notification as read: {}", e);
                             }
                         }
                     }
@@ -2672,16 +2670,14 @@ impl App {
                             if was_unread && !is_now_unread {
                                 // Went from unread to read
                                 marked_read += 1;
-                                if !is_synthetic_id(notification_id) {
-                                    if let Some(ref client) = self.api_client {
-                                        if let Err(e) =
-                                            client.mark_notification_read(notification_id)
-                                        {
-                                            eprintln!(
-                                                "Failed to mark notification {} as read: {}",
-                                                notification_id, e
-                                            );
-                                        }
+                                if is_synthetic_id(notification_id) {
+                                    let _ = AppStateFile::dismiss_synthetic_id(notification_id);
+                                } else if let Some(ref client) = self.api_client {
+                                    if let Err(e) = client.mark_notification_read(notification_id) {
+                                        eprintln!(
+                                            "Failed to mark notification {} as read: {}",
+                                            notification_id, e
+                                        );
                                     }
                                 }
                             } else if !was_unread && is_now_unread {
@@ -2716,16 +2712,15 @@ impl App {
                     if let Some(is_now_unread) =
                         self.state.toggle_notification_read(&notification_id)
                     {
-                        // If marking as read (was unread, now read), call API (skip synthetic)
+                        // If marking as read (was unread, now read), persist the change
                         if was_unread && !is_now_unread {
-                            if !is_synthetic_id(&notification_id) {
-                                if let Some(ref client) = self.api_client {
-                                    if let Err(e) = client.mark_notification_read(&notification_id)
-                                    {
-                                        eprintln!("Failed to mark notification as read: {}", e);
-                                        // Revert local state on API failure
-                                        self.state.toggle_notification_read(&notification_id);
-                                    }
+                            if is_synthetic_id(&notification_id) {
+                                let _ = AppStateFile::dismiss_synthetic_id(&notification_id);
+                            } else if let Some(ref client) = self.api_client {
+                                if let Err(e) = client.mark_notification_read(&notification_id) {
+                                    eprintln!("Failed to mark notification as read: {}", e);
+                                    // Revert local state on API failure
+                                    self.state.toggle_notification_read(&notification_id);
                                 }
                             }
                             if advance {

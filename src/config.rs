@@ -203,6 +203,11 @@ pub struct Config {
     #[serde(default)]
     pub event_types: Vec<String>,
 
+    // Repository event watching (opt-in)
+    /// Repos to watch for all events (e.g., ["owner/repo", "org/*"]). Empty = disabled.
+    #[serde(default)]
+    pub watch_repos: Vec<String>,
+
     // User-defined actions for notifications
     #[serde(default)]
     pub actions: Vec<Action>,
@@ -250,6 +255,7 @@ impl Default for Config {
             actions_repos: Vec::new(),
             enable_events: false,
             event_types: Vec::new(),
+            watch_repos: Vec::new(),
             actions: Vec::new(),
             views: Vec::new(),
         }

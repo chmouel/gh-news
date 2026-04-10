@@ -27,7 +27,7 @@ pub fn fetch_activity_events(
             continue;
         }
 
-        if let Some(notification) = event_to_notification(event, event_type) {
+        if let Some(notification) = event_to_notification(event, event_type, "event-") {
             notifications.push(notification);
         }
     }
@@ -35,7 +35,11 @@ pub fn fetch_activity_events(
     Ok(notifications)
 }
 
-fn event_to_notification(event: &serde_json::Value, event_type: &str) -> Option<Notification> {
+pub(crate) fn event_to_notification(
+    event: &serde_json::Value,
+    event_type: &str,
+    id_prefix: &str,
+) -> Option<Notification> {
     let event_id = event.get("id").and_then(|v| v.as_str())?;
     let actor = event
         .get("actor")
@@ -57,7 +61,7 @@ fn event_to_notification(event: &serde_json::Value, event_type: &str) -> Option<
     let reason = event_type_to_reason(event_type);
 
     Some(Notification {
-        id: format!("event-{}", event_id),
+        id: format!("{}{}", id_prefix, event_id),
         unread: true,
         last_read_at: None,
         updated_at: created_at,
@@ -83,6 +87,50 @@ fn event_to_notification(event: &serde_json::Value, event_type: &str) -> Option<
         author: None,
         context: None,
     })
+}
+
+/// Fetch events from watched repositories via `GET /repos/{owner}/{repo}/events`.
+///
+/// When `event_types` is non-empty, only matching event types are included.
+pub fn fetch_watch_repo_events(
+    client: &GitHubClient,
+    repos: &[String],
+    event_types: &[String],
+) -> Result<Vec<Notification>> {
+    let mut all_notifications = Vec::new();
+
+    for repo_full in repos {
+        let (owner, repo_name) = match repo_full.split_once('/') {
+            Some(parts) => parts,
+            None => continue,
+        };
+
+        let events = match client.get_repo_events(owner, repo_name, 30) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        let events_array = events.as_array().cloned().unwrap_or_default();
+
+        for event in &events_array {
+            let event_type = event
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown");
+
+            if !event_types.is_empty() && !event_types.iter().any(|t| t == event_type) {
+                continue;
+            }
+
+            if let Some(notification) = event_to_notification(event, event_type, "repo-event-") {
+                all_notifications.push(notification);
+            }
+        }
+    }
+
+    all_notifications.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+
+    Ok(all_notifications)
 }
 
 fn format_event_title(

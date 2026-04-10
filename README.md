@@ -203,6 +203,10 @@ actions_repos = []           # repos to watch (empty = derive from your notifica
 # GitHub Activity Events feed (opt-in)
 enable_events = false        # set to true to show activity events
 event_types = []             # filter event types, e.g. ["WatchEvent", "ForkEvent"] (empty = all)
+
+# Repository event watching (opt-in)
+watch_repos = []             # repos to watch for all events, e.g. ["owner/repo", "org/*"]
+                             # supports glob patterns; event_types filter applies here too
 ```
 
 ### Themes

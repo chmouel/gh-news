@@ -37,6 +37,10 @@ impl NotificationQuery {
     }
 }
 
+fn is_synthetic_thread(id: &str) -> bool {
+    id.starts_with("actions-") || id.starts_with("event-") || id.starts_with("repo-event-")
+}
+
 fn bearer_header_value(token: &str) -> Result<HeaderValue> {
     HeaderValue::from_str(&format!("Bearer {}", token)).map_err(|_| {
         ApiError::HttpStatus {
@@ -188,8 +192,8 @@ impl GitHubClient {
     }
 
     pub fn mark_notification_read(&self, thread_id: &str) -> Result<()> {
-        // Synthetic notifications (actions-*, event-*) have no real thread
-        if thread_id.starts_with("actions-") || thread_id.starts_with("event-") {
+        // Synthetic notifications (actions-*, event-*, repo-event-*) have no real thread
+        if is_synthetic_thread(thread_id) {
             return Ok(());
         }
         let url = format!("{}/notifications/threads/{}", self.api_base, thread_id);
@@ -197,8 +201,8 @@ impl GitHubClient {
     }
 
     pub fn mark_thread_done(&self, thread_id: &str) -> Result<()> {
-        // Synthetic notifications (actions-*, event-*) have no real thread
-        if thread_id.starts_with("actions-") || thread_id.starts_with("event-") {
+        // Synthetic notifications (actions-*, event-*, repo-event-*) have no real thread
+        if is_synthetic_thread(thread_id) {
             return Ok(());
         }
         let url = format!("{}/notifications/threads/{}", self.api_base, thread_id);
@@ -316,6 +320,15 @@ impl GitHubClient {
         }
 
         Ok(Vec::new())
+    }
+
+    /// Fetch events for a specific repository.
+    pub fn get_repo_events(&self, owner: &str, repo: &str, per_page: usize) -> Result<Value> {
+        let url = format!(
+            "{}/repos/{}/{}/events?per_page={}",
+            self.api_base, owner, repo, per_page
+        );
+        self.get_json(&url)
     }
 
     /// Fetch received events for a user.
