@@ -32,7 +32,7 @@ pub enum CacheStatus {
 
 #[derive(Debug)]
 struct FetchRequest {
-    notification_id: String,
+    cache_key: String,
     notification: Notification,
     /// Generation token; a completed result is discarded if it no longer matches.
     generation: u64,
@@ -52,7 +52,7 @@ impl PartialEq for FetchRequest {
     fn eq(&self, other: &Self) -> bool {
         self.priority == other.priority
             && self.generation == other.generation
-            && self.notification_id == other.notification_id
+            && self.cache_key == other.cache_key
     }
 }
 
@@ -64,7 +64,7 @@ impl Ord for FetchRequest {
             .priority
             .cmp(&self.priority)
             .then_with(|| other.generation.cmp(&self.generation))
-            .then_with(|| self.notification_id.cmp(&other.notification_id))
+            .then_with(|| self.cache_key.cmp(&other.cache_key))
     }
 }
 
@@ -76,13 +76,13 @@ impl PartialOrd for FetchRequest {
 
 #[derive(Debug)]
 struct FetchResult {
-    notification_id: String,
+    cache_key: String,
 }
 
 pub struct PreviewManager {
     cache: Arc<Mutex<HashMap<String, CachedPreview>>>,
     loading: Arc<Mutex<HashSet<String>>>,
-    /// Per-notification-id generation counter.  Incrementing invalidates in-flight requests.
+    /// Per-preview-cache-key generation counter. Incrementing invalidates in-flight requests.
     generation: Arc<Mutex<HashMap<String, u64>>>,
     tx: Sender<FetchRequest>,
     rx: Receiver<FetchResult>,
@@ -127,10 +127,10 @@ fn preview_worker_thread(
         // Skip fetch if already cached and this is not a forced revalidation.
         if !request.force {
             let cache_lock = cache.lock();
-            if cache_lock.contains_key(&request.notification_id) {
-                loading.lock().remove(&request.notification_id);
+            if cache_lock.contains_key(&request.cache_key) {
+                loading.lock().remove(&request.cache_key);
                 let _ = tx.send(FetchResult {
-                    notification_id: request.notification_id,
+                    cache_key: request.cache_key,
                 });
                 continue;
             }
@@ -139,13 +139,13 @@ fn preview_worker_thread(
         // Pre-flight generation check — skip wasted work before the HTTP call.
         let current_gen = generation
             .lock()
-            .get(&request.notification_id)
+            .get(&request.cache_key)
             .copied()
             .unwrap_or(0);
         if current_gen != request.generation {
-            loading.lock().remove(&request.notification_id);
+            loading.lock().remove(&request.cache_key);
             let _ = tx.send(FetchResult {
-                notification_id: request.notification_id,
+                cache_key: request.cache_key,
             });
             continue;
         }
@@ -156,13 +156,13 @@ fn preview_worker_thread(
         // Post-flight generation check — discard result if superseded while fetching.
         let current_gen = generation
             .lock()
-            .get(&request.notification_id)
+            .get(&request.cache_key)
             .copied()
             .unwrap_or(0);
         if current_gen != request.generation {
-            loading.lock().remove(&request.notification_id);
+            loading.lock().remove(&request.cache_key);
             let _ = tx.send(FetchResult {
-                notification_id: request.notification_id,
+                cache_key: request.cache_key,
             });
             continue;
         }
@@ -176,16 +176,16 @@ fn preview_worker_thread(
             },
         };
         cache.lock().insert(
-            request.notification_id.clone(),
+            request.cache_key.clone(),
             CachedPreview {
                 data,
                 updated_at: notification_updated_at,
             },
         );
 
-        loading.lock().remove(&request.notification_id);
+        loading.lock().remove(&request.cache_key);
         let _ = tx.send(FetchResult {
-            notification_id: request.notification_id,
+            cache_key: request.cache_key,
         });
     }
 }
@@ -224,24 +224,34 @@ impl PreviewManager {
         }
     }
 
-    pub fn get_cached(&self, notification_id: &str) -> Option<PreviewData> {
+    pub fn get_cached(&self, notification: &Notification) -> Option<PreviewData> {
+        let cache_key = notification.preview_cache_key();
         self.cache
             .lock()
-            .get(notification_id)
+            .get(&cache_key)
+            .map(|cached| cached.data.clone())
+    }
+
+    pub fn get_cached_by_key(&self, cache_key: &str) -> Option<PreviewData> {
+        self.cache
+            .lock()
+            .get(cache_key)
             .map(|cached| cached.data.clone())
     }
 
     /// Returns the freshness status of the cached preview for the given notification.
     pub fn get_cached_status(&self, notification: &Notification) -> CacheStatus {
+        let cache_key = notification.preview_cache_key();
         let cache = self.cache.lock();
-        match cache.get(&notification.id) {
+        match cache.get(&cache_key) {
             None => CacheStatus::Miss,
             Some(cached) => {
-                let is_stale = match (notification.updated_at, cached.updated_at) {
-                    (Some(new_ts), Some(old_ts)) => new_ts > old_ts,
-                    (Some(_), None) => true,
-                    _ => false,
-                };
+                let is_stale = notification.preview_is_dynamic()
+                    && match (notification.updated_at, cached.updated_at) {
+                        (Some(new_ts), Some(old_ts)) => new_ts > old_ts,
+                        (Some(_), None) => true,
+                        _ => false,
+                    };
                 if is_stale {
                     CacheStatus::Stale(cached.data.clone())
                 } else {
@@ -251,30 +261,26 @@ impl PreviewManager {
         }
     }
 
-    pub fn is_loading(&self, notification_id: &str) -> bool {
-        self.loading.lock().contains(notification_id)
+    pub fn is_loading(&self, notification: &Notification) -> bool {
+        let cache_key = notification.preview_cache_key();
+        self.loading.lock().contains(&cache_key)
     }
 
     /// Queue a fetch for `notification` at the given priority, skipping if already
     /// cached or in-flight.
     pub fn request_preview(&self, notification: &Notification, priority: u8) {
-        let notification_id = notification.id.clone();
-        if self.cache.lock().contains_key(&notification_id) {
+        let cache_key = notification.preview_cache_key();
+        if self.cache.lock().contains_key(&cache_key) {
             return;
         }
-        if self.loading.lock().contains(&notification_id) {
+        if self.loading.lock().contains(&cache_key) {
             return;
         }
 
-        let gen = self
-            .generation
-            .lock()
-            .get(&notification_id)
-            .copied()
-            .unwrap_or(0);
-        self.loading.lock().insert(notification_id.clone());
+        let gen = self.generation.lock().get(&cache_key).copied().unwrap_or(0);
+        self.loading.lock().insert(cache_key.clone());
         let _ = self.tx.send(FetchRequest {
-            notification_id,
+            cache_key,
             notification: notification.clone(),
             generation: gen,
             force: false,
@@ -288,21 +294,21 @@ impl PreviewManager {
     /// discarded when it completes.  No-op if the id is already loading (the
     /// in-flight request will complete and populate the cache shortly).
     pub fn request_revalidation(&self, notification: &Notification, priority: u8) {
-        let notification_id = notification.id.clone();
-        if self.loading.lock().contains(&notification_id) {
+        let cache_key = notification.preview_cache_key();
+        if self.loading.lock().contains(&cache_key) {
             return;
         }
 
         let gen = {
             let mut gen_lock = self.generation.lock();
-            let entry = gen_lock.entry(notification_id.clone()).or_insert(0);
+            let entry = gen_lock.entry(cache_key.clone()).or_insert(0);
             *entry += 1;
             *entry
         };
 
-        self.loading.lock().insert(notification_id.clone());
+        self.loading.lock().insert(cache_key.clone());
         let _ = self.tx.send(FetchRequest {
-            notification_id,
+            cache_key,
             notification: notification.clone(),
             generation: gen,
             force: true,
@@ -316,7 +322,7 @@ impl PreviewManager {
     ///
     /// Cached data is kept in place for stale-while-revalidate display.
     ///
-    /// Returns the set of invalidated notification IDs.
+    /// Returns the set of invalidated cache keys.
     pub fn invalidate_notifications(&self, notifications: &[Notification]) -> HashSet<String> {
         let cache = self.cache.lock();
         let mut gen_lock = self.generation.lock();
@@ -324,18 +330,20 @@ impl PreviewManager {
         let mut invalidated = HashSet::new();
 
         for notification in notifications {
-            if let Some(cached) = cache.get(&notification.id) {
-                let is_stale = match (notification.updated_at, cached.updated_at) {
-                    (Some(new_ts), Some(old_ts)) => new_ts > old_ts,
-                    (Some(_), None) => true,
-                    _ => false,
-                };
+            let cache_key = notification.preview_cache_key();
+            if let Some(cached) = cache.get(&cache_key) {
+                let is_stale = notification.preview_is_dynamic()
+                    && match (notification.updated_at, cached.updated_at) {
+                        (Some(new_ts), Some(old_ts)) => new_ts > old_ts,
+                        (Some(_), None) => true,
+                        _ => false,
+                    };
                 if is_stale {
-                    let entry = gen_lock.entry(notification.id.clone()).or_insert(0);
+                    let entry = gen_lock.entry(cache_key.clone()).or_insert(0);
                     *entry += 1;
                     // Clear from loading so callers can immediately re-queue revalidation.
-                    loading_lock.remove(&notification.id);
-                    invalidated.insert(notification.id.clone());
+                    loading_lock.remove(&cache_key);
+                    invalidated.insert(cache_key);
                 }
             }
         }
@@ -351,14 +359,16 @@ impl PreviewManager {
     /// user-visible requests already in the worker's queue.
     pub fn prefetch_all(&self, notifications: &[Notification]) {
         for notification in notifications {
-            let id = &notification.id;
-            if self.cache.lock().contains_key(id) || self.loading.lock().contains(id) {
+            let cache_key = notification.preview_cache_key();
+            if self.cache.lock().contains_key(&cache_key)
+                || self.loading.lock().contains(&cache_key)
+            {
                 continue;
             }
-            let gen = self.generation.lock().get(id).copied().unwrap_or(0);
-            self.loading.lock().insert(id.clone());
+            let gen = self.generation.lock().get(&cache_key).copied().unwrap_or(0);
+            self.loading.lock().insert(cache_key.clone());
             let _ = self.tx.send(FetchRequest {
-                notification_id: id.clone(),
+                cache_key,
                 notification: notification.clone(),
                 generation: gen,
                 force: false,
@@ -368,14 +378,15 @@ impl PreviewManager {
     }
 
     /// Queue low-priority background revalidation for every notification whose
-    /// cached entry is stale, skipping `skip_id` (which the caller handles at
+    /// cached entry is stale, skipping `skip_key` (which the caller handles at
     /// high priority).
     ///
     /// Intended to be called after `invalidate_notifications` so that all stale
     /// entries are refreshed proactively, not just the one the user is looking at.
-    pub fn revalidate_all_stale(&self, notifications: &[Notification], skip_id: Option<&str>) {
+    pub fn revalidate_all_stale(&self, notifications: &[Notification], skip_key: Option<&str>) {
         for notification in notifications {
-            if skip_id == Some(notification.id.as_str()) {
+            let cache_key = notification.preview_cache_key();
+            if skip_key == Some(cache_key.as_str()) {
                 continue;
             }
             if matches!(self.get_cached_status(notification), CacheStatus::Stale(_)) {
@@ -388,7 +399,7 @@ impl PreviewManager {
         let mut completed = Vec::new();
         loop {
             match self.rx.try_recv() {
-                Ok(result) => completed.push(result.notification_id),
+                Ok(result) => completed.push(result.cache_key),
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => break,
             }
@@ -404,6 +415,20 @@ mod tests {
     use chrono::TimeZone;
 
     fn make_notification(id: &str, updated_at: Option<DateTime<Utc>>) -> Notification {
+        make_notification_with(
+            id,
+            updated_at,
+            NotificationType::Issue,
+            Some("https://api.github.com/repos/owner/repo/issues/42"),
+        )
+    }
+
+    fn make_notification_with(
+        id: &str,
+        updated_at: Option<DateTime<Utc>>,
+        subject_type: NotificationType,
+        subject_url: Option<&str>,
+    ) -> Notification {
         Notification {
             id: id.to_string(),
             unread: true,
@@ -423,8 +448,8 @@ mod tests {
             },
             subject: crate::models::Subject {
                 title: "Test notification".to_string(),
-                subject_type: NotificationType::Issue,
-                url: None,
+                subject_type,
+                url: subject_url.map(ToString::to_string),
                 latest_comment_url: None,
             },
             latest_comment_url: None,
@@ -464,8 +489,8 @@ mod tests {
     #[test]
     fn fresh_entry_is_reported_fresh() {
         let old = ts(2024, 1, 1);
-        let pm = manager_with_cache(vec![("42", make_cached(Some(old)))]);
         let notif = make_notification("42", Some(old));
+        let pm = manager_with_cache(vec![(&notif.preview_cache_key(), make_cached(Some(old)))]);
         assert!(matches!(
             pm.get_cached_status(&notif),
             CacheStatus::Fresh(_)
@@ -473,14 +498,38 @@ mod tests {
     }
 
     #[test]
-    fn newer_notification_makes_cached_entry_stale() {
+    fn newer_pull_request_notification_makes_cached_entry_stale() {
         let cached_ts = ts(2024, 1, 1);
         let newer_ts = ts(2024, 6, 1);
-        let pm = manager_with_cache(vec![("42", make_cached(Some(cached_ts)))]);
-        let notif = make_notification("42", Some(newer_ts));
+        let notif = make_notification_with(
+            "42",
+            Some(newer_ts),
+            NotificationType::PullRequest,
+            Some("https://api.github.com/repos/owner/repo/pulls/42"),
+        );
+        let pm = manager_with_cache(vec![(
+            &notif.preview_cache_key(),
+            make_cached(Some(cached_ts)),
+        )]);
         assert!(matches!(
             pm.get_cached_status(&notif),
             CacheStatus::Stale(_)
+        ));
+    }
+
+    #[test]
+    fn newer_issue_notification_stays_fresh() {
+        let cached_ts = ts(2024, 1, 1);
+        let newer_ts = ts(2024, 6, 1);
+        let notif = make_notification("42", Some(newer_ts));
+        let pm = manager_with_cache(vec![(
+            &notif.preview_cache_key(),
+            make_cached(Some(cached_ts)),
+        )]);
+
+        assert!(matches!(
+            pm.get_cached_status(&notif),
+            CacheStatus::Fresh(_)
         ));
     }
 
@@ -497,35 +546,67 @@ mod tests {
     fn invalidate_notifications_marks_stale_ids() {
         let cached_ts = ts(2024, 1, 1);
         let newer_ts = ts(2024, 6, 1);
+        let notifications = vec![
+            make_notification_with(
+                "stale",
+                Some(newer_ts),
+                NotificationType::PullRequest,
+                Some("https://api.github.com/repos/owner/repo/pulls/1"),
+            ),
+            make_notification_with(
+                "fresh",
+                Some(newer_ts),
+                NotificationType::PullRequest,
+                Some("https://api.github.com/repos/owner/repo/pulls/2"),
+            ),
+        ];
         let pm = manager_with_cache(vec![
-            ("stale", make_cached(Some(cached_ts))),
-            ("fresh", make_cached(Some(newer_ts))),
+            (
+                &notifications[0].preview_cache_key(),
+                make_cached(Some(cached_ts)),
+            ),
+            (
+                &notifications[1].preview_cache_key(),
+                make_cached(Some(newer_ts)),
+            ),
         ]);
 
-        let notifications = vec![
-            make_notification("stale", Some(newer_ts)),
-            make_notification("fresh", Some(newer_ts)),
-        ];
-
         let invalidated = pm.invalidate_notifications(&notifications);
-        assert!(invalidated.contains("stale"));
-        assert!(!invalidated.contains("fresh"));
+        assert!(invalidated.contains(&notifications[0].preview_cache_key()));
+        assert!(!invalidated.contains(&notifications[1].preview_cache_key()));
 
         let gen = pm.generation.lock();
-        assert_eq!(gen.get("stale").copied().unwrap_or(0), 1);
-        assert_eq!(gen.get("fresh").copied().unwrap_or(0), 0);
+        assert_eq!(
+            gen.get(&notifications[0].preview_cache_key())
+                .copied()
+                .unwrap_or(0),
+            1
+        );
+        assert_eq!(
+            gen.get(&notifications[1].preview_cache_key())
+                .copied()
+                .unwrap_or(0),
+            0
+        );
     }
 
     #[test]
     fn invalidate_keeps_cached_data_for_stale_while_revalidate() {
         let cached_ts = ts(2024, 1, 1);
         let newer_ts = ts(2024, 6, 1);
-        let pm = manager_with_cache(vec![("42", make_cached(Some(cached_ts)))]);
-
-        let notif = make_notification("42", Some(newer_ts));
+        let notif = make_notification_with(
+            "42",
+            Some(newer_ts),
+            NotificationType::PullRequest,
+            Some("https://api.github.com/repos/owner/repo/pulls/42"),
+        );
+        let pm = manager_with_cache(vec![(
+            &notif.preview_cache_key(),
+            make_cached(Some(cached_ts)),
+        )]);
         pm.invalidate_notifications(std::slice::from_ref(&notif));
 
-        assert!(pm.cache.lock().contains_key("42"));
+        assert!(pm.cache.lock().contains_key(&notif.preview_cache_key()));
         assert!(matches!(
             pm.get_cached_status(&notif),
             CacheStatus::Stale(_)
@@ -536,16 +617,30 @@ mod tests {
     fn invalidate_notifications_clears_loading_for_stale_ids() {
         let cached_ts = ts(2024, 1, 1);
         let newer_ts = ts(2024, 6, 1);
-        let pm = manager_with_cache(vec![("stale", make_cached(Some(cached_ts)))]);
+        let notif = make_notification_with(
+            "stale",
+            Some(newer_ts),
+            NotificationType::PullRequest,
+            Some("https://api.github.com/repos/owner/repo/pulls/1"),
+        );
+        let pm = manager_with_cache(vec![(
+            &notif.preview_cache_key(),
+            make_cached(Some(cached_ts)),
+        )]);
         // Simulate an in-flight fetch for "stale".
-        pm.loading.lock().insert("stale".to_string());
-
-        let notifications = vec![make_notification("stale", Some(newer_ts))];
-        pm.invalidate_notifications(&notifications);
+        pm.loading.lock().insert(notif.preview_cache_key());
+        pm.invalidate_notifications(std::slice::from_ref(&notif));
 
         // Loading flag must be cleared so revalidation can be re-queued immediately.
-        assert!(!pm.is_loading("stale"));
-        assert_eq!(pm.generation.lock().get("stale").copied().unwrap_or(0), 1);
+        assert!(!pm.is_loading(&notif));
+        assert_eq!(
+            pm.generation
+                .lock()
+                .get(&notif.preview_cache_key())
+                .copied()
+                .unwrap_or(0),
+            1
+        );
     }
 
     // ── revalidation tests ───────────────────────────────────────────────────
@@ -553,24 +648,49 @@ mod tests {
     #[test]
     fn request_revalidation_bumps_generation() {
         let cached_ts = ts(2024, 1, 1);
-        let pm = manager_with_cache(vec![("42", make_cached(Some(cached_ts)))]);
-
-        let notif = make_notification("42", Some(cached_ts));
+        let notif = make_notification_with(
+            "42",
+            Some(cached_ts),
+            NotificationType::PullRequest,
+            Some("https://api.github.com/repos/owner/repo/pulls/42"),
+        );
+        let pm = manager_with_cache(vec![(
+            &notif.preview_cache_key(),
+            make_cached(Some(cached_ts)),
+        )]);
         pm.request_revalidation(&notif, PRIORITY_HIGH);
 
-        assert_eq!(pm.generation.lock().get("42").copied().unwrap_or(0), 1);
-        assert!(pm.is_loading("42"));
+        assert_eq!(
+            pm.generation
+                .lock()
+                .get(&notif.preview_cache_key())
+                .copied()
+                .unwrap_or(0),
+            1
+        );
+        assert!(pm.is_loading(&notif));
     }
 
     #[test]
     fn request_revalidation_is_noop_when_already_loading() {
         let pm = manager_with_cache(vec![]);
-        pm.loading.lock().insert("42".to_string());
-
-        let notif = make_notification("42", None);
+        let notif = make_notification_with(
+            "42",
+            None,
+            NotificationType::PullRequest,
+            Some("https://api.github.com/repos/owner/repo/pulls/42"),
+        );
+        pm.loading.lock().insert(notif.preview_cache_key());
         pm.request_revalidation(&notif, PRIORITY_HIGH);
 
-        assert_eq!(pm.generation.lock().get("42").copied().unwrap_or(0), 0);
+        assert_eq!(
+            pm.generation
+                .lock()
+                .get(&notif.preview_cache_key())
+                .copied()
+                .unwrap_or(0),
+            0
+        );
     }
 
     // ── priority queue tests ─────────────────────────────────────────────────
@@ -578,14 +698,14 @@ mod tests {
     #[test]
     fn high_priority_sorts_before_low_priority() {
         let high = FetchRequest {
-            notification_id: "a".into(),
+            cache_key: "a".into(),
             notification: make_notification("a", None),
             generation: 0,
             force: false,
             priority: PRIORITY_HIGH,
         };
         let low = FetchRequest {
-            notification_id: "b".into(),
+            cache_key: "b".into(),
             notification: make_notification("b", None),
             generation: 0,
             force: false,
@@ -595,8 +715,8 @@ mod tests {
         heap.push(low);
         heap.push(high);
         // High priority (0) must come out first from the max-heap.
-        assert_eq!(heap.pop().unwrap().notification_id, "a");
-        assert_eq!(heap.pop().unwrap().notification_id, "b");
+        assert_eq!(heap.pop().unwrap().cache_key, "a");
+        assert_eq!(heap.pop().unwrap().cache_key, "b");
     }
 
     // ── prefetch_all tests ───────────────────────────────────────────────────
@@ -604,21 +724,86 @@ mod tests {
     #[test]
     fn prefetch_all_skips_cached_and_loading() {
         let ts_val = ts(2024, 1, 1);
-        let pm = manager_with_cache(vec![("cached", make_cached(Some(ts_val)))]);
-        pm.loading.lock().insert("loading_id".to_string());
-
         let notifs = vec![
-            make_notification("cached", Some(ts_val)),
-            make_notification("loading_id", Some(ts_val)),
-            make_notification("new_id", Some(ts_val)),
+            make_notification_with(
+                "cached",
+                Some(ts_val),
+                NotificationType::Issue,
+                Some("https://api.github.com/repos/owner/repo/issues/1"),
+            ),
+            make_notification_with(
+                "loading_id",
+                Some(ts_val),
+                NotificationType::Issue,
+                Some("https://api.github.com/repos/owner/repo/issues/2"),
+            ),
+            make_notification_with(
+                "new_id",
+                Some(ts_val),
+                NotificationType::Issue,
+                Some("https://api.github.com/repos/owner/repo/issues/3"),
+            ),
         ];
+        let pm = manager_with_cache(vec![(
+            &notifs[0].preview_cache_key(),
+            make_cached(Some(ts_val)),
+        )]);
+        pm.loading.lock().insert(notifs[1].preview_cache_key());
         pm.prefetch_all(&notifs);
 
         // Only "new_id" should have been enqueued.
-        assert!(pm.is_loading("new_id"));
+        assert!(pm.is_loading(&notifs[2]));
         // Others must be untouched.
-        assert!(pm.cache.lock().contains_key("cached"));
+        assert!(pm.cache.lock().contains_key(&notifs[0].preview_cache_key()));
         // "loading_id" was already loading; it must still only appear once.
-        assert!(pm.is_loading("loading_id"));
+        assert!(pm.is_loading(&notifs[1]));
+    }
+
+    #[test]
+    fn shared_subject_cache_is_reused_across_notification_ids() {
+        let notif = make_notification_with(
+            "left",
+            Some(ts(2024, 1, 1)),
+            NotificationType::Issue,
+            Some("https://api.github.com/repos/owner/repo/issues/42"),
+        );
+        let same_subject = make_notification_with(
+            "right",
+            Some(ts(2024, 1, 1)),
+            NotificationType::Issue,
+            Some("https://api.github.com/repos/owner/repo/issues/42"),
+        );
+        let pm = manager_with_cache(vec![(
+            &notif.preview_cache_key(),
+            make_cached(Some(ts(2024, 1, 1))),
+        )]);
+
+        assert!(matches!(
+            pm.get_cached_status(&same_subject),
+            CacheStatus::Fresh(_)
+        ));
+    }
+
+    #[test]
+    fn prefetch_all_coalesces_duplicate_subjects() {
+        let ts_val = ts(2024, 1, 1);
+        let left = make_notification_with(
+            "left",
+            Some(ts_val),
+            NotificationType::Issue,
+            Some("https://api.github.com/repos/owner/repo/issues/42"),
+        );
+        let right = make_notification_with(
+            "right",
+            Some(ts_val),
+            NotificationType::Issue,
+            Some("https://api.github.com/repos/owner/repo/issues/42"),
+        );
+        let pm = manager_with_cache(vec![]);
+        pm.prefetch_all(&[left.clone(), right.clone()]);
+
+        assert_eq!(pm.loading.lock().len(), 1);
+        assert!(pm.is_loading(&left));
+        assert!(pm.is_loading(&right));
     }
 }

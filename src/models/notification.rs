@@ -68,6 +68,31 @@ impl Notification {
         }
     }
 
+    pub fn preview_cache_key(&self) -> String {
+        let type_key = match self.notification_type() {
+            NotificationType::Issue => "issue",
+            NotificationType::PullRequest => "pull_request",
+            NotificationType::Discussion => "discussion",
+            NotificationType::Commit => "commit",
+            NotificationType::Release => "release",
+            NotificationType::CheckSuite => "check_suite",
+            NotificationType::RepositoryVulnerabilityAlert => "security_alert",
+            NotificationType::WorkflowRun => "workflow_run",
+            NotificationType::ActivityEvent => "activity_event",
+            NotificationType::Unknown => "unknown",
+        };
+        let subject_key = self
+            .subject_url()
+            .map(|url| format!("url:{url}"))
+            .unwrap_or_else(|| format!("title:{}", self.title()));
+
+        format!("{}|{}|{}", self.repo_full_name(), type_key, subject_key)
+    }
+
+    pub fn preview_is_dynamic(&self) -> bool {
+        matches!(self.notification_type(), NotificationType::PullRequest)
+    }
+
     pub fn effective_timestamp(&self) -> Option<DateTime<Utc>> {
         if self.unread {
             self.last_read_at.or(self.updated_at)
@@ -412,6 +437,50 @@ mod tests {
             n.web_url("github.com"),
             Some("https://github.com/owner/repo/pull/99".to_string())
         );
+    }
+
+    #[test]
+    fn preview_cache_key_reuses_subject_url_across_notification_ids() {
+        let left = make_notification_with_type(
+            Some("https://api.github.com/repos/owner/repo/issues/42"),
+            "First title",
+            NotificationType::Issue,
+        );
+        let right = make_notification_with_type(
+            Some("https://api.github.com/repos/owner/repo/issues/42"),
+            "Second title",
+            NotificationType::Issue,
+        );
+
+        assert_eq!(left.preview_cache_key(), right.preview_cache_key());
+    }
+
+    #[test]
+    fn preview_cache_key_falls_back_to_title_when_subject_url_is_missing() {
+        let notification =
+            make_notification_with_type(None, "Fallback title", NotificationType::WorkflowRun);
+
+        assert_eq!(
+            notification.preview_cache_key(),
+            "owner/repo|workflow_run|title:Fallback title"
+        );
+    }
+
+    #[test]
+    fn preview_only_marks_pull_requests_as_dynamic() {
+        let issue = make_notification_with_type(
+            Some("https://api.github.com/repos/owner/repo/issues/42"),
+            "Issue",
+            NotificationType::Issue,
+        );
+        let pr = make_notification_with_type(
+            Some("https://api.github.com/repos/owner/repo/pulls/99"),
+            "PR",
+            NotificationType::PullRequest,
+        );
+
+        assert!(!issue.preview_is_dynamic());
+        assert!(pr.preview_is_dynamic());
     }
 
     #[test]

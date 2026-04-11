@@ -498,7 +498,7 @@ impl App {
         }
         if let Some(preview_manager) = &self.preview_manager {
             if let Some(PreviewData::Discussion { url, .. }) =
-                preview_manager.get_cached(&notification.id)
+                preview_manager.get_cached(notification)
             {
                 if !url.is_empty() {
                     return Some(url.clone());
@@ -984,7 +984,7 @@ impl App {
                 let selected_was_invalidated = self
                     .state
                     .selected_notification()
-                    .map(|n| invalidated.contains(&n.id))
+                    .map(|n| invalidated.contains(&n.preview_cache_key()))
                     .unwrap_or(false);
 
                 if self.state.show_preview() {
@@ -1000,8 +1000,11 @@ impl App {
                 // Background-revalidate all remaining stale entries (low priority).
                 // The selected notification is already handled above at high priority.
                 if let Some(ref pm) = self.preview_manager {
-                    let skip_id = self.state.selected_notification().map(|n| n.id.clone());
-                    pm.revalidate_all_stale(&self.state.notifications, skip_id.as_deref());
+                    let skip_key = self
+                        .state
+                        .selected_notification()
+                        .map(|n| n.preview_cache_key());
+                    pm.revalidate_all_stale(&self.state.notifications, skip_key.as_deref());
                 }
 
                 // Prefetch neighbours regardless of preview visibility.
@@ -1042,10 +1045,11 @@ impl App {
         let old_count = self.state.notifications.len();
         self.state.set_notifications(notifications);
 
-        // Mark stale cached previews
-        if let Some(ref pm) = self.preview_manager {
-            pm.invalidate_notifications(&self.state.notifications);
-        }
+        let invalidated = if let Some(ref pm) = self.preview_manager {
+            pm.invalidate_notifications(&self.state.notifications)
+        } else {
+            HashSet::new()
+        };
 
         // Execute hook for new notifications if configured
         let current_ids: HashSet<String> = self
@@ -1106,6 +1110,21 @@ impl App {
         // Refresh preview for the current selection
         if self.state.show_preview() {
             self.fetch_preview_for_selected_notification();
+        } else if self
+            .state
+            .selected_notification()
+            .map(|n| invalidated.contains(&n.preview_cache_key()))
+            .unwrap_or(false)
+        {
+            self.state.preview_content = None;
+        }
+
+        if let Some(ref pm) = self.preview_manager {
+            let skip_key = self
+                .state
+                .selected_notification()
+                .map(|n| n.preview_cache_key());
+            pm.revalidate_all_stale(&self.state.notifications, skip_key.as_deref());
         }
 
         self.spawn_author_enrichment();
@@ -1156,7 +1175,7 @@ impl App {
                 preview_manager.request_revalidation(&notification, PRIORITY_HIGH);
             }
             CacheStatus::Miss => {
-                if preview_manager.is_loading(&notification.id) {
+                if preview_manager.is_loading(&notification) {
                     self.state.preview_content = Some(PreviewData::Generic {
                         title: "Loading details...".to_string(),
                         body: "⏳ Fetching details...\n\nThis may take a moment.".to_string(),
@@ -1214,9 +1233,7 @@ impl App {
         let prev_notif = (0..current_idx).rev().find_map(find_notif);
 
         for notif in [next_notif, prev_notif].into_iter().flatten() {
-            if preview_manager.get_cached(&notif.id).is_none()
-                && !preview_manager.is_loading(&notif.id)
-            {
+            if preview_manager.get_cached(&notif).is_none() && !preview_manager.is_loading(&notif) {
                 preview_manager.request_preview(&notif, PRIORITY_LOW);
             }
         }
@@ -1364,10 +1381,10 @@ impl App {
 
             // Poll for background fetch completions (non-blocking)
             if let Some(ref preview_manager) = self.preview_manager {
-                for completed_id in preview_manager.drain_completed() {
+                for completed_key in preview_manager.drain_completed() {
                     if let Some(current_notif) = self.state.selected_notification() {
-                        if current_notif.id == completed_id {
-                            if let Some(data) = preview_manager.get_cached(&completed_id) {
+                        if current_notif.preview_cache_key() == completed_key {
+                            if let Some(data) = preview_manager.get_cached_by_key(&completed_key) {
                                 self.state.preview_content = Some(data);
                                 self.state.preview_scroll = 0;
                             }
