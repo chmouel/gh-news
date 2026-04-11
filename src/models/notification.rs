@@ -90,7 +90,13 @@ impl Notification {
     }
 
     pub fn preview_is_dynamic(&self) -> bool {
-        matches!(self.notification_type(), NotificationType::PullRequest)
+        matches!(
+            self.notification_type(),
+            NotificationType::Issue
+                | NotificationType::PullRequest
+                | NotificationType::Discussion
+                | NotificationType::WorkflowRun
+        )
     }
 
     pub fn effective_timestamp(&self) -> Option<DateTime<Utc>> {
@@ -467,7 +473,7 @@ mod tests {
     }
 
     #[test]
-    fn preview_only_marks_pull_requests_as_dynamic() {
+    fn preview_marks_mutable_subjects_as_dynamic() {
         let issue = make_notification_with_type(
             Some("https://api.github.com/repos/owner/repo/issues/42"),
             "Issue",
@@ -478,9 +484,24 @@ mod tests {
             "PR",
             NotificationType::PullRequest,
         );
+        let discussion = make_notification_with_type(
+            Some("https://api.github.com/repos/owner/repo/discussions/7"),
+            "Discussion",
+            NotificationType::Discussion,
+        );
+        let workflow_run =
+            make_notification_with_type(None, "Workflow", NotificationType::WorkflowRun);
+        let release = make_notification_with_type(
+            Some("https://api.github.com/repos/owner/repo/releases/1"),
+            "Release",
+            NotificationType::Release,
+        );
 
-        assert!(!issue.preview_is_dynamic());
+        assert!(issue.preview_is_dynamic());
         assert!(pr.preview_is_dynamic());
+        assert!(discussion.preview_is_dynamic());
+        assert!(workflow_run.preview_is_dynamic());
+        assert!(!release.preview_is_dynamic());
     }
 
     #[test]

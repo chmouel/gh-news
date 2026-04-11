@@ -518,7 +518,7 @@ mod tests {
     }
 
     #[test]
-    fn newer_issue_notification_stays_fresh() {
+    fn newer_issue_notification_makes_cached_entry_stale() {
         let cached_ts = ts(2024, 1, 1);
         let newer_ts = ts(2024, 6, 1);
         let notif = make_notification("42", Some(newer_ts));
@@ -529,7 +529,49 @@ mod tests {
 
         assert!(matches!(
             pm.get_cached_status(&notif),
-            CacheStatus::Fresh(_)
+            CacheStatus::Stale(_)
+        ));
+    }
+
+    #[test]
+    fn newer_discussion_notification_makes_cached_entry_stale() {
+        let cached_ts = ts(2024, 1, 1);
+        let newer_ts = ts(2024, 6, 1);
+        let notif = make_notification_with(
+            "42",
+            Some(newer_ts),
+            NotificationType::Discussion,
+            Some("https://api.github.com/repos/owner/repo/discussions/42"),
+        );
+        let pm = manager_with_cache(vec![(
+            &notif.preview_cache_key(),
+            make_cached(Some(cached_ts)),
+        )]);
+
+        assert!(matches!(
+            pm.get_cached_status(&notif),
+            CacheStatus::Stale(_)
+        ));
+    }
+
+    #[test]
+    fn newer_workflow_run_notification_makes_cached_entry_stale() {
+        let cached_ts = ts(2024, 1, 1);
+        let newer_ts = ts(2024, 6, 1);
+        let notif = make_notification_with(
+            "42",
+            Some(newer_ts),
+            NotificationType::WorkflowRun,
+            Some("https://github.com/owner/repo/actions/runs/42"),
+        );
+        let pm = manager_with_cache(vec![(
+            &notif.preview_cache_key(),
+            make_cached(Some(cached_ts)),
+        )]);
+
+        assert!(matches!(
+            pm.get_cached_status(&notif),
+            CacheStatus::Stale(_)
         ));
     }
 
