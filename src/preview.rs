@@ -584,12 +584,19 @@ impl PreviewFetcher {
                 }
             }
             NotificationType::ActivityEvent => {
-                // Activity events are synthetic; no extra API call needed
+                // Activity events are synthetic; use enriched data from the event payload
+                let body = notification
+                    .event_body
+                    .clone()
+                    .unwrap_or_else(|| notification.title().to_string());
                 PreviewData::ActivityEvent {
-                    event_type: "Event".to_string(),
-                    actor: String::new(),
+                    event_type: notification
+                        .context
+                        .clone()
+                        .unwrap_or_else(|| "Event".to_string()),
+                    actor: notification.author.clone().unwrap_or_default(),
                     repo: repo_full_name.to_string(),
-                    body: notification.title().to_string(),
+                    body,
                 }
             }
             _ => PreviewData::Generic {

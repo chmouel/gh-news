@@ -22,9 +22,14 @@ pub struct Notification {
     pub author: Option<String>,
     /// Contextual state for state_change notifications (e.g. "merged", "closed", "open",
     /// "closed:completed", "closed:not_planned").
+    /// For activity events, stores the GitHub event type (e.g. "PullRequestEvent").
     /// Not part of the GitHub API response — populated via background enrichment.
     #[serde(skip)]
     pub context: Option<String>,
+    /// Extra body text for activity events (PR body, comment body, commit messages, release notes).
+    /// Not part of the GitHub API response — populated when converting events to notifications.
+    #[serde(skip)]
+    pub event_body: Option<String>,
 }
 
 impl Notification {
@@ -81,6 +86,14 @@ impl Notification {
             NotificationType::ActivityEvent => "activity_event",
             NotificationType::Unknown => "unknown",
         };
+
+        // Activity events are unique per event — multiple events can reference
+        // the same subject (e.g. "opened PR #42" vs "labeled PR #42"), so key
+        // by notification ID to avoid cache collisions.
+        if self.notification_type() == NotificationType::ActivityEvent {
+            return format!("{}|{}|id:{}", self.repo_full_name(), type_key, self.id);
+        }
+
         let subject_key = self
             .subject_url()
             .map(|url| format!("url:{url}"))
@@ -406,6 +419,7 @@ mod tests {
             latest_comment_url: None,
             author: None,
             context: None,
+            event_body: None,
         }
     }
 

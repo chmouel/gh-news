@@ -3574,6 +3574,7 @@ mod tests {
             latest_comment_url: None,
             author: None,
             context: None,
+            event_body: None,
         }
     }
 
@@ -3609,6 +3610,7 @@ mod tests {
             latest_comment_url: latest_comment_url.map(str::to_string),
             author: None,
             context: None,
+            event_body: None,
         }
     }
 
@@ -3923,6 +3925,7 @@ mod action_tests {
             latest_comment_url: None,
             author: None,
             context: None,
+            event_body: None,
         }
     }
 

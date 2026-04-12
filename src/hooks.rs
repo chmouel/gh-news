@@ -103,6 +103,7 @@ mod tests {
             latest_comment_url: None,
             author: None,
             context: None,
+            event_body: None,
         }
     }
 
