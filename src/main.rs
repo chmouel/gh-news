@@ -164,7 +164,7 @@ fn run() -> Result<()> {
     let auto_mark_read = if !config.auto_mark_read {
         false
     } else {
-        state_file::AppStateFile::load_auto_mark_read().unwrap_or(true)
+        state_file::AppStateFile::load_auto_mark_read().unwrap_or(false)
     };
     let auto_archive = if !config.auto_archive {
         false

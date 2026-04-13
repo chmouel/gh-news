@@ -172,6 +172,10 @@ org_grouping = "auto"
 # Note: Can be toggled at runtime with M key and saved to state file.
 auto_mark_read = false
 
+# Dwell time in milliseconds before a notification is auto-marked as read.
+# Only applies when auto_mark_read is enabled. Default: 400
+auto_mark_read_delay_ms = 400
+
 # Automatically archive (mark as done) notifications when navigating away.
 # When enabled, auto_mark_read is also forced on.
 # Default: false

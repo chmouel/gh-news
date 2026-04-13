@@ -75,7 +75,7 @@ pub struct AppStateFile {
 }
 
 fn default_auto_mark_read() -> bool {
-    true
+    false
 }
 
 impl AppStateFile {

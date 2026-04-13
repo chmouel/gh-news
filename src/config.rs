@@ -149,6 +149,7 @@ pub struct Config {
 
     // Behaviour
     pub auto_mark_read: bool,
+    pub auto_mark_read_delay_ms: u64,
     pub auto_archive: bool,
     pub auto_mark_on_open: bool,
 
@@ -238,6 +239,7 @@ impl Default for Config {
             org_grouping: OrgGroupingMode::default(),
             list_layout: ListLayout::default(),
             auto_mark_read: false,
+            auto_mark_read_delay_ms: 400,
             auto_archive: false,
             auto_mark_on_open: true,
             cache_file: None,

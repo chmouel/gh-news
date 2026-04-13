@@ -63,9 +63,6 @@ struct PendingInteractiveAction {
     action_name: String,
 }
 
-/// Dwell time before auto-marking a notification as read (ms)
-const AUTO_MARK_READ_DWELL_MS: u64 = 400;
-
 /// Synthetic notification IDs (from Actions/Events) that have no real
 /// GitHub thread and must not be marked read, toggled, or archived.
 fn is_synthetic_id(id: &str) -> bool {
@@ -121,6 +118,7 @@ pub struct App {
     pending_print_urls: Vec<String>,
     // Auto-mark-read state
     auto_mark_read_enabled: bool,
+    auto_mark_read_delay_ms: u64,
     auto_archive_enabled: bool,
     auto_mark_on_open: bool,
     pending_mark_read: Option<(String, Instant)>, // (notification_id, timestamp)
@@ -143,6 +141,7 @@ struct EnrichmentResult {
 impl App {
     pub fn new(config: Config) -> Self {
         let auto_mark_read = config.auto_mark_read;
+        let auto_mark_read_delay_ms = config.auto_mark_read_delay_ms;
         let auto_mark_on_open = config.auto_mark_on_open;
         let org_grouping = config.org_grouping;
         let palette = config.color_palette();
@@ -177,6 +176,7 @@ impl App {
             pending_interactive_action: None,
             pending_print_urls: Vec::new(),
             auto_mark_read_enabled: auto_mark_read,
+            auto_mark_read_delay_ms,
             auto_archive_enabled: false,
             auto_mark_on_open,
             pending_mark_read: None,
@@ -224,7 +224,7 @@ impl App {
 
     /// Process pending auto-mark-read if dwell time has elapsed
     fn process_pending_mark_read(&mut self) {
-        let dwell_time = Duration::from_millis(AUTO_MARK_READ_DWELL_MS);
+        let dwell_time = Duration::from_millis(self.auto_mark_read_delay_ms);
 
         if let Some((ref notification_id, timestamp)) = self.pending_mark_read.clone() {
             if timestamp.elapsed() >= dwell_time {
@@ -3621,7 +3621,7 @@ mod tests {
             .set_notifications(vec![test_notification("actions-123", true)]);
         app.pending_mark_read = Some((
             "actions-123".to_string(),
-            Instant::now() - Duration::from_millis(AUTO_MARK_READ_DWELL_MS + 1),
+            Instant::now() - Duration::from_millis(app.auto_mark_read_delay_ms + 1),
         ));
 
         app.process_pending_mark_read();
