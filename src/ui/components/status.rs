@@ -7,10 +7,13 @@ use ratatui::{
 };
 use std::time::Instant;
 
-/// Refresh state passed to the status widget for countdown display.
+const REFRESH_SPINNER_FRAMES: &[char] = &['|', '/', '-', '\\'];
+
+/// Refresh state passed to the status widget for countdown and spinner display.
 pub struct RefreshState {
     pub last_refresh: Instant,
     pub is_refreshing: bool,
+    pub spinner_frame_index: usize,
 }
 
 pub struct StatusWidget {
@@ -35,22 +38,7 @@ impl StatusWidget {
         auto_mark_read: bool,
         refresh: &RefreshState,
     ) {
-        let interval_text = if config.auto_refresh_interval > 0 {
-            if refresh.is_refreshing {
-                "🔄 refreshing…".to_string()
-            } else {
-                let elapsed = refresh.last_refresh.elapsed().as_secs();
-                let interval = config.auto_refresh_interval;
-                let remaining = interval.saturating_sub(elapsed);
-                if remaining >= 60 {
-                    format!("🔄 {}m{:02}s", remaining / 60, remaining % 60)
-                } else {
-                    format!("🔄 {}s", remaining)
-                }
-            }
-        } else {
-            String::new()
-        };
+        let interval_text = refresh_indicator_text(config.auto_refresh_interval, refresh);
 
         let unread_count = state
             .filtered_notifications
@@ -153,5 +141,66 @@ impl StatusWidget {
             .alignment(Alignment::Left);
 
         frame.render_widget(paragraph, area);
+    }
+}
+
+fn refresh_indicator_text(auto_refresh_interval: u64, refresh: &RefreshState) -> String {
+    if auto_refresh_interval == 0 {
+        return String::new();
+    }
+
+    if refresh.is_refreshing {
+        let frame = REFRESH_SPINNER_FRAMES
+            .get(refresh.spinner_frame_index % REFRESH_SPINNER_FRAMES.len())
+            .copied()
+            .unwrap_or('|');
+        return format!("{frame} refreshing...");
+    }
+
+    let elapsed = refresh.last_refresh.elapsed().as_secs();
+    let remaining = auto_refresh_interval.saturating_sub(elapsed);
+    if remaining >= 60 {
+        format!("🔄 {}m{:02}s", remaining / 60, remaining % 60)
+    } else {
+        format!("🔄 {}s", remaining)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{refresh_indicator_text, RefreshState};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn refresh_indicator_text_uses_spinner_frame_when_refreshing() {
+        let refresh = RefreshState {
+            last_refresh: Instant::now(),
+            is_refreshing: true,
+            spinner_frame_index: 1,
+        };
+
+        assert_eq!(refresh_indicator_text(120, &refresh), "/ refreshing...");
+    }
+
+    #[test]
+    fn refresh_indicator_text_cycles_spinner_frames() {
+        let refresh = RefreshState {
+            last_refresh: Instant::now(),
+            is_refreshing: true,
+            spinner_frame_index: 7,
+        };
+
+        assert_eq!(refresh_indicator_text(120, &refresh), "\\ refreshing...");
+    }
+
+    #[test]
+    fn refresh_indicator_text_shows_countdown_when_idle() {
+        let refresh = RefreshState {
+            last_refresh: Instant::now() - Duration::from_secs(30),
+            is_refreshing: false,
+            spinner_frame_index: 0,
+        };
+
+        assert_eq!(refresh_indicator_text(120, &refresh), "🔄 1m30s");
     }
 }

@@ -1540,6 +1540,7 @@ impl App {
         let refresh_state = status::RefreshState {
             last_refresh: self.last_refresh,
             is_refreshing: self.background_refresh_rx.is_some(),
+            spinner_frame_index: (self.last_refresh.elapsed().as_millis() / 200) as usize,
         };
         self.status_widget.render(
             frame,
@@ -2953,15 +2954,17 @@ impl App {
                 // Scroll preview down (capital J)
                 self.state.preview_scroll = self.state.preview_scroll.saturating_add(1);
             }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL)
-                // Scroll preview up by page (20 lines)
-                && self.state.show_preview() => {
+            // Scroll preview up by page (20 lines)
+            KeyCode::Char('u')
+                if key.modifiers.contains(KeyModifiers::CONTROL) && self.state.show_preview() =>
+            {
                     let page_size = 20;
                     self.state.preview_scroll = self.state.preview_scroll.saturating_sub(page_size);
                 }
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL)
-                // Scroll preview down by page (20 lines)
-                && self.state.show_preview() => {
+            // Scroll preview down by page (20 lines)
+            KeyCode::Char('d')
+                if key.modifiers.contains(KeyModifiers::CONTROL) && self.state.show_preview() =>
+            {
                     let page_size = 20;
                     self.state.preview_scroll = self.state.preview_scroll.saturating_add(page_size);
                 }

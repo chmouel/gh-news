@@ -2,6 +2,7 @@ use crate::api::GitHubClient;
 use crate::error::Result;
 use crate::models::{Notification, NotificationType, Owner, Repository, Subject};
 use chrono::{DateTime, Utc};
+use std::cmp::Reverse;
 
 /// Fetch workflow run notifications from GitHub Actions for the given repos.
 ///
@@ -34,7 +35,7 @@ pub fn fetch_workflow_run_notifications(
     }
 
     // Sort by updated_at descending (newest first)
-    all_notifications.sort_by_key(|n| std::cmp::Reverse(n.updated_at));
+    all_notifications.sort_by_key(|notification| Reverse(notification.updated_at));
 
     Ok(all_notifications)
 }

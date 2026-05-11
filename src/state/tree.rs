@@ -1,5 +1,6 @@
 use crate::models::Notification;
 use chrono::{DateTime, Utc};
+use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
 
 use super::{OrgGroupingMode, OrgHeaderInfo, RepoHeaderInfo, TreeItem};
@@ -129,7 +130,7 @@ impl<'a> TreeBuilder<'a> {
             })
             .collect();
 
-        org_list.sort_by_key(|o| std::cmp::Reverse(o.2));
+        org_list.sort_by_key(|group| Reverse(group.2));
 
         for (org, indices, _) in org_list {
             let notification_count = indices.len();
@@ -198,7 +199,7 @@ impl<'a> TreeBuilder<'a> {
             })
             .collect();
 
-        repo_list.sort_by_key(|r| std::cmp::Reverse(r.2));
+        repo_list.sort_by_key(|group| Reverse(group.2));
         repo_list
     }
 
