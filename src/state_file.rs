@@ -4,7 +4,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 /// Global state file path, set once at startup
@@ -47,6 +47,37 @@ fn get_state_path() -> Result<PathBuf> {
         .get()
         .cloned()
         .ok_or_else(|| Error::Config("State path not initialised".to_string()))
+}
+
+fn adjacent_path(base_path: &Path, file_name: &str) -> PathBuf {
+    base_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(file_name)
+}
+
+fn write_atomically(path: &Path, contents: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(Error::Io)?;
+    }
+
+    let tmp_extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| format!("{ext}.tmp"))
+        .unwrap_or_else(|| "tmp".to_string());
+    let tmp_path = path.with_extension(tmp_extension);
+
+    fs::write(&tmp_path, contents).map_err(Error::Io)?;
+    fs::rename(&tmp_path, path).map_err(Error::Io)?;
+    Ok(())
+}
+
+fn current_state_base_path() -> Result<PathBuf> {
+    match STATE_FILE_PATH.get() {
+        Some(path) => Ok(path.clone()),
+        None => get_default_state_path(),
+    }
 }
 
 /// Snooze information for a notification thread
@@ -110,7 +141,7 @@ impl AppStateFile {
         let toml_content = toml::to_string_pretty(self)
             .map_err(|e| Error::Config(format!("Failed to serialize state: {}", e)))?;
 
-        fs::write(&path, toml_content).map_err(Error::Io)?;
+        write_atomically(&path, toml_content.as_bytes())?;
 
         Ok(())
     }
@@ -144,11 +175,6 @@ impl AppStateFile {
         Self::update_with(|state| {
             state.auto_archive = auto_archive;
         })
-    }
-
-    pub fn load_auto_archive() -> Result<bool> {
-        let state = Self::load_full()?;
-        Ok(state.auto_archive)
     }
 
     pub fn save_pinned_notifications(pinned: &[Notification]) -> Result<()> {
@@ -234,18 +260,15 @@ impl AppStateFile {
 
 /// Path of the author cache file (sibling of the state file).
 fn get_author_cache_path() -> Result<PathBuf> {
-    let cache_dir = dirs::cache_dir()
-        .ok_or_else(|| Error::Config("Could not determine cache directory".to_string()))?;
-    let dir = cache_dir.join("gh-news");
-    fs::create_dir_all(&dir).map_err(Error::Io)?;
-    Ok(dir.join("authors.json"))
+    let state_path = current_state_base_path()?;
+    Ok(adjacent_path(&state_path, "authors.json"))
 }
 
 /// Persist a notification-id → author-login mapping to disk.
 pub fn save_author_cache(authors: &HashMap<String, String>) -> Result<()> {
     let path = get_author_cache_path()?;
     let json = serde_json::to_string(authors).map_err(|e| Error::Config(e.to_string()))?;
-    fs::write(&path, json).map_err(Error::Io)
+    write_atomically(&path, json.as_bytes())
 }
 
 /// Load the previously persisted author cache, returning an empty map on any error.
@@ -259,18 +282,15 @@ pub fn load_author_cache() -> HashMap<String, String> {
 
 /// Path of the context cache file (sibling of the state file).
 fn get_context_cache_path() -> Result<PathBuf> {
-    let cache_dir = dirs::cache_dir()
-        .ok_or_else(|| Error::Config("Could not determine cache directory".to_string()))?;
-    let dir = cache_dir.join("gh-news");
-    fs::create_dir_all(&dir).map_err(Error::Io)?;
-    Ok(dir.join("contexts.json"))
+    let state_path = current_state_base_path()?;
+    Ok(adjacent_path(&state_path, "contexts.json"))
 }
 
 /// Persist a notification-id → context mapping to disk.
 pub fn save_context_cache(contexts: &HashMap<String, String>) -> Result<()> {
     let path = get_context_cache_path()?;
     let json = serde_json::to_string(contexts).map_err(|e| Error::Config(e.to_string()))?;
-    fs::write(&path, json).map_err(Error::Io)
+    write_atomically(&path, json.as_bytes())
 }
 
 /// Load the previously persisted context cache, returning an empty map on any error.
@@ -389,5 +409,14 @@ mod tests {
             ("t3", now + Duration::days(7)),
         ]);
         assert_eq!(state.snoozed_notifications.len(), 3);
+    }
+
+    #[test]
+    fn adjacent_path_uses_state_file_directory() {
+        let state_path = PathBuf::from("/tmp/gh-news/custom/state.toml");
+        assert_eq!(
+            adjacent_path(&state_path, "authors.json"),
+            PathBuf::from("/tmp/gh-news/custom/authors.json")
+        );
     }
 }

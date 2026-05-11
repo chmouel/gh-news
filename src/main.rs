@@ -63,7 +63,7 @@ impl RuntimeOptions {
 
 fn run() -> Result<()> {
     let args = Args::parse();
-    let config = Config::load(args.config.as_deref());
+    let config = Config::load(args.config.as_deref())?;
     let opts = RuntimeOptions::from_args_and_config(&args, &config);
 
     // Initialise state file path: CLI > config > default
@@ -139,38 +139,24 @@ fn run() -> Result<()> {
     app.start_auto_refresh(opts.show_all, opts.participating, opts.max_notifications);
 
     // Apply filters
-    let filter = opts
-        .filter_pattern
-        .as_deref()
-        .map(|pattern| Filter::from_config(Some(pattern), &config))
-        .transpose()?
-        .or_else(|| {
-            // Even without a regex pattern, apply structured excludes if configured
-            if config.exclude_types.is_empty()
-                && config.exclude_reasons.is_empty()
-                && config.exclude_repos.is_empty()
-                && config.exclude_subjects.is_empty()
-            {
-                None
-            } else {
-                Filter::from_config(None, &config).ok()
-            }
-        });
+    let filter = if let Some(pattern) = opts.filter_pattern.as_deref() {
+        Some(Filter::from_config(Some(pattern), &config)?)
+    } else if config.exclude_types.is_empty()
+        && config.exclude_reasons.is_empty()
+        && config.exclude_repos.is_empty()
+        && config.exclude_subjects.is_empty()
+    {
+        None
+    } else {
+        Some(Filter::from_config(None, &config)?)
+    };
 
     // Always use config's default preview mode on startup
     let preview_mode = config.get_default_preview_mode();
 
-    // Config disabling always wins; otherwise use the persisted toggle (m-key).
-    let auto_mark_read = if !config.auto_mark_read {
-        false
-    } else {
-        state_file::AppStateFile::load_auto_mark_read().unwrap_or(false)
-    };
-    let auto_archive = if !config.auto_archive {
-        false
-    } else {
-        state_file::AppStateFile::load_auto_archive().unwrap_or(false)
-    };
+    let auto_mark_read =
+        state_file::AppStateFile::load_auto_mark_read().unwrap_or(config.auto_mark_read);
+    let auto_archive = config.auto_archive;
 
     // Set initial values. `set_auto_archive` will correctly enforce `auto_mark_read` if needed.
     app.set_auto_mark_read(auto_mark_read);
