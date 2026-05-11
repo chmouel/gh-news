@@ -34,7 +34,7 @@ pub fn fetch_workflow_run_notifications(
     }
 
     // Sort by updated_at descending (newest first)
-    all_notifications.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    all_notifications.sort_by_key(|n| std::cmp::Reverse(n.updated_at));
 
     Ok(all_notifications)
 }

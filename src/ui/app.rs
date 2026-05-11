@@ -1065,11 +1065,17 @@ impl App {
                     if let Some(notification) =
                         self.state.notifications.iter().find(|n| &n.id == new_id)
                     {
-                        let _ = hooks::execute_new_notification_hook(
+                        if let Err(e) = hooks::execute_new_notification_hook(
                             hook_command,
                             notification,
                             &self.config.github_host,
-                        );
+                        ) {
+                            eprintln!(
+                                "Failed to execute notification hook for '{}': {}",
+                                notification.title(),
+                                e
+                            );
+                        }
                     }
                 }
             }
@@ -1407,8 +1413,8 @@ impl App {
 
             if event::poll(timeout).map_err(|e| crate::error::Error::Terminal(e.to_string()))? {
                 match event::read().map_err(|e| crate::error::Error::Terminal(e.to_string()))? {
-                    Event::Key(key) => {
-                        if key.kind == KeyEventKind::Press {
+                    Event::Key(key)
+                        if key.kind == KeyEventKind::Press => {
                             if self.state.loading {
                                 if key.code == KeyCode::Char('q')
                                     || key.code == KeyCode::Esc
@@ -1421,18 +1427,16 @@ impl App {
                                 self.handle_key(key)?;
                             }
                         }
-                    }
                     Event::Resize(_, _) => {
                         // Terminal was resized - ratatui will handle redraw
                     }
-                    Event::Mouse(mouse_event) => {
+                    Event::Mouse(mouse_event)
                         // Only handle mouse events when not in help or loading
-                        if !self.state.show_help && !self.state.loading {
+                        if !self.state.show_help && !self.state.loading => {
                             // Get terminal size for layout calculations
                             let size = terminal.size()?;
                             self.handle_mouse(mouse_event, size)?;
                         }
-                    }
                     _ => {}
                 }
             }
@@ -1739,15 +1743,13 @@ impl App {
             KeyCode::Esc => {
                 self.state.input_mode = InputMode::Normal;
             }
-            KeyCode::Up | KeyCode::Char('k') => {
-                if self.state.action_menu_index > 0 {
-                    self.state.action_menu_index -= 1;
-                }
+            KeyCode::Up | KeyCode::Char('k') if self.state.action_menu_index > 0 => {
+                self.state.action_menu_index -= 1;
             }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if self.state.action_menu_index < action_count - 1 {
-                    self.state.action_menu_index += 1;
-                }
+            KeyCode::Down | KeyCode::Char('j')
+                if self.state.action_menu_index < action_count - 1 =>
+            {
+                self.state.action_menu_index += 1;
             }
             KeyCode::Enter => {
                 self.execute_selected_action();
@@ -1779,15 +1781,11 @@ impl App {
             KeyCode::Esc => {
                 self.state.input_mode = InputMode::Normal;
             }
-            KeyCode::Up | KeyCode::Char('k') => {
-                if self.state.url_menu_index > 0 {
-                    self.state.url_menu_index -= 1;
-                }
+            KeyCode::Up | KeyCode::Char('k') if self.state.url_menu_index > 0 => {
+                self.state.url_menu_index -= 1;
             }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if self.state.url_menu_index < item_count - 1 {
-                    self.state.url_menu_index += 1;
-                }
+            KeyCode::Down | KeyCode::Char('j') if self.state.url_menu_index < item_count - 1 => {
+                self.state.url_menu_index += 1;
             }
             KeyCode::Enter => {
                 self.execute_url_menu_action(self.state.url_menu_index);
@@ -1870,15 +1868,13 @@ impl App {
             KeyCode::Esc => {
                 self.state.input_mode = InputMode::Normal;
             }
-            KeyCode::Up | KeyCode::Char('k') => {
-                if self.state.view_picker_index > 0 {
-                    self.state.view_picker_index -= 1;
-                }
+            KeyCode::Up | KeyCode::Char('k') if self.state.view_picker_index > 0 => {
+                self.state.view_picker_index -= 1;
             }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if self.state.view_picker_index + 1 < total_items {
-                    self.state.view_picker_index += 1;
-                }
+            KeyCode::Down | KeyCode::Char('j')
+                if self.state.view_picker_index + 1 < total_items =>
+            {
+                self.state.view_picker_index += 1;
             }
             KeyCode::Enter => {
                 let index = self.state.view_picker_index;
@@ -2350,9 +2346,9 @@ impl App {
                     self.state.focused_pane = PaneFocus::Pane1;
                 }
             }
-            KeyCode::Char('2') => {
+            KeyCode::Char('2')
                 // Toggle pane 2 zoom (only if preview is enabled)
-                if self.state.show_preview() {
+                if self.state.show_preview() => {
                     if self.state.focused_pane == PaneFocus::Pane2 {
                         // Already focused, zoom out
                         self.state.focused_pane = PaneFocus::None;
@@ -2362,7 +2358,6 @@ impl App {
                     }
                 }
                 // If preview is off, do nothing
-            }
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.should_quit = true;
             }
@@ -2571,12 +2566,11 @@ impl App {
                     self.open_notification_url(&notification);
                 }
             }
-            KeyCode::Char('O') => {
-                if self.state.has_selection() || self.state.selected_notification().is_some() {
+            KeyCode::Char('O')
+                if (self.state.has_selection() || self.state.selected_notification().is_some()) => {
                     self.state.url_menu_index = 0;
                     self.state.input_mode = InputMode::UrlMenu;
                 }
-            }
             KeyCode::Char(' ') => {
                 // Space bar toggles multi-select on notifications
                 if let Some(notification) = self.state.selected_notification() {
@@ -2959,20 +2953,18 @@ impl App {
                 // Scroll preview down (capital J)
                 self.state.preview_scroll = self.state.preview_scroll.saturating_add(1);
             }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL)
                 // Scroll preview up by page (20 lines)
-                if self.state.show_preview() {
+                && self.state.show_preview() => {
                     let page_size = 20;
                     self.state.preview_scroll = self.state.preview_scroll.saturating_sub(page_size);
                 }
-            }
-            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL)
                 // Scroll preview down by page (20 lines)
-                if self.state.show_preview() {
+                && self.state.show_preview() => {
                     let page_size = 20;
                     self.state.preview_scroll = self.state.preview_scroll.saturating_add(page_size);
                 }
-            }
             KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 // Force refresh notifications
                 self.queue_blocking_action(BlockingAction::Refresh, "Refreshing notifications...");
@@ -3037,14 +3029,13 @@ impl App {
                 self.state.search_query.clear();
                 self.state.input_mode = InputMode::Search;
             }
-            KeyCode::Char('x') => {
+            KeyCode::Char('x')
                 // Open action menu (built-in actions are always available)
                 // Only open if there's a notification selected or multi-select is active
-                if self.state.has_selection() || self.state.selected_notification().is_some() {
+                if (self.state.has_selection() || self.state.selected_notification().is_some()) => {
                     self.state.action_menu_index = 0;
                     self.state.input_mode = InputMode::ActionMenu;
                 }
-            }
             KeyCode::Char('V') => {
                 self.state.view_picker_index = 0;
                 self.state.input_mode = InputMode::ViewPicker;
@@ -3304,7 +3295,7 @@ impl App {
             let calculated_offset =
                 selected_idx.saturating_sub(inner_height_usize.saturating_sub(1));
             let max_offset = total_items.saturating_sub(inner_height_usize);
-            calculated_offset.min(max_offset).max(0)
+            calculated_offset.min(max_offset)
         };
 
         // Calculate the clicked item index

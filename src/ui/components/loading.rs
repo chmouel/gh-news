@@ -80,11 +80,7 @@ impl LoadingWidget {
         frame.render_widget(paragraph, chunks[0]);
 
         let progress_percent = if let Some((current, total)) = progress {
-            if total > 0 {
-                ((current * 100) / total) as u16
-            } else {
-                0
-            }
+            (current * 100).checked_div(total).unwrap_or(0) as u16
         } else {
             ((tick / 90) % 100) as u16
         };

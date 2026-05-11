@@ -1,5 +1,5 @@
 use crate::config::{Config, View};
-use crate::error::Result;
+use crate::error::{Error, Result};
 use crate::models::enums::{NotificationReason, NotificationType};
 use crate::models::Notification;
 use regex::Regex;
@@ -52,37 +52,41 @@ impl Filter {
     ) -> Result<Self> {
         let parsed_types: Vec<NotificationType> = exclude_types
             .iter()
-            .filter_map(|s| {
-                let t: NotificationType = s.parse().ok()?;
-                if t == NotificationType::Unknown {
-                    None
+            .map(|s| {
+                let parsed: NotificationType = s.parse().unwrap_or(NotificationType::Unknown);
+                if parsed == NotificationType::Unknown {
+                    Err(Error::Config(format!(
+                        "Unknown notification type in exclude_types: {s}"
+                    )))
                 } else {
-                    Some(t)
+                    Ok(parsed)
                 }
             })
-            .collect();
+            .collect::<Result<_>>()?;
 
         let parsed_reasons: Vec<NotificationReason> = exclude_reasons
             .iter()
-            .filter_map(|s| {
-                let r: NotificationReason = s.parse().ok()?;
-                if r == NotificationReason::Unknown {
-                    None
+            .map(|s| {
+                let parsed: NotificationReason = s.parse().unwrap_or(NotificationReason::Unknown);
+                if parsed == NotificationReason::Unknown {
+                    Err(Error::Config(format!(
+                        "Unknown notification reason in exclude_reasons: {s}"
+                    )))
                 } else {
-                    Some(r)
+                    Ok(parsed)
                 }
             })
-            .collect();
+            .collect::<Result<_>>()?;
 
         let parsed_repos: Vec<RepoPattern> = exclude_repos
             .iter()
-            .filter_map(|s| RepoPattern::new(s).ok())
-            .collect();
+            .map(|s| RepoPattern::new(s))
+            .collect::<Result<_>>()?;
 
         let parsed_subjects: Vec<Regex> = exclude_subjects
             .iter()
-            .filter_map(|s| Regex::new(&format!("(?i){s}")).ok())
-            .collect();
+            .map(|s| Regex::new(&format!("(?i){s}")).map_err(Error::from))
+            .collect::<Result<_>>()?;
 
         let mut patterns = Vec::new();
         if let Some(pattern) = pattern {
@@ -290,18 +294,19 @@ mod tests {
     }
 
     #[test]
-    fn test_unrecognised_type_ignored() {
-        let filter = Filter::new(
-            None,
-            &["NonExistentType".to_string(), "Issue".to_string()],
-            &[],
-            &[],
-            &[],
-        )
-        .unwrap();
-        // Only Issue should be excluded, unrecognised type silently ignored
-        assert_eq!(filter.exclude_types.len(), 1);
-        assert_eq!(filter.exclude_types[0], NotificationType::Issue);
+    fn test_unrecognised_type_returns_error() {
+        let err = Filter::new(None, &["NonExistentType".to_string()], &[], &[], &[]).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("Unknown notification type in exclude_types: NonExistentType"));
+    }
+
+    #[test]
+    fn test_unrecognised_reason_returns_error() {
+        let err = Filter::new(None, &[], &["mystery".to_string()], &[], &[]).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("Unknown notification reason in exclude_reasons: mystery"));
     }
 
     #[test]
@@ -372,5 +377,11 @@ mod tests {
         assert!(!filter.matches(&upper));
         assert!(!filter.matches(&lower));
         assert!(filter.matches(&normal));
+    }
+
+    #[test]
+    fn test_invalid_subject_regex_returns_error() {
+        let err = Filter::new(None, &[], &[], &[], &["[".to_string()]).unwrap_err();
+        assert!(err.to_string().contains("Filter error"));
     }
 }

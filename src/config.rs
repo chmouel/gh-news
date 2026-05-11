@@ -268,8 +268,8 @@ impl Config {
     /// Load configuration from file and environment variables.
     /// Priority: CLI args > env vars > config file > defaults
     /// If config_path is provided, use it instead of the default path.
-    pub fn load(config_path: Option<&Path>) -> Self {
-        let mut config = Self::load_from_file(config_path).unwrap_or_default();
+    pub fn load(config_path: Option<&Path>) -> Result<Self> {
+        let mut config = Self::load_from_file(config_path)?.unwrap_or_default();
 
         // Environment variable overrides for backwards compatibility
         if let Ok(interval) = env::var("GH_NEWS_AUTO_REFRESH_INTERVAL") {
@@ -278,7 +278,7 @@ impl Config {
             }
         }
 
-        config
+        Ok(config)
     }
 
     /// Get the default config file path (~/.config/gh-news/config.toml).
@@ -291,19 +291,40 @@ impl Config {
 
     /// Load configuration from the TOML config file.
     /// If config_path is provided, use it; otherwise use the default path.
-    fn load_from_file(config_path: Option<&Path>) -> Option<Self> {
+    fn load_from_file(config_path: Option<&Path>) -> Result<Option<Self>> {
         let path = match config_path {
             Some(p) => p.to_path_buf(),
-            None => Self::get_config_path().ok()?,
+            None => match Self::get_config_path() {
+                Ok(path) => path,
+                Err(_) => return Ok(None),
+            },
         };
 
         if !path.exists() {
-            return None;
+            if config_path.is_some() {
+                return Err(Error::Config(format!(
+                    "Config file not found: {}",
+                    path.display()
+                )));
+            }
+            return Ok(None);
         }
 
-        let content = fs::read_to_string(&path).ok()?;
-        let config: Config = toml::from_str(&content).ok()?;
-        Some(config)
+        let content = fs::read_to_string(&path).map_err(|e| {
+            Error::Config(format!(
+                "Failed to read config file {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
+        let config: Config = toml::from_str(&content).map_err(|e| {
+            Error::Config(format!(
+                "Failed to parse config file {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
+        Ok(Some(config))
     }
 
     /// Build the colour palette from the configured theme name and any overrides.
@@ -337,6 +358,7 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn test_default_config() {
@@ -548,5 +570,35 @@ red = "#112233"
         // Other colours should remain unchanged from tokyo_night
         let default = crate::ui::theme::ColorPalette::tokyo_night();
         assert_eq!(palette.blue, default.blue);
+    }
+
+    #[test]
+    fn test_load_reports_missing_explicit_config() {
+        let missing = std::env::temp_dir().join(format!(
+            "gh-news-missing-config-{}-{}.toml",
+            std::process::id(),
+            "missing"
+        ));
+        let err = Config::load(Some(&missing)).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains(&format!("Config file not found: {}", missing.display())));
+    }
+
+    #[test]
+    fn test_load_reports_invalid_config() {
+        let path = std::env::temp_dir().join(format!(
+            "gh-news-invalid-config-{}-{}.toml",
+            std::process::id(),
+            "parse"
+        ));
+        fs::write(&path, "auto_refresh_interval = [").unwrap();
+
+        let err = Config::load(Some(&path)).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains(&format!("Failed to parse config file {}", path.display())));
+
+        let _ = fs::remove_file(path);
     }
 }

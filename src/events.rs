@@ -133,7 +133,7 @@ pub fn fetch_watch_repo_events(
         }
     }
 
-    all_notifications.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+    all_notifications.sort_by_key(|n| std::cmp::Reverse(n.updated_at));
 
     enrich_event_titles(client, &mut all_notifications);
 
