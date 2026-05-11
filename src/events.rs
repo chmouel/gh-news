@@ -2,6 +2,7 @@ use crate::api::GitHubClient;
 use crate::error::Result;
 use crate::models::{Notification, NotificationType, Owner, Repository, Subject};
 use chrono::{DateTime, Utc};
+use std::cmp::Reverse;
 
 /// Fetch activity events from the GitHub Events API for the authenticated user.
 ///
@@ -133,7 +134,7 @@ pub fn fetch_watch_repo_events(
         }
     }
 
-    all_notifications.sort_by_key(|n| std::cmp::Reverse(n.updated_at));
+    all_notifications.sort_by_key(|notification| Reverse(notification.updated_at));
 
     enrich_event_titles(client, &mut all_notifications);
 
