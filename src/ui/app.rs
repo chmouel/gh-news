@@ -522,6 +522,10 @@ impl App {
         // No need for a separate thread since we're already polling events
     }
 
+    fn cancel_background_refresh(&mut self) {
+        self.background_refresh_rx = None;
+    }
+
     /// Spawn a background thread to fetch notifications without blocking the UI.
     fn spawn_background_refresh(&mut self) {
         let Some(ref client) = self.api_client else {
@@ -872,6 +876,10 @@ impl App {
     }
 
     fn refresh_notifications(&mut self) -> Result<()> {
+        // A manual refresh should win over any older in-flight background fetch.
+        // Dropping the receiver makes stale background results harmless.
+        self.cancel_background_refresh();
+
         if let Some(ref client) = self.api_client {
             if let Some((all, participating, max_notifications)) = self.refresh_args {
                 // Loading state is managed by the caller to avoid auto-refresh flicker.
@@ -3796,6 +3804,34 @@ mod tests {
         app.merge_refreshed_notifications(vec![notification]);
 
         assert!(app.author_enrichment_rx.is_some());
+    }
+
+    #[test]
+    fn manual_refresh_cancels_inflight_background_refresh() {
+        let mut app = App::new(Config::default());
+        app.set_api_client(GitHubClient::new_test());
+        app.refresh_args = Some((false, false, Some(0)));
+        app.state.set_notifications(vec![notification_with(
+            "current", "Current", "mention", None,
+        )]);
+
+        let (tx, rx) = mpsc::channel();
+        tx.send(Ok(InitialLoadData {
+            notifications: vec![notification_with(
+                "stale",
+                "Stale background",
+                "mention",
+                None,
+            )],
+            pinned_notifications: Vec::new(),
+        }))
+        .unwrap();
+        app.background_refresh_rx = Some(rx);
+
+        app.refresh_notifications().unwrap();
+
+        assert!(app.background_refresh_rx.is_none());
+        assert!(app.state.notifications.is_empty());
     }
 
     #[test]
