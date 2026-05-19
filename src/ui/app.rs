@@ -22,11 +22,13 @@ use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
     MouseEventKind,
 };
+use parking_lot::Mutex;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
@@ -87,6 +89,8 @@ fn osc52_copy(text: &str) {
     let _ = stdout.write_all(format!("\x1b]52;c;{}\x07", encoded).as_bytes());
     let _ = stdout.flush();
 }
+
+const MAX_AUTHOR_ENRICHMENT_WORKERS: usize = 4;
 
 pub struct App {
     state: AppState,
@@ -438,6 +442,18 @@ impl App {
             .collect()
     }
 
+    fn author_enrichment_worker_count(item_count: usize) -> usize {
+        if item_count == 0 {
+            return 0;
+        }
+
+        let available = std::thread::available_parallelism()
+            .map(|parallelism| parallelism.get())
+            .unwrap_or(MAX_AUTHOR_ENRICHMENT_WORKERS);
+
+        item_count.min(available).min(MAX_AUTHOR_ENRICHMENT_WORKERS)
+    }
+
     /// Open a URL in the browser using custom command if configured, otherwise system default.
     fn open_url_in_browser(&self, url: &str) -> std::io::Result<()> {
         if let Some(ref browser_cmd) = self.config.browser_command {
@@ -646,77 +662,92 @@ impl App {
         }
 
         let (tx, rx) = mpsc::channel::<EnrichmentResult>();
+        let worker_count = Self::author_enrichment_worker_count(to_fetch.len());
 
         std::thread::spawn(move || {
             // (id, "author"|"context", value)
             let (inner_tx, inner_rx) = mpsc::channel::<(String, &'static str, String)>();
 
-            for item in to_fetch {
+            let work_queue = Arc::new(Mutex::new(std::collections::VecDeque::from(to_fetch)));
+            let mut workers = Vec::with_capacity(worker_count);
+
+            for _ in 0..worker_count {
                 let client = client.clone();
                 let inner_tx = inner_tx.clone();
-                std::thread::spawn(move || {
-                    // Fetch author from latest_comment_url
-                    if let Some(url) = &item.comment_url {
-                        if let Ok(Some(author)) = client.get_comment_author(url) {
-                            let _ = inner_tx.send((item.id.clone(), "author", author));
-                        }
-                    }
+                let work_queue = Arc::clone(&work_queue);
+                workers.push(std::thread::spawn(move || {
+                    loop {
+                        let Some(item) = work_queue.lock().pop_front() else {
+                            break;
+                        };
 
-                    // Fetch subject state for state_change notifications
-                    if let Some(url) = &item.subject_url {
-                        if let Ok(value) = client.get_json_by_url(url) {
-                            let context = if item.is_pr {
-                                let merged = value
-                                    .get("merged")
-                                    .and_then(|v| v.as_bool())
-                                    .unwrap_or(false);
-                                if merged {
-                                    // Also extract merged_by as author fallback
-                                    if item.comment_url.is_none() {
-                                        if let Some(login) = value
-                                            .get("merged_by")
-                                            .and_then(|u| u.get("login"))
-                                            .and_then(|l| l.as_str())
-                                        {
-                                            let _ = inner_tx.send((
-                                                item.id.clone(),
-                                                "author",
-                                                login.to_string(),
-                                            ));
+                        // Fetch author from latest_comment_url
+                        if let Some(url) = &item.comment_url {
+                            if let Ok(Some(author)) = client.get_comment_author(url) {
+                                let _ = inner_tx.send((item.id.clone(), "author", author));
+                            }
+                        }
+
+                        // Fetch subject state for state_change notifications
+                        if let Some(url) = &item.subject_url {
+                            if let Ok(value) = client.get_json_by_url(url) {
+                                let context = if item.is_pr {
+                                    let merged = value
+                                        .get("merged")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(false);
+                                    if merged {
+                                        // Also extract merged_by as author fallback
+                                        if item.comment_url.is_none() {
+                                            if let Some(login) = value
+                                                .get("merged_by")
+                                                .and_then(|u| u.get("login"))
+                                                .and_then(|l| l.as_str())
+                                            {
+                                                let _ = inner_tx.send((
+                                                    item.id.clone(),
+                                                    "author",
+                                                    login.to_string(),
+                                                ));
+                                            }
                                         }
+                                        "merged".to_string()
+                                    } else {
+                                        value
+                                            .get("state")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("open")
+                                            .to_lowercase()
                                     }
-                                    "merged".to_string()
                                 } else {
-                                    value
+                                    let state = value
                                         .get("state")
                                         .and_then(|v| v.as_str())
                                         .unwrap_or("open")
-                                        .to_lowercase()
-                                }
-                            } else {
-                                let state = value
-                                    .get("state")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("open")
-                                    .to_lowercase();
-                                if state == "closed" {
-                                    if let Some(reason) =
-                                        value.get("state_reason").and_then(|v| v.as_str())
-                                    {
-                                        format!("closed:{reason}")
+                                        .to_lowercase();
+                                    if state == "closed" {
+                                        if let Some(reason) =
+                                            value.get("state_reason").and_then(|v| v.as_str())
+                                        {
+                                            format!("closed:{reason}")
+                                        } else {
+                                            state
+                                        }
                                     } else {
                                         state
                                     }
-                                } else {
-                                    state
-                                }
-                            };
-                            let _ = inner_tx.send((item.id.clone(), "context", context));
+                                };
+                                let _ = inner_tx.send((item.id.clone(), "context", context));
+                            }
                         }
                     }
-                });
+                }));
             }
             drop(inner_tx);
+
+            for worker in workers {
+                let _ = worker.join();
+            }
 
             let mut authors = std::collections::HashMap::new();
             let mut contexts = std::collections::HashMap::new();
@@ -3832,6 +3863,13 @@ mod tests {
         app.refresh_notifications().unwrap();
 
         assert!(app.previous_notification_ids.is_empty());
+    }
+
+    #[test]
+    fn author_enrichment_worker_count_is_bounded() {
+        assert_eq!(App::author_enrichment_worker_count(0), 0);
+        assert_eq!(App::author_enrichment_worker_count(1), 1);
+        assert!(App::author_enrichment_worker_count(128) <= MAX_AUTHOR_ENRICHMENT_WORKERS);
     }
 
     #[test]
