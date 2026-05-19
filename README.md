@@ -14,7 +14,7 @@ GitHub notifications TUI built with Rust and ratatui.
 - Installs as a native gh CLI extension
 - Vim-style navigation with j/k keys
 - Multi-select for batch operations on notifications
-- Auto-refresh with configurable interva
+- Auto-refresh with configurable interval
 - Preview notifications with rich details (GraphQL-powered for Issues, PRs, Discussions, Commits)
 - Regex filtering to filter specific notifications
 - Pin important notifications
@@ -26,6 +26,7 @@ GitHub notifications TUI built with Rust and ratatui.
 - Named views for instant filter preset switching
 - Mark notifications read/unread individually or in bulk
 - Static display mode for scripting and pipelines
+- Progress reporting for supporting terminals via OSC `9;4`
 - GitHub Actions workflow run notifications (opt-in)
 - GitHub Activity Events feed (opt-in)
 
@@ -56,12 +57,6 @@ Easiest way is to just run `gh auth login` if you have the GitHub CLI installed.
 
 ## Usage
 
-Just run it:
-
-```bash
-gh news
-```
-
 ### Options
 
 - `-a, --all` - Show all notifications (not just unread)
@@ -79,7 +74,7 @@ gh news
 ```bash
 gh news --filter "my-org/my-repo" # Filter to specific repos
 gh news --participating # Only things you're involved in
-gh news --mark-read # Mark everything read:
+gh news --mark-read # Mark everything read
 gh news --static-display | grep "something" # List notifications without TUI
 ```
 
@@ -165,7 +160,7 @@ exclude_repos = ["noisy-org/*"]          # by repo: exact or glob pattern
 exclude_subjects = ["^Bump ", "\\[bot\\]"] # by title: regex patterns (case-insensitive)
 
 # Theme
-theme = "tokyo_night"            # "tokyo_night", "catppuccin_mocha", "catppuccin_latte", "nord", "dracula", "gruvbox_dark"
+theme = "tokyo_night"            # see Themes section below for all options
 # [theme_colors]                 # override individual palette colours (hex)
 # blue = "#7aa2f7"
 
@@ -210,7 +205,7 @@ watch_repos = []             # repos to watch for all events, e.g. ["owner/repo"
 
 ### Themes
 
-gh-news ships with six built-in colour themes. Set the `theme` key in your
+gh-news ships with built-in colour themes. Set the `theme` key in your
 config to switch:
 
 | Name | Style |
@@ -255,6 +250,16 @@ red  = "#ff0000"
 
 Available colour fields: `bg`, `bg_dark`, `bg_highlight`, `fg`, `fg_muted`,
 `fg_dim`, `blue`, `cyan`, `green`, `yellow`, `red`, `magenta`, `orange`.
+
+#### Theme Screenshots
+
+**rose_pine_dawn**
+
+<img width="3730" height="2484" alt="rose_pine_dawn" src="https://github.com/user-attachments/assets/0179bf1c-1ef8-437b-86e7-60bdf993f423" />
+
+**one_light**
+
+<img width="3730" height="2484" alt="one_light" src="https://github.com/user-attachments/assets/9e7e5f22-a108-4262-9eab-7c5d1f7d2aff" />
 
 ### Notification Hooks
 
@@ -316,10 +321,6 @@ The action menu (press `x`) always includes these built-in actions:
 
 Snoozed notifications are hidden from the default view and stored locally. They reappear automatically once the snooze period expires. Mute actions are reflected back to GitHub immediately.
 
-All built-in actions support multi-select: select notifications with `Space`, then press `x` and choose an action to apply it to all selected notifications.
-
-Without a manual selection, bulk actions such as `Ctrl+A` apply to the current filtered list, including any active named view and `/` search.
-
 ### Custom Actions
 
 Define custom actions that can be run on notifications via the action menu (press `x`):
@@ -343,11 +344,6 @@ name = "Browse with fzf"
 command = "echo {url} | fzf --preview 'curl -s {}'"
 interactive = true  # Suspend TUI for interactive commands
 ```
-
-Custom actions appear after the built-in actions by default. Set `priority` to a
-number to move a custom action earlier in the menu; lower numbers sort first.
-For example, `priority = 1` places an action above the built-in mute and snooze
-entries.
 
 Actions support placeholder substitution:
 
@@ -399,11 +395,11 @@ When you select multiple notifications and run this action, it executes once as 
 | `interactive` | `false` | Suspend TUI and run command with full terminal access (for TUI tools like fzf, vim) |
 | `show_output` | `false` | Capture command output and display it in a scrollable TUI popup (incompatible with `interactive`) |
 
-Actions work with multi-select: select multiple notifications with `Space`, then press `x` to run an action on all of them. With singular placeholders, the command runs once per notification. With plural placeholders (e.g., `{urls}`), the command runs once with all values.
+With singular placeholders, the command runs once per selected notification. With plural placeholders (e.g., `{urls}`), it runs once with all values.
 
 ### Named Views
 
-Named views are saved filter presets you can switch between instantly with `V`. Six built-in views are always available, and you can add your own in `config.toml`.
+Named views are saved filter presets you can switch between instantly with `V`. Several built-in views are always available, and you can add your own in `config.toml`.
 
 **Built-in views:**
 
@@ -416,9 +412,7 @@ Named views are saved filter presets you can switch between instantly with `V`. 
 | My Activity | Notifications on threads you opened or created |
 | Security | Security alerts and advisories |
 | Dependabot | Dependabot version-bump PRs (titles matching "Bump X from Y to Z") and any notification where "dependabot" appears |
-| Bots | Activity from bots whose GitHub login ends in `[bot]` (e.g. `copilot-pull-request-reviewer[bot]`, `dependabot[bot]`, `github-actions[bot]`). Matched against the author field — notifications appear here after background enrichment completes. |
-
-When a view is active, the list panel title and border turn cyan and show the view name, so it is always clear what is being filtered.
+| Bots | Activity from bots whose login ends in `[bot]` (matched against the enriched author field) |
 
 **Custom views:**
 
@@ -451,27 +445,13 @@ filter = "dependabot"
 | `exclude_repos` | Override global `exclude_repos` for this view (glob patterns) |
 | `exclude_subjects` | Override global `exclude_subjects` for this view (regex, case-insensitive) |
 
-User-defined views appear after the built-in views in the picker. Press `V` to open the picker, navigate with `j`/`k` or press the item number, and `Esc` to close without changing. Selecting `0. Default` clears the active view and restores the session's base filter, including any CLI `--filter` supplied at launch.
-
-The `/` search filter works within the active view — pressing `Esc` in search mode returns to the view filter rather than clearing it entirely.
-
-Bulk actions without a manual selection also follow the current view/search filter, so `Ctrl+A` acts on the visible filtered result set rather than the whole inbox.
+User-defined views appear after the built-in views in the picker. Selecting `0. Default` clears the active view and restores the session's base filter. The `/` search works within the active view, and bulk actions (`Ctrl+A`) apply to the visible filtered result set.
 
 ## Environment Variables
 
 - `GH_TOKEN` - GitHub personal access token (takes precedence over `GITHUB_TOKEN`)
 - `GITHUB_TOKEN` - GitHub personal access token (fallback if `GH_TOKEN` not set)
 - `GH_NEWS_AUTO_REFRESH_INTERVAL` - Auto-refresh interval in seconds (default: 120). Set to 0 to disable.
-
-## Theme
-
-### rose_pine_dawn
-
-<img width="3730" height="2484" alt="image" src="https://github.com/user-attachments/assets/0179bf1c-1ef8-437b-86e7-60bdf993f423" />
-
-### one_light
-
-<img width="3730" height="2484" alt="image" src="https://github.com/user-attachments/assets/9e7e5f22-a108-4262-9eab-7c5d1f7d2aff" />
 
 ## License
 
