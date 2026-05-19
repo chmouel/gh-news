@@ -430,6 +430,14 @@ impl App {
         Ok(())
     }
 
+    fn collect_notification_ids(&self) -> HashSet<String> {
+        self.state
+            .notifications
+            .iter()
+            .map(|n| n.id.clone())
+            .collect()
+    }
+
     /// Open a URL in the browser using custom command if configured, otherwise system default.
     fn open_url_in_browser(&self, url: &str) -> std::io::Result<()> {
         if let Some(ref browser_cmd) = self.config.browser_command {
@@ -926,17 +934,11 @@ impl App {
                     std::collections::HashSet::new()
                 };
 
+                let current_ids = self.collect_notification_ids();
+
                 // Execute hook for new notifications if configured
                 if let Some(ref hook_command) = self.config.on_new_notification_command {
                     if !hook_command.is_empty() {
-                        // Build set of current notification IDs
-                        let current_ids: HashSet<String> = self
-                            .state
-                            .notifications
-                            .iter()
-                            .map(|n| n.id.clone())
-                            .collect();
-
                         // Only execute hooks if we have a baseline (not first load)
                         if !self.previous_notification_ids.is_empty() {
                             // Find IDs that are new (in current but not in previous)
@@ -958,22 +960,10 @@ impl App {
                                 }
                             }
                         }
-
-                        // Update previous IDs for next refresh cycle
-                        self.previous_notification_ids = current_ids;
                     }
                 }
 
-                // Always update previous IDs if not done above (no hook configured)
-                if self.previous_notification_ids.is_empty() && !self.state.notifications.is_empty()
-                {
-                    self.previous_notification_ids = self
-                        .state
-                        .notifications
-                        .iter()
-                        .map(|n| n.id.clone())
-                        .collect();
-                }
+                self.previous_notification_ids = current_ids;
 
                 // Restore filter
                 self.state.set_filter(current_filter);
@@ -1060,12 +1050,7 @@ impl App {
         };
 
         // Execute hook for new notifications if configured
-        let current_ids: HashSet<String> = self
-            .state
-            .notifications
-            .iter()
-            .map(|n| n.id.clone())
-            .collect();
+        let current_ids = self.collect_notification_ids();
 
         if let Some(ref hook_command) = self.config.on_new_notification_command.clone() {
             if !hook_command.is_empty() && !self.previous_notification_ids.is_empty() {
@@ -3832,6 +3817,21 @@ mod tests {
 
         assert!(app.background_refresh_rx.is_none());
         assert!(app.state.notifications.is_empty());
+    }
+
+    #[test]
+    fn manual_refresh_updates_previous_notification_ids_without_hook() {
+        let mut app = App::new(Config::default());
+        app.set_api_client(GitHubClient::new_test());
+        app.refresh_args = Some((false, false, Some(0)));
+        app.previous_notification_ids.insert("stale".to_string());
+        app.state.set_notifications(vec![notification_with(
+            "current", "Current", "mention", None,
+        )]);
+
+        app.refresh_notifications().unwrap();
+
+        assert!(app.previous_notification_ids.is_empty());
     }
 
     #[test]
