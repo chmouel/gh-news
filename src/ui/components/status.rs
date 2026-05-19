@@ -145,16 +145,16 @@ impl StatusWidget {
 }
 
 fn refresh_indicator_text(auto_refresh_interval: u64, refresh: &RefreshState) -> String {
-    if auto_refresh_interval == 0 {
-        return String::new();
-    }
-
     if refresh.is_refreshing {
         let frame = REFRESH_SPINNER_FRAMES
             .get(refresh.spinner_frame_index % REFRESH_SPINNER_FRAMES.len())
             .copied()
             .unwrap_or('|');
         return format!("{frame} refreshing...");
+    }
+
+    if auto_refresh_interval == 0 {
+        return String::new();
     }
 
     let elapsed = refresh.last_refresh.elapsed().as_secs();
@@ -202,5 +202,27 @@ mod tests {
         };
 
         assert_eq!(refresh_indicator_text(120, &refresh), "🔄 1m30s");
+    }
+
+    #[test]
+    fn refresh_indicator_text_shows_spinner_even_without_auto_refresh_interval() {
+        let refresh = RefreshState {
+            last_refresh: Instant::now(),
+            is_refreshing: true,
+            spinner_frame_index: 2,
+        };
+
+        assert_eq!(refresh_indicator_text(0, &refresh), "- refreshing...");
+    }
+
+    #[test]
+    fn refresh_indicator_text_is_empty_when_idle_and_auto_refresh_disabled() {
+        let refresh = RefreshState {
+            last_refresh: Instant::now(),
+            is_refreshing: false,
+            spinner_frame_index: 0,
+        };
+
+        assert_eq!(refresh_indicator_text(0, &refresh), "");
     }
 }

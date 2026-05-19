@@ -26,14 +26,17 @@ use config::Config;
 use error::Result;
 use filter::Filter;
 use notifications::{fetch_extra_sources, fetch_notifications, NotificationFetchOptions};
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::mpsc::channel;
 use std::thread;
-use terminal::Terminal;
+use terminal::{ProgressState, Terminal};
 use ui::{App, InitialLoadData, PendingStateSettings};
 
 fn main() {
     if let Err(e) = run() {
+        let _ = std::io::stdout().write_all(&ProgressState::Error(None).osc9_4_sequence());
+        let _ = std::io::stdout().flush();
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }

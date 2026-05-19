@@ -13,7 +13,7 @@ use crate::state::{
     AppState, CommandOutputData, ConfirmAction, InputMode, MarkAllOption, PaneFocus, PreviewMode,
 };
 use crate::state_file::AppStateFile;
-use crate::terminal::Terminal;
+use crate::terminal::{ProgressState, Terminal};
 use crate::ui::components::{
     action_menu, command_output, confirm, filter, help, help_search, list, loading, preview,
     status, url_menu, view_picker,
@@ -276,6 +276,8 @@ impl App {
         rx: Receiver<crate::error::Result<InitialLoadData>>,
     ) {
         self.background_refresh_rx = Some(rx);
+        self.state.status_message = Some("Refreshing from GitHub...".to_string());
+        self.last_refresh = Instant::now();
     }
 
     pub fn set_api_client(&mut self, client: crate::api::GitHubClient) {
@@ -585,6 +587,7 @@ impl App {
         });
 
         self.background_refresh_rx = Some(rx);
+        self.state.status_message = Some("Refreshing from GitHub...".to_string());
         self.last_refresh = Instant::now();
     }
 
@@ -774,11 +777,35 @@ impl App {
         self.pending_blocking_action = Some(action);
     }
 
+    fn terminal_progress_state(&self) -> ProgressState {
+        if self.state.loading {
+            if let Some((current, total)) = self.state.loading_progress {
+                let percent = if total == 0 {
+                    0
+                } else {
+                    current.saturating_mul(100).checked_div(total).unwrap_or(0)
+                };
+                ProgressState::Normal(percent.min(100) as u8)
+            } else {
+                ProgressState::Indeterminate
+            }
+        } else if self.background_refresh_rx.is_some() {
+            ProgressState::Indeterminate
+        } else {
+            ProgressState::Hidden
+        }
+    }
+
+    fn sync_terminal_progress(&self, terminal: &mut Terminal) -> Result<()> {
+        terminal.set_progress(self.terminal_progress_state())
+    }
+
     fn perform_blocking_action(
         &mut self,
         action: BlockingAction,
         terminal: &mut Terminal,
     ) -> Result<Option<String>> {
+        self.sync_terminal_progress(terminal)?;
         match action {
             BlockingAction::Refresh => {
                 self.refresh_notifications()?;
@@ -817,6 +844,7 @@ impl App {
                     for (i, notification_id) in to_process.iter().enumerate() {
                         // Update progress
                         self.state.loading_progress = Some((i + 1, total));
+                        self.sync_terminal_progress(terminal)?;
 
                         // Re-render every 5 items to show progress
                         if i % 5 == 0 || i == total - 1 {
@@ -836,6 +864,7 @@ impl App {
 
                     // Clear progress and restore client
                     self.state.loading_progress = None;
+                    self.sync_terminal_progress(terminal)?;
                     self.api_client = Some(client);
 
                     self.refresh_notifications()?;
@@ -874,6 +903,7 @@ impl App {
                     for (i, notification_id) in notification_ids.iter().enumerate() {
                         // Update progress
                         self.state.loading_progress = Some((i + 1, total));
+                        self.sync_terminal_progress(terminal)?;
 
                         // Re-render every 5 items to show progress
                         if i % 5 == 0 || i == total - 1 {
@@ -897,6 +927,7 @@ impl App {
 
                     // Clear progress and restore client
                     self.state.loading_progress = None;
+                    self.sync_terminal_progress(terminal)?;
                     self.api_client = Some(client);
 
                     self.refresh_notifications()?;
@@ -1271,6 +1302,7 @@ impl App {
 
     pub fn run(&mut self, terminal: &mut Terminal) -> Result<()> {
         // Initial draw to show the UI
+        self.sync_terminal_progress(terminal)?;
         terminal.draw(|frame| {
             self.render(frame);
         })?;
@@ -1466,6 +1498,7 @@ impl App {
             }
 
             // Always redraw after event loop - native ratatui pattern
+            self.sync_terminal_progress(terminal)?;
             terminal.draw(|frame| {
                 self.render(frame);
             })?;
@@ -3809,6 +3842,20 @@ mod tests {
     }
 
     #[test]
+    fn start_background_refresh_sets_visible_status_message() {
+        let mut app = App::new(Config::default());
+        let (_tx, rx) = mpsc::channel();
+
+        app.start_background_refresh(rx);
+
+        assert_eq!(
+            app.state.status_message.as_deref(),
+            Some("Refreshing from GitHub...")
+        );
+        assert!(app.background_refresh_rx.is_some());
+    }
+
+    #[test]
     fn state_change_enrichment_runs_with_cached_context() {
         let mut app = App::new(Config::default());
         app.set_api_client(GitHubClient::new_test());
@@ -3848,6 +3895,24 @@ mod tests {
 
         assert!(app.background_refresh_rx.is_none());
         assert!(app.state.notifications.is_empty());
+    }
+
+    #[test]
+    fn terminal_progress_state_uses_indeterminate_for_background_refresh() {
+        let mut app = App::new(Config::default());
+        let (_tx, rx) = mpsc::channel();
+        app.background_refresh_rx = Some(rx);
+
+        assert_eq!(app.terminal_progress_state(), ProgressState::Indeterminate);
+    }
+
+    #[test]
+    fn terminal_progress_state_uses_percentage_for_blocking_progress() {
+        let mut app = App::new(Config::default());
+        app.state.loading = true;
+        app.state.loading_progress = Some((3, 4));
+
+        assert_eq!(app.terminal_progress_state(), ProgressState::Normal(75));
     }
 
     #[test]
