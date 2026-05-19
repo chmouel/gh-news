@@ -62,8 +62,6 @@ Just run it:
 gh news
 ```
 
-gh-news shows a loading screen while fetching notifications during start-up and manual refreshes.
-
 ### Options
 
 - `-a, --all` - Show all notifications (not just unread)
