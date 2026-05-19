@@ -6,7 +6,10 @@ use crate::filter::Filter;
 use crate::hooks;
 use crate::models::Notification;
 use crate::models::NotificationType;
-use crate::notifications::{fetch_extra_sources, fetch_notifications, NotificationFetchOptions};
+use crate::notifications::{
+    fetch_extra_sources, fetch_extra_sources_with_progress, fetch_notifications, refresh_stages,
+    NotificationFetchOptions, RefreshStage,
+};
 use crate::preview::PreviewData;
 use crate::preview_manager::{CacheStatus, PreviewManager, PRIORITY_HIGH, PRIORITY_LOW};
 use crate::state::{
@@ -800,6 +803,24 @@ impl App {
         terminal.set_progress(self.terminal_progress_state())
     }
 
+    fn set_loading_stage(
+        &mut self,
+        terminal: Option<&mut Terminal>,
+        stage: RefreshStage,
+        current: usize,
+        total: usize,
+    ) -> Result<()> {
+        self.state.loading_message = stage.loading_message().to_string();
+        self.state.loading_progress = Some((current, total));
+
+        if let Some(terminal) = terminal {
+            self.sync_terminal_progress(terminal)?;
+            terminal.draw(|frame| self.render(frame))?;
+        }
+
+        Ok(())
+    }
+
     fn perform_blocking_action(
         &mut self,
         action: BlockingAction,
@@ -808,7 +829,7 @@ impl App {
         self.sync_terminal_progress(terminal)?;
         match action {
             BlockingAction::Refresh => {
-                self.refresh_notifications()?;
+                self.refresh_notifications(Some(terminal))?;
                 Ok(None)
             }
             BlockingAction::MarkAllRead { selected } => {
@@ -867,7 +888,7 @@ impl App {
                     self.sync_terminal_progress(terminal)?;
                     self.api_client = Some(client);
 
-                    self.refresh_notifications()?;
+                    self.refresh_notifications(Some(terminal))?;
                 }
                 let msg = match (selected, is_filtered) {
                     (MarkAllOption::MarkReadAndArchive, true) => {
@@ -930,7 +951,7 @@ impl App {
                     self.sync_terminal_progress(terminal)?;
                     self.api_client = Some(client);
 
-                    self.refresh_notifications()?;
+                    self.refresh_notifications(Some(terminal))?;
                 }
                 let msg = match option {
                     MarkAllOption::MarkReadAndArchive => {
@@ -945,28 +966,59 @@ impl App {
         }
     }
 
-    fn refresh_notifications(&mut self) -> Result<()> {
+    fn refresh_notifications(&mut self, mut terminal: Option<&mut Terminal>) -> Result<()> {
         // A manual refresh should win over any older in-flight background fetch.
         // Dropping the receiver makes stale background results harmless.
         self.cancel_background_refresh();
 
-        if let Some(ref client) = self.api_client {
+        if let Some(client) = self.api_client.clone() {
             if let Some((all, participating, max_notifications)) = self.refresh_args {
                 // Loading state is managed by the caller to avoid auto-refresh flicker.
+                let config = self.config.clone();
+                let stages = refresh_stages(&config);
+                let total_stages = stages.len();
+                let mut current_stage = 1;
+                self.set_loading_stage(
+                    terminal.as_deref_mut(),
+                    RefreshStage::FetchNotifications,
+                    current_stage,
+                    total_stages,
+                )?;
 
                 let mut all_notifications = fetch_notifications(
-                    client,
+                    &client,
                     NotificationFetchOptions {
                         show_all: all,
                         participating,
                         max_notifications,
-                        per_page: self.config.pagination_size,
+                        per_page: config.pagination_size,
                     },
                 )?;
 
                 // Fetch opt-in extra sources (Actions, Events)
-                let extra = fetch_extra_sources(client, &self.config, &all_notifications);
+                let extra = fetch_extra_sources_with_progress(
+                    &client,
+                    &config,
+                    &all_notifications,
+                    |stage| {
+                        current_stage += 1;
+                        self.set_loading_stage(
+                            terminal.as_deref_mut(),
+                            stage,
+                            current_stage,
+                            total_stages,
+                        )
+                    },
+                )?;
                 all_notifications.extend(extra);
+
+                current_stage += 1;
+                self.set_loading_stage(
+                    terminal,
+                    RefreshStage::UpdateLocalState,
+                    current_stage,
+                    total_stages,
+                )?;
 
                 // Filter out previously dismissed synthetic notifications
                 filter_dismissed_synthetic(&mut all_notifications);
@@ -3891,7 +3943,7 @@ mod tests {
         .unwrap();
         app.background_refresh_rx = Some(rx);
 
-        app.refresh_notifications().unwrap();
+        app.refresh_notifications(None).unwrap();
 
         assert!(app.background_refresh_rx.is_none());
         assert!(app.state.notifications.is_empty());
@@ -3925,9 +3977,31 @@ mod tests {
             "current", "Current", "mention", None,
         )]);
 
-        app.refresh_notifications().unwrap();
+        app.refresh_notifications(None).unwrap();
 
         assert!(app.previous_notification_ids.is_empty());
+    }
+
+    #[test]
+    fn manual_refresh_uses_final_stage_message_and_progress() {
+        let config = Config {
+            enable_actions: true,
+            actions_repos: vec!["owner/*".to_string()],
+            enable_events: true,
+            watch_repos: vec!["owner/repo".to_string()],
+            ..Config::default()
+        };
+        let mut app = App::new(config);
+        app.set_api_client(GitHubClient::new_test());
+        app.refresh_args = Some((false, false, Some(0)));
+
+        app.refresh_notifications(None).unwrap();
+
+        assert_eq!(
+            app.state.loading_message,
+            RefreshStage::UpdateLocalState.loading_message()
+        );
+        assert_eq!(app.state.loading_progress, Some((6, 6)));
     }
 
     #[test]

@@ -57,6 +57,8 @@ Easiest way is to just run `gh auth login` if you have the GitHub CLI installed.
 
 ## Usage
 
+Press `Ctrl+R` to force a refresh. gh-news shows the current refresh stage in the loading panel while it refreshes notifications and any enabled extra sources.
+
 ### Options
 
 - `-a, --all` - Show all notifications (not just unread)

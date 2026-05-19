@@ -3,6 +3,31 @@ use crate::config::Config;
 use crate::error::Result;
 use crate::models::Notification;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefreshStage {
+    FetchNotifications,
+    ResolveActionRepos,
+    FetchWorkflowRuns,
+    FetchActivityEvents,
+    ResolveWatchRepos,
+    FetchWatchRepoEvents,
+    UpdateLocalState,
+}
+
+impl RefreshStage {
+    pub fn loading_message(self) -> &'static str {
+        match self {
+            Self::FetchNotifications => "Refreshing GitHub notifications...",
+            Self::ResolveActionRepos => "Resolving workflow run repositories...",
+            Self::FetchWorkflowRuns => "Refreshing workflow runs...",
+            Self::FetchActivityEvents => "Refreshing activity events...",
+            Self::ResolveWatchRepos => "Resolving watched repositories...",
+            Self::FetchWatchRepoEvents => "Refreshing watched-repo events...",
+            Self::UpdateLocalState => "Updating local state...",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct NotificationFetchOptions {
     pub show_all: bool,
@@ -26,6 +51,31 @@ pub fn fetch_notifications(
     NotificationFetcher::new(client, options).fetch()
 }
 
+pub fn refresh_stages(config: &Config) -> Vec<RefreshStage> {
+    let mut stages = vec![RefreshStage::FetchNotifications];
+
+    if config.enable_actions {
+        if has_glob_patterns(&config.actions_repos) {
+            stages.push(RefreshStage::ResolveActionRepos);
+        }
+        stages.push(RefreshStage::FetchWorkflowRuns);
+    }
+
+    if config.enable_events {
+        stages.push(RefreshStage::FetchActivityEvents);
+    }
+
+    if !config.watch_repos.is_empty() {
+        if has_glob_patterns(&config.watch_repos) {
+            stages.push(RefreshStage::ResolveWatchRepos);
+        }
+        stages.push(RefreshStage::FetchWatchRepoEvents);
+    }
+
+    stages.push(RefreshStage::UpdateLocalState);
+    stages
+}
+
 /// Fetch additional notifications from opt-in sources (Actions, Events).
 ///
 /// These are merged with standard notifications after the main fetch.
@@ -36,6 +86,19 @@ pub fn fetch_extra_sources(
     config: &Config,
     standard_notifications: &[Notification],
 ) -> Vec<Notification> {
+    fetch_extra_sources_with_progress(client, config, standard_notifications, |_| Ok(()))
+        .unwrap_or_default()
+}
+
+pub fn fetch_extra_sources_with_progress<F>(
+    client: &GitHubClient,
+    config: &Config,
+    standard_notifications: &[Notification],
+    mut on_stage: F,
+) -> Result<Vec<Notification>>
+where
+    F: FnMut(RefreshStage) -> Result<()>,
+{
     let mut extra = Vec::new();
 
     if config.enable_actions {
@@ -49,10 +112,14 @@ pub fn fetch_extra_sources(
             repos.dedup();
             repos
         } else {
+            if has_glob_patterns(&config.actions_repos) {
+                on_stage(RefreshStage::ResolveActionRepos)?;
+            }
             // Expand glob patterns via the GitHub API
             expand_repo_globs(client, &config.actions_repos)
         };
 
+        on_stage(RefreshStage::FetchWorkflowRuns)?;
         if let Ok(runs) = crate::workflow_runs::fetch_workflow_run_notifications(
             client,
             &repos,
@@ -63,13 +130,18 @@ pub fn fetch_extra_sources(
     }
 
     if config.enable_events {
+        on_stage(RefreshStage::FetchActivityEvents)?;
         if let Ok(events) = crate::events::fetch_activity_events(client, &config.event_types) {
             extra.extend(events);
         }
     }
 
     if !config.watch_repos.is_empty() {
+        if has_glob_patterns(&config.watch_repos) {
+            on_stage(RefreshStage::ResolveWatchRepos)?;
+        }
         let repos = expand_repo_globs(client, &config.watch_repos);
+        on_stage(RefreshStage::FetchWatchRepoEvents)?;
         if let Ok(events) =
             crate::events::fetch_watch_repo_events(client, &repos, &config.event_types)
         {
@@ -87,7 +159,7 @@ pub fn fetch_extra_sources(
         seen_event_ids.insert(raw_id.to_string())
     });
 
-    extra
+    Ok(extra)
 }
 
 /// Expand glob patterns in actions_repos into concrete repo names.
@@ -130,6 +202,12 @@ fn expand_repo_globs(client: &GitHubClient, patterns: &[String]) -> Vec<String> 
         }
     }
     result
+}
+
+fn has_glob_patterns(patterns: &[String]) -> bool {
+    patterns
+        .iter()
+        .any(|pattern| pattern.contains('*') || pattern.contains('?'))
 }
 
 struct NotificationFetcher<'a> {
@@ -270,5 +348,40 @@ mod tests {
         assert_eq!(repos, vec![String::from("owner/deploy-prod")]);
 
         server.join();
+    }
+
+    #[test]
+    fn refresh_stages_include_only_base_steps_by_default() {
+        assert_eq!(
+            refresh_stages(&Config::default()),
+            vec![
+                RefreshStage::FetchNotifications,
+                RefreshStage::UpdateLocalState,
+            ]
+        );
+    }
+
+    #[test]
+    fn refresh_stages_include_verbose_optional_steps() {
+        let config = Config {
+            enable_actions: true,
+            actions_repos: vec!["owner/*".to_string()],
+            enable_events: true,
+            watch_repos: vec!["owner/repo".to_string(), "org/*".to_string()],
+            ..Config::default()
+        };
+
+        assert_eq!(
+            refresh_stages(&config),
+            vec![
+                RefreshStage::FetchNotifications,
+                RefreshStage::ResolveActionRepos,
+                RefreshStage::FetchWorkflowRuns,
+                RefreshStage::FetchActivityEvents,
+                RefreshStage::ResolveWatchRepos,
+                RefreshStage::FetchWatchRepoEvents,
+                RefreshStage::UpdateLocalState,
+            ]
+        );
     }
 }
