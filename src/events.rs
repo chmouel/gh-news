@@ -2,9 +2,10 @@ use crate::api::GitHubClient;
 use crate::error::Result;
 use crate::models::{Notification, NotificationType, Owner, Repository, Subject};
 use chrono::{DateTime, Utc};
+use parking_lot::Mutex;
 use std::cmp::Reverse;
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 
 const MAX_EVENT_WORKERS: usize = 4;
@@ -128,7 +129,7 @@ pub fn fetch_watch_repo_events(
         workers.push(thread::spawn(move || {
             let mut notifications = Vec::new();
             loop {
-                let Some(repo_full) = work_queue.lock().unwrap().pop_front() else {
+                let Some(repo_full) = work_queue.lock().pop_front() else {
                     break;
                 };
 

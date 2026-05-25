@@ -182,7 +182,7 @@ fn preview_worker_thread(
             should_persist = false;
         }
 
-        {
+        let snapshot = {
             let mut cache_lock = cache.lock();
             cache_lock.insert(
                 request.cache_key.clone(),
@@ -192,8 +192,13 @@ fn preview_worker_thread(
                 },
             );
             if should_persist {
-                persist_cache_snapshot(&cache_lock);
+                Some(cache_lock.clone())
+            } else {
+                None
             }
+        };
+        if let Some(snapshot) = snapshot {
+            persist_cache_snapshot(&snapshot);
         }
 
         loading.lock().remove(&request.cache_key);
