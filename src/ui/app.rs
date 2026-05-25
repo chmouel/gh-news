@@ -1824,7 +1824,7 @@ impl App {
             self.session_picker_widget.render(
                 frame,
                 size,
-                &self.state.sessions.clone(),
+                &self.state.sessions,
                 self.state.session_picker_index,
                 self.state.active_session_index,
             );
