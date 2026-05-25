@@ -1,5 +1,6 @@
 use crate::error::{Error, Result};
 use crate::models::Notification;
+use crate::preview::PreviewData;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -296,6 +297,35 @@ pub fn save_context_cache(contexts: &HashMap<String, String>) -> Result<()> {
 /// Load the previously persisted context cache, returning an empty map on any error.
 pub fn load_context_cache() -> HashMap<String, String> {
     get_context_cache_path()
+        .ok()
+        .and_then(|p| fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default()
+}
+
+/// Persisted preview payload keyed by `Notification::preview_cache_key`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersistedPreviewCacheEntry {
+    pub data: PreviewData,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+/// Path of the preview cache file (sibling of the state file).
+fn get_preview_cache_path() -> Result<PathBuf> {
+    let state_path = current_state_base_path()?;
+    Ok(adjacent_path(&state_path, "previews.json"))
+}
+
+/// Persist preview details so startup can show already-fetched previews quickly.
+pub fn save_preview_cache(cache: &HashMap<String, PersistedPreviewCacheEntry>) -> Result<()> {
+    let path = get_preview_cache_path()?;
+    let json = serde_json::to_string(cache).map_err(|e| Error::Config(e.to_string()))?;
+    write_atomically(&path, json.as_bytes())
+}
+
+/// Load persisted previews, returning an empty map on any error.
+pub fn load_preview_cache() -> HashMap<String, PersistedPreviewCacheEntry> {
+    get_preview_cache_path()
         .ok()
         .and_then(|p| fs::read_to_string(p).ok())
         .and_then(|s| serde_json::from_str(&s).ok())

@@ -1,6 +1,7 @@
 use crate::api::GitHubClient;
 use crate::models::Notification;
 use crate::preview::{PreviewData, PreviewFetcher};
+use crate::state_file::PersistedPreviewCacheEntry;
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use std::collections::{BinaryHeap, HashMap, HashSet};
@@ -168,6 +169,7 @@ fn preview_worker_thread(
         }
 
         let notification_updated_at = request.notification.updated_at;
+        let mut should_persist = true;
         let data = match result {
             Ok(d) => d,
             Err(error) => PreviewData::Generic {
@@ -175,13 +177,24 @@ fn preview_worker_thread(
                 body: format!("Error loading details\n\n{}", error),
             },
         };
-        cache.lock().insert(
-            request.cache_key.clone(),
-            CachedPreview {
-                data,
-                updated_at: notification_updated_at,
-            },
-        );
+        if matches!(data, PreviewData::Generic { ref body, .. } if body.starts_with("Error loading details"))
+        {
+            should_persist = false;
+        }
+
+        {
+            let mut cache_lock = cache.lock();
+            cache_lock.insert(
+                request.cache_key.clone(),
+                CachedPreview {
+                    data,
+                    updated_at: notification_updated_at,
+                },
+            );
+            if should_persist {
+                persist_cache_snapshot(&cache_lock);
+            }
+        }
 
         loading.lock().remove(&request.cache_key);
         let _ = tx.send(FetchResult {
@@ -190,11 +203,42 @@ fn preview_worker_thread(
     }
 }
 
+fn load_persisted_cache() -> HashMap<String, CachedPreview> {
+    crate::state_file::load_preview_cache()
+        .into_iter()
+        .map(|(key, entry)| {
+            (
+                key,
+                CachedPreview {
+                    data: entry.data,
+                    updated_at: entry.updated_at,
+                },
+            )
+        })
+        .collect()
+}
+
+fn persist_cache_snapshot(cache: &HashMap<String, CachedPreview>) {
+    let persisted: HashMap<String, PersistedPreviewCacheEntry> = cache
+        .iter()
+        .map(|(key, cached)| {
+            (
+                key.clone(),
+                PersistedPreviewCacheEntry {
+                    data: cached.data.clone(),
+                    updated_at: cached.updated_at,
+                },
+            )
+        })
+        .collect();
+    let _ = crate::state_file::save_preview_cache(&persisted);
+}
+
 impl PreviewManager {
     pub fn new(client: GitHubClient) -> Self {
         let (tx, rx_worker) = channel::<FetchRequest>();
         let (result_tx, result_rx) = channel::<FetchResult>();
-        let cache = Arc::new(Mutex::new(HashMap::new()));
+        let cache = Arc::new(Mutex::new(load_persisted_cache()));
         let loading = Arc::new(Mutex::new(HashSet::new()));
         let generation = Arc::new(Mutex::new(HashMap::new()));
 
@@ -478,6 +522,7 @@ mod tests {
         let pm = PreviewManager::new(client);
         {
             let mut cache = pm.cache.lock();
+            cache.clear();
             for (id, entry) in entries {
                 cache.insert(id.to_string(), entry);
             }
