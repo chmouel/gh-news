@@ -7,6 +7,7 @@ pub mod help_search;
 pub mod list;
 pub mod loading;
 pub mod preview;
+pub mod session_picker;
 pub mod status;
 pub mod url_menu;
 pub mod view_picker;

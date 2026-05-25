@@ -74,6 +74,28 @@ pub struct View {
     pub exclude_subjects: Option<Vec<String>>,
 }
 
+/// A saved triage workspace that can be switched to from the TUI.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TriageSession {
+    /// Display name shown in the session picker.
+    pub name: String,
+    /// Optional named view to activate before applying this session's filter.
+    #[serde(default)]
+    pub view: Option<String>,
+    /// Optional extra regex filter layered on top of the selected view/default filter.
+    #[serde(default)]
+    pub filter: Option<String>,
+    /// Optional read/unread scope override.
+    #[serde(default)]
+    pub show_read: Option<bool>,
+    /// Optional preview mode override: "off", "horizontal", or "vertical".
+    #[serde(default)]
+    pub preview_mode: Option<String>,
+    /// Optional repository expansion override.
+    #[serde(default)]
+    pub repos_collapsed: Option<bool>,
+}
+
 /// Per-colour overrides applied on top of a built-in theme palette.
 /// Each field accepts a hex colour string (e.g. "#7aa2f7" or "7aa2f7").
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -216,6 +238,10 @@ pub struct Config {
     // Named filter presets (views)
     #[serde(default)]
     pub views: Vec<View>,
+
+    // Saved triage sessions
+    #[serde(default)]
+    pub sessions: Vec<TriageSession>,
 }
 
 fn default_actions_failed_only() -> bool {
@@ -260,6 +286,7 @@ impl Default for Config {
             watch_repos: Vec::new(),
             actions: Vec::new(),
             views: Vec::new(),
+            sessions: Vec::new(),
         }
     }
 }
@@ -347,11 +374,15 @@ impl Config {
 
     /// Parse the default_preview_mode string into PreviewMode enum.
     pub fn get_default_preview_mode(&self) -> PreviewMode {
-        match self.default_preview_mode.to_lowercase().as_str() {
-            "off" => PreviewMode::Off,
-            "vertical" => PreviewMode::Vertical,
-            _ => PreviewMode::Horizontal,
-        }
+        preview_mode_from_str(&self.default_preview_mode)
+    }
+}
+
+pub fn preview_mode_from_str(value: &str) -> PreviewMode {
+    match value.to_lowercase().as_str() {
+        "off" => PreviewMode::Off,
+        "vertical" => PreviewMode::Vertical,
+        _ => PreviewMode::Horizontal,
     }
 }
 
@@ -484,6 +515,31 @@ priority = 1
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.actions[0].priority, Some(1));
+    }
+
+    #[test]
+    fn test_parse_sessions_from_toml() {
+        let toml_str = r#"
+[[sessions]]
+name = "Reviews"
+view = "Review Requests"
+filter = "my-org/"
+show_read = true
+preview_mode = "horizontal"
+repos_collapsed = true
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+
+        assert_eq!(config.sessions.len(), 1);
+        assert_eq!(config.sessions[0].name, "Reviews");
+        assert_eq!(config.sessions[0].view.as_deref(), Some("Review Requests"));
+        assert_eq!(config.sessions[0].filter.as_deref(), Some("my-org/"));
+        assert_eq!(config.sessions[0].show_read, Some(true));
+        assert_eq!(
+            config.sessions[0].preview_mode.as_deref(),
+            Some("horizontal")
+        );
+        assert_eq!(config.sessions[0].repos_collapsed, Some(true));
     }
 
     #[test]

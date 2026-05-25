@@ -84,10 +84,16 @@ pub struct AppState {
     pub command_output: Option<CommandOutputData>,
     // Named view presets (cloned from config at startup)
     pub views: Vec<crate::config::View>,
+    // Saved triage sessions (cloned from config at startup)
+    pub sessions: Vec<crate::config::TriageSession>,
     // Index of the active view (None = global config filter)
     pub active_view_index: Option<usize>,
+    // Index of the active session (None = normal/global state)
+    pub active_session_index: Option<usize>,
     // Cursor position in the view picker popup
     pub view_picker_index: usize,
+    // Cursor position in the session picker popup
+    pub session_picker_index: usize,
     pub rate_limit: Option<RateLimitDisplay>,
 }
 
@@ -116,6 +122,7 @@ pub enum InputMode {
     UrlMenu,
     CommandOutput,
     ViewPicker,
+    SessionPicker,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -180,8 +187,11 @@ impl AppState {
             snoozed_ids: HashMap::new(),
             command_output: None,
             views: Vec::new(),
+            sessions: Vec::new(),
             active_view_index: None,
+            active_session_index: None,
             view_picker_index: 0,
+            session_picker_index: 0,
             rate_limit: None,
         }
     }
@@ -190,6 +200,12 @@ impl AppState {
         self.active_view_index
             .and_then(|i| self.views.get(i))
             .map(|v| v.name.as_str())
+    }
+
+    pub fn active_session_name(&self) -> Option<&str> {
+        self.active_session_index
+            .and_then(|i| self.sessions.get(i))
+            .map(|session| session.name.as_str())
     }
 
     pub fn toggle_pin(&mut self, notification: Notification) -> bool {
