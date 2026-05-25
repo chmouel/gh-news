@@ -3,6 +3,11 @@ use crate::error::Result;
 use crate::models::{Notification, NotificationType, Owner, Repository, Subject};
 use chrono::{DateTime, Utc};
 use std::cmp::Reverse;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
+use std::thread;
+
+const MAX_EVENT_WORKERS: usize = 4;
 
 /// Fetch activity events from the GitHub Events API for the authenticated user.
 ///
@@ -103,34 +108,40 @@ pub fn fetch_watch_repo_events(
     repos: &[String],
     event_types: &[String],
 ) -> Result<Vec<Notification>> {
+    if repos.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    if repos.len() == 1 {
+        return fetch_watch_repo_events_serial(client, repos, event_types);
+    }
+
+    let worker_count = repos.len().min(MAX_EVENT_WORKERS);
+    let work_queue = Arc::new(Mutex::new(VecDeque::from(repos.to_vec())));
+    let event_types = Arc::new(event_types.to_vec());
+    let mut workers = Vec::with_capacity(worker_count);
+
+    for _ in 0..worker_count {
+        let client = client.clone();
+        let work_queue = Arc::clone(&work_queue);
+        let event_types = Arc::clone(&event_types);
+        workers.push(thread::spawn(move || {
+            let mut notifications = Vec::new();
+            loop {
+                let Some(repo_full) = work_queue.lock().unwrap().pop_front() else {
+                    break;
+                };
+
+                append_watch_repo_events(&client, &repo_full, &event_types, &mut notifications);
+            }
+            notifications
+        }));
+    }
+
     let mut all_notifications = Vec::new();
-
-    for repo_full in repos {
-        let (owner, repo_name) = match repo_full.split_once('/') {
-            Some(parts) => parts,
-            None => continue,
-        };
-
-        let events = match client.get_repo_events(owner, repo_name, 30) {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-
-        let events_array = events.as_array().cloned().unwrap_or_default();
-
-        for event in &events_array {
-            let event_type = event
-                .get("type")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Unknown");
-
-            if !event_types.is_empty() && !event_types.iter().any(|t| t == event_type) {
-                continue;
-            }
-
-            if let Some(notification) = event_to_notification(event, event_type, "repo-event-") {
-                all_notifications.push(notification);
-            }
+    for worker in workers {
+        if let Ok(mut notifications) = worker.join() {
+            all_notifications.append(&mut notifications);
         }
     }
 
@@ -139,6 +150,58 @@ pub fn fetch_watch_repo_events(
     enrich_event_titles(client, &mut all_notifications);
 
     Ok(all_notifications)
+}
+
+fn fetch_watch_repo_events_serial(
+    client: &GitHubClient,
+    repos: &[String],
+    event_types: &[String],
+) -> Result<Vec<Notification>> {
+    let mut all_notifications = Vec::new();
+
+    for repo_full in repos {
+        append_watch_repo_events(client, repo_full, event_types, &mut all_notifications);
+    }
+
+    all_notifications.sort_by_key(|notification| Reverse(notification.updated_at));
+
+    enrich_event_titles(client, &mut all_notifications);
+
+    Ok(all_notifications)
+}
+
+fn append_watch_repo_events(
+    client: &GitHubClient,
+    repo_full: &str,
+    event_types: &[String],
+    all_notifications: &mut Vec<Notification>,
+) {
+    let (owner, repo_name) = match repo_full.split_once('/') {
+        Some(parts) => parts,
+        None => return,
+    };
+
+    let events = match client.get_repo_events(owner, repo_name, 30) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    let events_array = events.as_array().cloned().unwrap_or_default();
+
+    for event in &events_array {
+        let event_type = event
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Unknown");
+
+        if !event_types.is_empty() && !event_types.iter().any(|t| t == event_type) {
+            continue;
+        }
+
+        if let Some(notification) = event_to_notification(event, event_type, "repo-event-") {
+            all_notifications.push(notification);
+        }
+    }
 }
 
 fn format_event_title(
