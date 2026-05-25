@@ -16,6 +16,7 @@ GitHub notifications TUI built with Rust and ratatui.
 - Multi-select for batch operations on notifications
 - Auto-refresh with configurable interval
 - Preview notifications with rich details (GraphQL-powered for Issues, PRs, Discussions, Commits)
+- Persisted preview cache for faster repeated detail views
 - Regex filtering to filter specific notifications
 - Pin important notifications
 - Repository grouping with collapsible headers
@@ -26,6 +27,7 @@ GitHub notifications TUI built with Rust and ratatui.
 - Named views for instant filter preset switching
 - Mark notifications read/unread individually or in bulk
 - Static display mode for scripting and pipelines
+- Configuration doctor for validating filters, actions, token access, and views
 - Progress reporting for supporting terminals via OSC `9;4`
 - GitHub Actions workflow run notifications (opt-in)
 - GitHub Activity Events feed (opt-in)
@@ -57,7 +59,7 @@ Easiest way is to just run `gh auth login` if you have the GitHub CLI installed.
 
 ## Usage
 
-Press `Ctrl+R` to force a refresh. gh-news shows the current refresh stage in the loading panel while it refreshes notifications and any enabled extra sources.
+Press `Ctrl+R` to force a refresh. gh-news shows the current refresh stage in the loading panel while it refreshes notifications and any enabled extra sources. When GitHub returns rate-limit headers, the status bar shows the remaining API quota.
 
 ### Options
 
@@ -67,7 +69,9 @@ Press `Ctrl+R` to force a refresh. gh-news shows the current refresh stage in th
 - `-n, --max-notifications <N>` - Limit how many to fetch
 - `-p, --participating` - Only show notifications where you're participating/mentioned
 - `-r, --mark-read` - Mark all notifications as read (non-interactive)
+- `--mark-read-archive` - Mark all notifications as read and archive them (non-interactive)
 - `-s, --static-display` - Print notifications and exit (for scripts)
+- `--check-config` - Validate config, custom actions, filters, views, and GitHub authentication, then exit
 - `--no-cache` - Bypass notification cache and always fetch fresh from the API
 - `--state-file <PATH>` - Use a custom state file path (overrides config and default)
 
@@ -77,6 +81,7 @@ Press `Ctrl+R` to force a refresh. gh-news shows the current refresh stage in th
 gh news --filter "my-org/my-repo" # Filter to specific repos
 gh news --participating # Only things you're involved in
 gh news --mark-read # Mark everything read
+gh news --check-config # Check config and token access
 gh news --static-display | grep "something" # List notifications without TUI
 ```
 
@@ -178,7 +183,8 @@ auto_mark_read_delay_ms = 400        # dwell time (ms) before marking as read (o
 auto_archive = false                 # archive notifications when navigating away (implies auto_mark_read)
 auto_mark_on_open = true             # mark notifications read when opening them in the browser
 
-# Notification cache (cached data is shown instantly on startup, then refreshed)
+# Notification cache (cached data is shown instantly on startup, then refreshed).
+# Preview details are also cached locally and reused until the notification changes.
 cache_file = ""              # custom cache path (default: ~/.cache/gh-news/notifications_cache.json)
 
 # External commands
@@ -353,6 +359,7 @@ Actions support placeholder substitution:
 |-------------|-------------|
 | `{id}` | Notification ID |
 | `{title}` | Notification title |
+| `{number}` | PR/issue/discussion number (empty for other types) |
 | `{url}` | Web URL for the notification |
 | `{repo}` | Repository name (without owner) |
 | `{owner}` | Repository owner |
