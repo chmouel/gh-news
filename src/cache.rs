@@ -1,3 +1,4 @@
+use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::models::Notification;
 use chrono::{DateTime, Utc};
@@ -21,10 +22,25 @@ pub fn compute_options_hash(
     show_all: bool,
     participating: bool,
     max_notifications: Option<usize>,
+    config: &Config,
 ) -> String {
     format!(
-        "all={},participating={},max={:?}",
-        show_all, participating, max_notifications
+        concat!(
+            "all={},participating={},max={:?},per_page={},host={},",
+            "actions={},actions_failed_only={},actions_repos={:?},",
+            "events={},event_types={:?},watch_repos={:?}"
+        ),
+        show_all,
+        participating,
+        max_notifications,
+        config.pagination_size,
+        config.github_host,
+        config.enable_actions,
+        config.actions_failed_only,
+        config.actions_repos,
+        config.enable_events,
+        config.event_types,
+        config.watch_repos
     )
 }
 
@@ -128,7 +144,7 @@ mod tests {
     fn round_trip() {
         let dir = test_dir();
         let path = dir.join("cache.json");
-        let hash = compute_options_hash(false, false, None);
+        let hash = compute_options_hash(false, false, None, &Config::default());
         let notifications = vec![sample_notification()];
 
         save_cache(&path, &notifications, &hash).unwrap();
@@ -158,5 +174,20 @@ mod tests {
         assert!(load_cache(&path, "any").is_none());
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn options_hash_changes_when_extra_sources_change() {
+        let base = Config::default();
+        let mut with_actions = Config {
+            enable_actions: true,
+            ..Config::default()
+        };
+        with_actions.actions_repos = vec!["owner/repo".to_string()];
+
+        assert_ne!(
+            compute_options_hash(false, false, None, &base),
+            compute_options_hash(false, false, None, &with_actions)
+        );
     }
 }
