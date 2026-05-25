@@ -5,6 +5,7 @@ mod builtin_views;
 mod cache;
 mod cli;
 mod config;
+mod doctor;
 mod error;
 mod events;
 mod filter;
@@ -68,6 +69,11 @@ fn run() -> Result<()> {
     let args = Args::parse();
     let config = Config::load(args.config.as_deref())?;
     let opts = RuntimeOptions::from_args_and_config(&args, &config);
+
+    if args.check_config {
+        doctor::run(&config)?;
+        return Ok(());
+    }
 
     // Initialise state file path: CLI > config > default
     let state_path = args

@@ -44,4 +44,8 @@ pub struct Args {
     /// Path to state file (overrides config and default)
     #[arg(long)]
     pub state_file: Option<PathBuf>,
+
+    /// Validate config, actions, filters, and GitHub authentication, then exit
+    #[arg(long)]
+    pub check_config: bool,
 }
