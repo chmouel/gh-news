@@ -3,10 +3,15 @@ use crate::config::Config;
 use crate::error::{ApiError, Error, Result};
 use crate::models::Notification;
 use reqwest::blocking::{Client, RequestBuilder, Response};
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, ETAG, IF_NONE_MATCH, USER_AGENT};
+use reqwest::Method;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
+
+use parking_lot::Mutex;
 
 const API_VERSION: &str = "2022-11-28";
 const DEFAULT_PER_PAGE: usize = 50;
@@ -66,6 +71,21 @@ fn default_headers(token: &str) -> Result<HeaderMap> {
 pub struct GitHubClient {
     client: Client,
     api_base: String,
+    conditional_cache: Arc<Mutex<HashMap<String, ConditionalCacheEntry>>>,
+    rate_limit: Arc<Mutex<Option<RateLimitStatus>>>,
+}
+
+#[derive(Clone)]
+struct ConditionalCacheEntry {
+    etag: HeaderValue,
+    body: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RateLimitStatus {
+    pub limit: Option<u32>,
+    pub remaining: Option<u32>,
+    pub reset_epoch: Option<u64>,
 }
 
 impl GitHubClient {
@@ -75,7 +95,9 @@ impl GitHubClient {
     }
 
     fn send(&self, request: RequestBuilder) -> Result<Response> {
-        let response = request.send().map_err(Error::from)?;
+        let request = request.build().map_err(Error::from)?;
+        let response = self.client.execute(request).map_err(Error::from)?;
+        self.record_rate_limit_headers(response.headers());
         let status = response.status();
         if !status.is_success() {
             let message = response
@@ -91,8 +113,54 @@ impl GitHubClient {
     }
 
     fn send_json<T: DeserializeOwned>(&self, request: RequestBuilder) -> Result<T> {
-        let response = self.send(request)?;
-        response.json().map_err(Error::from)
+        let mut request = request.build().map_err(Error::from)?;
+        let cache_key = (request.method() == Method::GET).then(|| request.url().to_string());
+
+        if let Some(ref key) = cache_key {
+            if let Some(entry) = self.conditional_cache.lock().get(key) {
+                request
+                    .headers_mut()
+                    .insert(IF_NONE_MATCH, entry.etag.clone());
+            }
+        }
+
+        let response = self.client.execute(request).map_err(Error::from)?;
+        self.record_rate_limit_headers(response.headers());
+        let status = response.status();
+
+        if status.as_u16() == 304 {
+            let key = cache_key.ok_or(Error::Api(ApiError::InvalidResponse))?;
+            let body = self
+                .conditional_cache
+                .lock()
+                .get(&key)
+                .map(|entry| entry.body.clone())
+                .ok_or(Error::Api(ApiError::InvalidResponse))?;
+            return serde_json::from_slice(&body).map_err(Error::from);
+        }
+
+        if !status.is_success() {
+            let message = response
+                .text()
+                .unwrap_or_else(|_| "Unknown error".to_string());
+            return Err(ApiError::HttpStatus {
+                status: status.as_u16(),
+                message,
+            }
+            .into());
+        }
+
+        let etag = response.headers().get(ETAG).cloned();
+        let bytes = response.bytes().map_err(Error::from)?.to_vec();
+        let value: T = serde_json::from_slice(&bytes).map_err(Error::from)?;
+
+        if let (Some(key), Some(etag)) = (cache_key, etag) {
+            self.conditional_cache
+                .lock()
+                .insert(key, ConditionalCacheEntry { etag, body: bytes });
+        }
+
+        Ok(value)
     }
 
     fn send_no_content(&self, request: RequestBuilder) -> Result<()> {
@@ -110,6 +178,8 @@ impl GitHubClient {
         Self {
             client,
             api_base: "http://localhost".to_string(),
+            conditional_cache: Arc::new(Mutex::new(HashMap::new())),
+            rate_limit: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -119,6 +189,8 @@ impl GitHubClient {
         Self {
             client,
             api_base: api_base.into(),
+            conditional_cache: Arc::new(Mutex::new(HashMap::new())),
+            rate_limit: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -136,7 +208,38 @@ impl GitHubClient {
         Ok(Self {
             client,
             api_base: config.github_api_base(),
+            conditional_cache: Arc::new(Mutex::new(HashMap::new())),
+            rate_limit: Arc::new(Mutex::new(None)),
         })
+    }
+
+    pub fn rate_limit_status(&self) -> Option<RateLimitStatus> {
+        self.rate_limit.lock().clone()
+    }
+
+    fn record_rate_limit_headers(&self, headers: &HeaderMap) {
+        let parse_u32 = |name: &str| {
+            headers
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<u32>().ok())
+        };
+        let parse_u64 = |name: &str| {
+            headers
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| value.parse::<u64>().ok())
+        };
+
+        let status = RateLimitStatus {
+            limit: parse_u32("x-ratelimit-limit"),
+            remaining: parse_u32("x-ratelimit-remaining"),
+            reset_epoch: parse_u64("x-ratelimit-reset"),
+        };
+
+        if status.limit.is_some() || status.remaining.is_some() || status.reset_epoch.is_some() {
+            *self.rate_limit.lock() = Some(status);
+        }
     }
 
     pub fn get_notifications(
@@ -453,6 +556,49 @@ mod tests {
         TestServer { base_url, handle }
     }
 
+    fn spawn_conditional_server() -> TestServer {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let base_url = format!("http://{}", address);
+
+        let handle = thread::spawn(move || {
+            for request_number in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut request_line = String::new();
+                reader.read_line(&mut request_line).unwrap();
+
+                let mut has_if_none_match = false;
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if line.to_ascii_lowercase().starts_with("if-none-match:") {
+                        has_if_none_match = line.contains("\"first\"");
+                    }
+                    if line == "\r\n" || line.is_empty() {
+                        break;
+                    }
+                }
+
+                let response = if request_number == 0 {
+                    let body = r#"{"value":"cached"}"#;
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nETag: \"first\"\r\nX-RateLimit-Limit: 5000\r\nX-RateLimit-Remaining: 4999\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                } else if has_if_none_match {
+                    "HTTP/1.1 304 Not Modified\r\nX-RateLimit-Limit: 5000\r\nX-RateLimit-Remaining: 4998\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string()
+                } else {
+                    "HTTP/1.1 428 Precondition Required\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_string()
+                };
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+
+        TestServer { base_url, handle }
+    }
+
     #[test]
     fn list_owner_repos_paginates_until_short_page() {
         let first_page = (0..100)
@@ -478,6 +624,25 @@ mod tests {
         assert_eq!(repos.len(), 101);
         assert_eq!(repos.first().unwrap(), "owner/repo-000");
         assert_eq!(repos.last().unwrap(), "owner/repo-100");
+
+        server.join();
+    }
+
+    #[test]
+    fn get_json_reuses_cached_body_on_not_modified() {
+        let server = spawn_conditional_server();
+        let client = GitHubClient::new_test_with_base(server.base_url.clone());
+        let url = format!("{}/resource", server.base_url);
+
+        let first: Value = client.get_json_by_url(&url).unwrap();
+        let second: Value = client.get_json_by_url(&url).unwrap();
+
+        assert_eq!(first["value"], "cached");
+        assert_eq!(second["value"], "cached");
+        assert_eq!(
+            client.rate_limit_status().and_then(|s| s.remaining),
+            Some(4998)
+        );
 
         server.join();
     }

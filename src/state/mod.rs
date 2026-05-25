@@ -88,6 +88,13 @@ pub struct AppState {
     pub active_view_index: Option<usize>,
     // Cursor position in the view picker popup
     pub view_picker_index: usize,
+    pub rate_limit: Option<RateLimitDisplay>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RateLimitDisplay {
+    pub limit: Option<u32>,
+    pub remaining: Option<u32>,
 }
 
 /// State for displaying captured command output in a scrollable popup.
@@ -175,6 +182,7 @@ impl AppState {
             views: Vec::new(),
             active_view_index: None,
             view_picker_index: 0,
+            rate_limit: None,
         }
     }
 
