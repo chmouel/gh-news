@@ -1,9 +1,10 @@
 use crate::api::GitHubClient;
 use crate::error::Result;
 use crate::models::{Notification, NotificationType};
+use serde::{Deserialize, Serialize};
 use std::fmt;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PreviewData {
     PullRequest {
         number: String,
