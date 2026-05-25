@@ -3,6 +3,11 @@ use crate::error::Result;
 use crate::models::{Notification, NotificationType, Owner, Repository, Subject};
 use chrono::{DateTime, Utc};
 use std::cmp::Reverse;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
+use std::thread;
+
+const MAX_WORKFLOW_RUN_WORKERS: usize = 4;
 
 /// Fetch workflow run notifications from GitHub Actions for the given repos.
 ///
@@ -14,23 +19,38 @@ pub fn fetch_workflow_run_notifications(
     repos: &[String],
     failed_only: bool,
 ) -> Result<Vec<Notification>> {
-    let mut all_notifications = Vec::new();
+    if repos.is_empty() {
+        return Ok(Vec::new());
+    }
 
-    for repo_full in repos {
-        let (owner, repo_name) = match repo_full.split_once('/') {
-            Some(parts) => parts,
-            None => continue,
-        };
+    if repos.len() == 1 {
+        return fetch_workflow_run_notifications_serial(client, repos, failed_only);
+    }
 
-        let runs = match fetch_runs(client, owner, repo_name, failed_only) {
-            Ok(r) => r,
-            Err(_) => continue, // Skip repos where we lack permissions
-        };
+    let worker_count = repos.len().min(MAX_WORKFLOW_RUN_WORKERS);
+    let work_queue = Arc::new(Mutex::new(VecDeque::from(repos.to_vec())));
+    let mut workers = Vec::with_capacity(worker_count);
 
-        for run in runs {
-            if let Some(notification) = run_to_notification(&run, repo_full, owner, repo_name) {
-                all_notifications.push(notification);
+    for _ in 0..worker_count {
+        let client = client.clone();
+        let work_queue = Arc::clone(&work_queue);
+        workers.push(thread::spawn(move || {
+            let mut notifications = Vec::new();
+            loop {
+                let Some(repo_full) = work_queue.lock().unwrap().pop_front() else {
+                    break;
+                };
+
+                append_repo_workflow_runs(&client, &repo_full, failed_only, &mut notifications);
             }
+            notifications
+        }));
+    }
+
+    let mut all_notifications = Vec::new();
+    for worker in workers {
+        if let Ok(mut notifications) = worker.join() {
+            all_notifications.append(&mut notifications);
         }
     }
 
@@ -38,6 +58,46 @@ pub fn fetch_workflow_run_notifications(
     all_notifications.sort_by_key(|notification| Reverse(notification.updated_at));
 
     Ok(all_notifications)
+}
+
+fn fetch_workflow_run_notifications_serial(
+    client: &GitHubClient,
+    repos: &[String],
+    failed_only: bool,
+) -> Result<Vec<Notification>> {
+    let mut all_notifications = Vec::new();
+
+    for repo_full in repos {
+        append_repo_workflow_runs(client, repo_full, failed_only, &mut all_notifications);
+    }
+
+    // Sort by updated_at descending (newest first)
+    all_notifications.sort_by_key(|notification| Reverse(notification.updated_at));
+
+    Ok(all_notifications)
+}
+
+fn append_repo_workflow_runs(
+    client: &GitHubClient,
+    repo_full: &str,
+    failed_only: bool,
+    all_notifications: &mut Vec<Notification>,
+) {
+    let (owner, repo_name) = match repo_full.split_once('/') {
+        Some(parts) => parts,
+        None => return,
+    };
+
+    let runs = match fetch_runs(client, owner, repo_name, failed_only) {
+        Ok(r) => r,
+        Err(_) => return, // Skip repos where we lack permissions
+    };
+
+    for run in runs {
+        if let Some(notification) = run_to_notification(&run, repo_full, owner, repo_name) {
+            all_notifications.push(notification);
+        }
+    }
 }
 
 fn fetch_runs(
