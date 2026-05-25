@@ -120,6 +120,22 @@ impl StatusWidget {
             ));
         }
 
+        if let Some(rate_limit) = state.rate_limit {
+            if let (Some(remaining), Some(limit)) = (rate_limit.remaining, rate_limit.limit) {
+                status_line.spans.push(Span::raw(" · "));
+                let style = if remaining < 100 {
+                    Style::default()
+                        .fg(self.colors.red)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(self.colors.fg_muted)
+                };
+                status_line
+                    .spans
+                    .push(Span::styled(format!("API {remaining}/{limit}"), style));
+            }
+        }
+
         let mode_label = if auto_mark_read { "M:read" } else { "M:off" };
         status_line.spans.push(Span::raw(" · "));
         status_line.spans.push(Span::styled(

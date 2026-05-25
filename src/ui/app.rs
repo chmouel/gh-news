@@ -14,6 +14,7 @@ use crate::preview::PreviewData;
 use crate::preview_manager::{CacheStatus, PreviewManager, PRIORITY_HIGH, PRIORITY_LOW};
 use crate::state::{
     AppState, CommandOutputData, ConfirmAction, InputMode, MarkAllOption, PaneFocus, PreviewMode,
+    RateLimitDisplay,
 };
 use crate::state_file::AppStateFile;
 use crate::terminal::{ProgressState, Terminal};
@@ -286,6 +287,17 @@ impl App {
     pub fn set_api_client(&mut self, client: crate::api::GitHubClient) {
         self.preview_manager = Some(PreviewManager::new(client.clone()));
         self.api_client = Some(client);
+    }
+
+    fn sync_rate_limit_status(&mut self) {
+        self.state.rate_limit = self
+            .api_client
+            .as_ref()
+            .and_then(|client| client.rate_limit_status())
+            .map(|status| RateLimitDisplay {
+                limit: status.limit,
+                remaining: status.remaining,
+            });
     }
 
     pub fn start_initial_load(
@@ -1559,6 +1571,8 @@ impl App {
     }
 
     fn render(&mut self, frame: &mut Frame) {
+        self.sync_rate_limit_status();
+
         let size = frame.size();
 
         // Ensure minimum terminal size
