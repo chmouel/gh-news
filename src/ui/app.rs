@@ -1,6 +1,6 @@
 use crate::actions::{self, ActionResult};
 use crate::builtin_actions::{self, CombinedAction};
-use crate::config::Config;
+use crate::config::{preview_mode_from_str, Config};
 use crate::error::Result;
 use crate::filter::Filter;
 use crate::hooks;
@@ -20,7 +20,7 @@ use crate::state_file::AppStateFile;
 use crate::terminal::{ProgressState, Terminal};
 use crate::ui::components::{
     action_menu, command_output, confirm, filter, help, help_search, list, loading, preview,
-    status, url_menu, view_picker,
+    session_picker, status, url_menu, view_picker,
 };
 use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
@@ -101,6 +101,7 @@ pub struct App {
     config: Config,
     base_filter: Option<Filter>,
     base_filter_pattern: Option<String>,
+    active_session_filter_pattern: Option<String>,
     should_quit: bool,
     list_widget: list::ListWidget,
     preview_widget: preview::PreviewWidget,
@@ -114,6 +115,7 @@ pub struct App {
     url_menu_widget: url_menu::UrlMenuWidget,
     command_output_widget: command_output::CommandOutputWidget,
     view_picker_widget: view_picker::ViewPickerWidget,
+    session_picker_widget: session_picker::SessionPickerWidget,
     api_client: Option<crate::api::GitHubClient>,
     last_refresh: Instant,
     refresh_args: Option<(bool, bool, Option<usize>)>, // (all, participating, max_notifications)
@@ -160,6 +162,7 @@ impl App {
             config,
             base_filter: None,
             base_filter_pattern: None,
+            active_session_filter_pattern: None,
             should_quit: false,
             list_widget: list::ListWidget::new(&palette),
             preview_widget: preview::PreviewWidget::new(&palette),
@@ -173,6 +176,7 @@ impl App {
             url_menu_widget: url_menu::UrlMenuWidget::new(&palette),
             command_output_widget: command_output::CommandOutputWidget::new(&palette),
             view_picker_widget: view_picker::ViewPickerWidget::new(&palette),
+            session_picker_widget: session_picker::SessionPickerWidget::new(&palette),
             api_client: None,
             last_refresh: Instant::now(),
             refresh_args: None,
@@ -335,6 +339,7 @@ impl App {
             .into_iter()
             .chain(self.config.views.iter().cloned())
             .collect();
+        app_state.sessions = self.config.sessions.clone();
         app_state.set_notifications(notifications);
         app_state.set_filter(settings.filter);
         app_state.set_filter_pattern(settings.filter_pattern);
@@ -419,7 +424,15 @@ impl App {
     }
 
     fn build_effective_filter(&self) -> Result<Option<Filter>> {
-        let filter = self.build_active_view_filter()?;
+        let mut filter = self.build_active_view_filter()?;
+
+        if let Some(pattern) = self.active_session_filter_pattern.as_deref() {
+            let session_filter = Filter::from_pattern(Some(pattern))?;
+            filter = Some(match filter {
+                Some(filter) => filter.and(session_filter),
+                None => session_filter,
+            });
+        }
 
         if let Some(search_filter) = self.build_search_filter()? {
             Ok(Some(match filter {
@@ -436,7 +449,9 @@ impl App {
         self.state.set_filter(filter);
 
         let pattern = if self.state.search_query.is_empty() {
-            if let Some(view_idx) = self.state.active_view_index {
+            if let Some(pattern) = self.active_session_filter_pattern.clone() {
+                Some(pattern)
+            } else if let Some(view_idx) = self.state.active_view_index {
                 self.state
                     .views
                     .get(view_idx)
@@ -1804,6 +1819,16 @@ impl App {
                 self.state.active_view_index,
             );
         }
+
+        if self.state.input_mode == InputMode::SessionPicker {
+            self.session_picker_widget.render(
+                frame,
+                size,
+                &self.state.sessions.clone(),
+                self.state.session_picker_index,
+                self.state.active_session_index,
+            );
+        }
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Result<()> {
@@ -1817,6 +1842,7 @@ impl App {
             InputMode::UrlMenu => self.handle_url_menu_key(key),
             InputMode::CommandOutput => self.handle_command_output_key(key),
             InputMode::ViewPicker => self.handle_view_picker_key(key),
+            InputMode::SessionPicker => self.handle_session_picker_key(key),
         }
     }
 
@@ -2019,6 +2045,9 @@ impl App {
 
     /// Apply a named view by picker index (0 = default, 1+ = views[index-1]).
     fn apply_view(&mut self, index: usize) -> Result<()> {
+        self.state.active_session_index = None;
+        self.active_session_filter_pattern = None;
+
         if index == 0 {
             self.state.active_view_index = None;
             self.refresh_filter_state()?;
@@ -2038,6 +2067,124 @@ impl App {
             }
         }
         self.state.view_picker_index = 0;
+        Ok(())
+    }
+
+    fn handle_session_picker_key(&mut self, key: KeyEvent) -> Result<()> {
+        let total_items = self.state.sessions.len() + 1;
+
+        match key.code {
+            KeyCode::Esc => {
+                self.state.input_mode = InputMode::Normal;
+            }
+            KeyCode::Up | KeyCode::Char('k') if self.state.session_picker_index > 0 => {
+                self.state.session_picker_index -= 1;
+            }
+            KeyCode::Down | KeyCode::Char('j')
+                if self.state.session_picker_index + 1 < total_items =>
+            {
+                self.state.session_picker_index += 1;
+            }
+            KeyCode::Enter => {
+                let index = self.state.session_picker_index;
+                self.apply_session(index)?;
+                self.state.input_mode = InputMode::Normal;
+            }
+            KeyCode::Char(c) if c.is_ascii_digit() => {
+                let digit = (c as usize).saturating_sub('0' as usize);
+                if digit < total_items {
+                    self.apply_session(digit)?;
+                    self.state.input_mode = InputMode::Normal;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn apply_session(&mut self, index: usize) -> Result<()> {
+        if index == 0 {
+            self.state.active_session_index = None;
+            self.active_session_filter_pattern = None;
+            self.state.active_view_index = None;
+            self.refresh_filter_state()?;
+            self.state.session_picker_index = 0;
+            self.state.status_message = Some("Restored default triage session".to_string());
+            return Ok(());
+        }
+
+        let Some(session) = self.state.sessions.get(index - 1).cloned() else {
+            return Ok(());
+        };
+
+        let view_index = match session.view.as_deref() {
+            Some(view_name) => {
+                let found = self
+                    .state
+                    .views
+                    .iter()
+                    .position(|view| view.name.eq_ignore_ascii_case(view_name));
+                if found.is_none() {
+                    self.state.status_message = Some(format!(
+                        "Session '{}' references unknown view '{}'",
+                        session.name, view_name
+                    ));
+                    self.state.session_picker_index = 0;
+                    return Ok(());
+                }
+                found
+            }
+            None => None,
+        };
+
+        if let Some(ref filter) = session.filter {
+            if let Err(err) = Filter::from_pattern(Some(filter)) {
+                self.state.status_message = Some(format!(
+                    "Session '{}' filter is invalid: {}",
+                    session.name, err
+                ));
+                self.state.session_picker_index = 0;
+                return Ok(());
+            }
+        }
+
+        self.state.active_session_index = Some(index - 1);
+        self.state.active_view_index = view_index;
+        self.active_session_filter_pattern = session.filter.clone();
+
+        if let Some(preview_mode) = session.preview_mode.as_deref() {
+            self.state.preview_mode = preview_mode_from_str(preview_mode);
+            self.state.preview_scroll = 0;
+        }
+
+        if let Some(repos_collapsed) = session.repos_collapsed {
+            if repos_collapsed {
+                self.state.collapse_all_repos();
+            } else {
+                self.state.expanded_repos.clear();
+                self.state.expanded_orgs.clear();
+                self.state.build_tree();
+            }
+        }
+
+        if let Some(show_read) = session.show_read {
+            if self.state.show_all != show_read {
+                self.state.show_all = show_read;
+                if let Some((_, participating, max_notifications)) = self.refresh_args {
+                    self.refresh_args = Some((show_read, participating, max_notifications));
+                }
+                self.queue_blocking_action(BlockingAction::Refresh, "Refreshing session...");
+            }
+        }
+
+        self.refresh_filter_state()?;
+        if self.state.show_preview() {
+            self.fetch_preview_for_selected_notification();
+            self.prefetch_neighbour_previews();
+        }
+
+        self.state.session_picker_index = 0;
+        self.state.status_message = Some(format!("Session '{}'", session.name));
         Ok(())
     }
 
@@ -3166,6 +3313,14 @@ impl App {
                 self.state.view_picker_index = 0;
                 self.state.input_mode = InputMode::ViewPicker;
             }
+            KeyCode::Char('S') => {
+                if self.state.sessions.is_empty() {
+                    self.state.status_message = Some("No triage sessions configured".to_string());
+                } else {
+                    self.state.session_picker_index = 0;
+                    self.state.input_mode = InputMode::SessionPicker;
+                }
+            }
             _ => {}
         }
         Ok(())
@@ -3661,7 +3816,7 @@ impl App {
 mod tests {
     use super::*;
     use crate::api::GitHubClient;
-    use crate::config::{OpenMethod, View};
+    use crate::config::{OpenMethod, TriageSession, View};
     use crate::models::{Notification, NotificationType, Owner, Repository, Subject};
 
     fn test_notification(id: &str, unread: bool) -> Notification {
@@ -3800,6 +3955,41 @@ mod tests {
         assert_eq!(app.state.active_view_index, Some(0));
         let visible_idx = app.state.filtered_notifications[0];
         assert_eq!(app.state.notifications[visible_idx].id, "2");
+    }
+
+    #[test]
+    fn session_applies_view_extra_filter_and_preview_mode() {
+        let mut app = App::new(Config::default());
+        app.state.views = vec![View {
+            name: "Mentions".to_string(),
+            filter: Some("mention".to_string()),
+            exclude_types: None,
+            exclude_reasons: None,
+            exclude_repos: None,
+            exclude_subjects: None,
+        }];
+        app.state.sessions = vec![TriageSession {
+            name: "Focused".to_string(),
+            view: Some("Mentions".to_string()),
+            filter: Some("Alpha".to_string()),
+            show_read: None,
+            preview_mode: Some("off".to_string()),
+            repos_collapsed: Some(true),
+        }];
+        app.state.set_notifications(vec![
+            notification_with("1", "Alpha thread", "mention", None),
+            notification_with("2", "Beta thread", "mention", None),
+            notification_with("3", "Alpha thread", "subscribed", None),
+        ]);
+
+        app.apply_session(1).unwrap();
+
+        assert_eq!(app.state.active_session_index, Some(0));
+        assert_eq!(app.state.active_view_index, Some(0));
+        assert!(matches!(app.state.preview_mode, PreviewMode::Off));
+        assert_eq!(app.state.filtered_notifications.len(), 1);
+        let visible_idx = app.state.filtered_notifications[0];
+        assert_eq!(app.state.notifications[visible_idx].id, "1");
     }
 
     #[test]

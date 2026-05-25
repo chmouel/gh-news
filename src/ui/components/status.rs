@@ -82,7 +82,18 @@ impl StatusWidget {
             status_line.spans.push(Span::styled(interval_text, style));
         }
 
-        if let Some(view_name) = state.active_view_name() {
+        if let Some(session_name) = state.active_session_name() {
+            status_line.spans.push(Span::raw(" · "));
+            status_line
+                .spans
+                .push(Span::styled("▣ ", Style::default().fg(self.colors.magenta)));
+            status_line.spans.push(Span::styled(
+                session_name.to_string(),
+                Style::default()
+                    .fg(self.colors.magenta)
+                    .add_modifier(Modifier::BOLD),
+            ));
+        } else if let Some(view_name) = state.active_view_name() {
             status_line.spans.push(Span::raw(" · "));
             status_line
                 .spans

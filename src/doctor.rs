@@ -1,5 +1,5 @@
 use crate::api::GitHubClient;
-use crate::config::{Action, Config};
+use crate::config::{preview_mode_from_str, Action, Config, TriageSession};
 use crate::error::{Error, Result};
 use crate::filter::Filter;
 use regex::Regex;
@@ -103,6 +103,10 @@ fn collect_checks(config: &Config) -> Vec<Check> {
         checks.extend(validate_action(action));
     }
 
+    for session in &config.sessions {
+        checks.extend(validate_session(config, session));
+    }
+
     checks.push(match GitHubClient::new(config) {
         Ok(client) => match client.get_authenticated_user() {
             Ok(login) => Check::ok(format!("GitHub authentication works for @{login}")),
@@ -110,6 +114,56 @@ fn collect_checks(config: &Config) -> Vec<Check> {
         },
         Err(err) => Check::error(format!("GitHub client could not start: {err}")),
     });
+
+    checks
+}
+
+fn validate_session(config: &Config, session: &TriageSession) -> Vec<Check> {
+    let mut checks = Vec::new();
+
+    if session.name.trim().is_empty() {
+        checks.push(Check::error("A triage session has an empty name"));
+    }
+
+    if let Some(view_name) = session.view.as_deref() {
+        let has_view = config
+            .views
+            .iter()
+            .chain(crate::builtin_views::builtin_views().iter())
+            .any(|view| view.name.eq_ignore_ascii_case(view_name));
+        if !has_view {
+            checks.push(Check::error(format!(
+                "Session '{}' references unknown view '{}'",
+                session.name, view_name
+            )));
+        }
+    }
+
+    if let Some(filter) = session.filter.as_deref() {
+        if let Err(err) = Filter::from_pattern(Some(filter)) {
+            checks.push(Check::error(format!(
+                "Session '{}' has an invalid filter: {err}",
+                session.name
+            )));
+        }
+    }
+
+    if let Some(preview_mode) = session.preview_mode.as_deref() {
+        let parsed = preview_mode_from_str(preview_mode);
+        if !matches!(
+            preview_mode.to_lowercase().as_str(),
+            "off" | "horizontal" | "vertical"
+        ) {
+            checks.push(Check::warning(format!(
+                "Session '{}' preview mode '{}' will be treated as {:?}",
+                session.name, preview_mode, parsed
+            )));
+        }
+    }
+
+    if checks.is_empty() {
+        checks.push(Check::ok(format!("Session '{}' is valid", session.name)));
+    }
 
     checks
 }

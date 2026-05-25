@@ -205,6 +205,10 @@ impl HelpWidget {
                         key: "V",
                         desc: "Switch named view (filter preset)",
                     },
+                    HelpLine {
+                        key: "S",
+                        desc: "Switch saved triage session",
+                    },
                 ],
             },
             HelpSection {

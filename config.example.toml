@@ -303,6 +303,22 @@ github_host = "github.com"
 # watch_repos = ["torvalds/linux", "rust-lang/rust", "my-org/*"]
 
 # ==============================================================================
+# SAVED TRIAGE SESSIONS
+# ==============================================================================
+
+# Saved sessions are named work contexts you can switch to with 'S'.
+# A session may activate a view, add an extra regex filter, change read/unread
+# scope, set the preview mode, and collapse repositories.
+#
+# [[sessions]]
+# name = "Reviews"
+# view = "Review Requests"
+# filter = "my-org/"
+# show_read = false
+# preview_mode = "vertical"  # off, horizontal, or vertical
+# repos_collapsed = true
+
+# ==============================================================================
 # CUSTOM ACTIONS
 # ==============================================================================
 

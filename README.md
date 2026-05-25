@@ -25,6 +25,7 @@ GitHub notifications TUI built with Rust and ratatui.
 - Snooze notifications locally until a chosen time
 - Custom actions with command templates
 - Named views for instant filter preset switching
+- Saved triage sessions for switching complete work contexts
 - Mark notifications read/unread individually or in bulk
 - Static display mode for scripting and pipelines
 - Configuration doctor for validating filters, actions, token access, and views
@@ -121,6 +122,7 @@ gh news --static-display | grep "something" # List notifications without TUI
 - `E` - Expunge read notifications
 - `/` - Filter notifications (type to search, Enter to keep, Esc to clear)
 - `V` - Switch named view (built-in and custom filter presets)
+- `S` - Switch saved triage session
 - `Tab` - Cycle preview modes (Off → Horizontal → Vertical)
 - `J`/`K` - Scroll preview (line by line)
 - `Shift+U`/`Shift+D` - Scroll preview (5 lines)
@@ -455,6 +457,31 @@ filter = "dependabot"
 | `exclude_subjects` | Override global `exclude_subjects` for this view (regex, case-insensitive) |
 
 User-defined views appear after the built-in views in the picker. Selecting `0. Default` clears the active view and restores the session's base filter. The `/` search works within the active view, and bulk actions (`Ctrl+A`) apply to the visible filtered result set.
+
+### Saved Triage Sessions
+
+Saved sessions are named work contexts you can switch to with `S`. They can activate a view, layer on an extra regex filter, change whether read notifications are shown, set the preview mode, and collapse repositories.
+
+```toml
+[[sessions]]
+name = "Reviews"
+view = "Review Requests"
+filter = "my-org/"
+show_read = false
+preview_mode = "vertical"
+repos_collapsed = true
+```
+
+**Session fields:**
+
+| Field | Description |
+|-------|-------------|
+| `name` | Display name shown in the session picker (required) |
+| `view` | Built-in or custom view name to activate |
+| `filter` | Extra regex filter layered on top of the selected view/default filter |
+| `show_read` | Override whether read notifications are fetched and shown |
+| `preview_mode` | Override preview mode: `off`, `horizontal`, or `vertical` |
+| `repos_collapsed` | Start the session with repositories collapsed or expanded |
 
 ## Environment Variables
 
