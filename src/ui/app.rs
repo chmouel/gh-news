@@ -1332,6 +1332,47 @@ impl App {
         }
     }
 
+    fn request_comments_for_selected_notification(&mut self) {
+        let Some(notification_id) = self.state.selected_notification().map(|n| n.id.clone()) else {
+            self.state.status_message = Some("No notification selected".to_string());
+            return;
+        };
+
+        let Some(notification) = self
+            .state
+            .notifications
+            .iter_mut()
+            .find(|n| n.id == notification_id)
+        else {
+            return;
+        };
+
+        if !matches!(
+            notification.notification_type(),
+            NotificationType::Issue | NotificationType::PullRequest
+        ) {
+            self.state.status_message =
+                Some("Comments are only supported for issues and pull requests".to_string());
+            return;
+        }
+
+        notification.comments_requested = true;
+        notification.issue_comments.clear();
+        notification.pr_comments.clear();
+        let notification = notification.clone();
+
+        if let Some(preview_manager) = self.preview_manager.as_ref() {
+            preview_manager.request_revalidation(&notification, PRIORITY_HIGH);
+        }
+
+        self.state.preview_content = Some(PreviewData::Generic {
+            title: "Loading comments...".to_string(),
+            body: "⏳ Fetching comments...\n\nThis may take a moment.".to_string(),
+        });
+        self.state.preview_scroll = 0;
+        self.state.status_message = Some("Loading comments for selected thread...".to_string());
+    }
+
     pub fn fetch_preview_for_selected(&mut self) {
         self.auto_fetch_preview_for_selected();
     }
@@ -2632,6 +2673,9 @@ impl App {
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.should_quit = true;
             }
+            KeyCode::Char('c') => {
+                self.request_comments_for_selected_notification();
+            }
             KeyCode::Char('?') => {
                 self.open_help();
             }
@@ -3847,6 +3891,9 @@ mod tests {
             author: None,
             context: None,
             event_body: None,
+            pr_comments: Vec::new(),
+            issue_comments: Vec::new(),
+            comments_requested: false,
         }
     }
 
@@ -3883,6 +3930,9 @@ mod tests {
             author: None,
             context: None,
             event_body: None,
+            pr_comments: Vec::new(),
+            issue_comments: Vec::new(),
+            comments_requested: false,
         }
     }
 
@@ -4281,6 +4331,39 @@ mod tests {
             Some("Printed 1 notification")
         );
     }
+
+    #[test]
+    fn key_c_requests_comments_for_selected_issue() {
+        let mut app = App::new(Config::default());
+        app.state
+            .set_notifications(vec![test_notification("issue-1", true)]);
+
+        app.handle_normal_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE))
+            .unwrap();
+
+        assert!(app.state.notifications[0].comments_requested);
+        assert_eq!(
+            app.state.status_message.as_deref(),
+            Some("Loading comments for selected thread...")
+        );
+    }
+
+    #[test]
+    fn key_c_rejected_for_non_issue_or_pr() {
+        let mut app = App::new(Config::default());
+        let mut notification = test_notification("commit-1", true);
+        notification.subject.subject_type = NotificationType::Commit;
+        app.state.set_notifications(vec![notification]);
+
+        app.handle_normal_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE))
+            .unwrap();
+
+        assert!(!app.state.notifications[0].comments_requested);
+        assert_eq!(
+            app.state.status_message.as_deref(),
+            Some("Comments are only supported for issues and pull requests")
+        );
+    }
 }
 
 impl Drop for App {
@@ -4337,6 +4420,9 @@ mod action_tests {
             author: None,
             context: None,
             event_body: None,
+            pr_comments: Vec::new(),
+            issue_comments: Vec::new(),
+            comments_requested: false,
         }
     }
 

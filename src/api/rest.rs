@@ -1,7 +1,7 @@
 use crate::api::get_github_token;
 use crate::config::Config;
 use crate::error::{ApiError, Error, Result};
-use crate::models::Notification;
+use crate::models::{IssueComment, Notification, PullRequestComment};
 use reqwest::blocking::{Client, RequestBuilder, Response};
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, ETAG, IF_NONE_MATCH, USER_AGENT};
 use reqwest::Method;
@@ -273,6 +273,151 @@ impl GitHubClient {
             .and_then(|u| u.get("login"))
             .and_then(|l| l.as_str())
             .map(|s| s.to_string()))
+    }
+
+    /// Fetch both issue comments and review comments for a pull request.
+    pub fn get_pull_request_comments(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: &str,
+        per_page: usize,
+    ) -> Result<Vec<PullRequestComment>> {
+        let page_size = per_page.clamp(1, MAX_PER_PAGE);
+        let issue_comments_url = format!(
+            "{}/repos/{}/{}/issues/{}/comments?per_page={}",
+            self.api_base, owner, repo, number, page_size
+        );
+        let review_comments_url = format!(
+            "{}/repos/{}/{}/pulls/{}/comments?per_page={}",
+            self.api_base, owner, repo, number, page_size
+        );
+
+        let issue_comments_value: Value = self.get_json(&issue_comments_url)?;
+        let review_comments_value: Value = self.get_json(&review_comments_url)?;
+
+        let mut comments = Self::parse_pull_request_comments(&issue_comments_value, false);
+        comments.extend(Self::parse_pull_request_comments(
+            &review_comments_value,
+            true,
+        ));
+        comments.sort_by_key(|left| left.created_at);
+        Ok(comments)
+    }
+
+    /// Fetch issue comments for an issue thread.
+    pub fn get_issue_comments(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: &str,
+        per_page: usize,
+    ) -> Result<Vec<IssueComment>> {
+        let page_size = per_page.clamp(1, MAX_PER_PAGE);
+        let issue_comments_url = format!(
+            "{}/repos/{}/{}/issues/{}/comments?per_page={}",
+            self.api_base, owner, repo, number, page_size
+        );
+
+        let issue_comments_value: Value = self.get_json(&issue_comments_url)?;
+        let mut comments = Self::parse_issue_comments(&issue_comments_value);
+        comments.sort_by_key(|left| left.created_at);
+        Ok(comments)
+    }
+
+    fn parse_pull_request_comments(value: &Value, is_review: bool) -> Vec<PullRequestComment> {
+        value
+            .as_array()
+            .map(|comments| {
+                comments
+                    .iter()
+                    .filter_map(|comment| {
+                        let body = comment
+                            .get("body")
+                            .and_then(|v| v.as_str())
+                            .map(str::trim)
+                            .unwrap_or("");
+                        if body.is_empty() {
+                            return None;
+                        }
+
+                        let author = comment
+                            .get("user")
+                            .and_then(|u| u.get("login"))
+                            .and_then(|l| l.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+
+                        let created_at = comment
+                            .get("created_at")
+                            .and_then(|v| v.as_str())
+                            .and_then(|v| chrono::DateTime::parse_from_rfc3339(v).ok())
+                            .map(|v| v.with_timezone(&chrono::Utc));
+
+                        let url = comment
+                            .get("html_url")
+                            .or_else(|| comment.get("url"))
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
+
+                        Some(PullRequestComment {
+                            author,
+                            body: body.to_string(),
+                            created_at,
+                            url,
+                            is_review,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn parse_issue_comments(value: &Value) -> Vec<IssueComment> {
+        value
+            .as_array()
+            .map(|comments| {
+                comments
+                    .iter()
+                    .filter_map(|comment| {
+                        let body = comment
+                            .get("body")
+                            .and_then(|v| v.as_str())
+                            .map(str::trim)
+                            .unwrap_or("");
+                        if body.is_empty() {
+                            return None;
+                        }
+
+                        let author = comment
+                            .get("user")
+                            .and_then(|u| u.get("login"))
+                            .and_then(|l| l.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+
+                        let created_at = comment
+                            .get("created_at")
+                            .and_then(|v| v.as_str())
+                            .and_then(|v| chrono::DateTime::parse_from_rfc3339(v).ok())
+                            .map(|v| v.with_timezone(&chrono::Utc));
+
+                        let url = comment
+                            .get("html_url")
+                            .or_else(|| comment.get("url"))
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
+
+                        Some(IssueComment {
+                            author,
+                            body: body.to_string(),
+                            created_at,
+                            url,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     pub fn mark_all_read(&self, last_read_at: Option<&str>) -> Result<()> {

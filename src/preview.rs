@@ -1,6 +1,6 @@
 use crate::api::GitHubClient;
 use crate::error::Result;
-use crate::models::{Notification, NotificationType};
+use crate::models::{IssueComment, Notification, NotificationType, PullRequestComment};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -21,6 +21,8 @@ pub enum PreviewData {
         additions: u64,
         deletions: u64,
         changed_files: u64,
+        #[serde(default)]
+        pr_comments: Vec<PullRequestComment>,
     },
     Issue {
         number: String,
@@ -31,6 +33,8 @@ pub enum PreviewData {
         comments: u64,
         body: String,
         labels: Vec<String>,
+        #[serde(default)]
+        issue_comments: Vec<IssueComment>,
     },
     Commit {
         sha: String,
@@ -523,13 +527,25 @@ impl PreviewFetcher {
                 // Extract number from subject URL
                 let number =
                     Self::extract_number_from_url(notification.subject_url(), notification_type)?;
-                Self::fetch_issue_preview(client, repo_full_name, number)?
+                Self::fetch_issue_preview(
+                    client,
+                    repo_full_name,
+                    number,
+                    &notification.issue_comments,
+                    notification.comments_requested,
+                )?
             }
             NotificationType::PullRequest => {
                 // Extract number from subject URL
                 let number =
                     Self::extract_number_from_url(notification.subject_url(), notification_type)?;
-                Self::fetch_pr_preview(client, repo_full_name, number)?
+                Self::fetch_pr_preview(
+                    client,
+                    repo_full_name,
+                    number,
+                    &notification.pr_comments,
+                    notification.comments_requested,
+                )?
             }
             NotificationType::Commit => {
                 // Extract SHA from subject URL
@@ -650,6 +666,8 @@ impl PreviewFetcher {
         client: &GitHubClient,
         repo: &str,
         number: String,
+        preloaded_comments: &[IssueComment],
+        comments_requested: bool,
     ) -> Result<PreviewData> {
         let (owner, repo_name) = repo
             .split_once('/')
@@ -702,6 +720,16 @@ impl PreviewFetcher {
             .and_then(|v| v.as_str())
             .unwrap_or("No description")
             .to_string();
+        let issue_comments = if !comments_requested {
+            Vec::new()
+        } else if preloaded_comments.is_empty() {
+            client
+                .get_issue_comments(owner, repo_name, &number, 30)
+                .unwrap_or_default()
+        } else {
+            preloaded_comments.to_vec()
+        };
+        let body = Self::format_issue_body_with_comments(&body, &issue_comments);
         let state = issue
             .get("state")
             .and_then(|v| v.as_str())
@@ -734,10 +762,36 @@ impl PreviewFetcher {
             comments,
             body,
             labels,
+            issue_comments,
         })
     }
 
-    fn fetch_pr_preview(client: &GitHubClient, repo: &str, number: String) -> Result<PreviewData> {
+    fn format_issue_body_with_comments(body: &str, comments: &[IssueComment]) -> String {
+        if comments.is_empty() {
+            return body.to_string();
+        }
+
+        let mut sections = vec![body.to_string(), "## Comments".to_string()];
+
+        for comment in comments {
+            let when = comment
+                .created_at
+                .map(|ts| ts.format("%Y-%m-%d %H:%M UTC").to_string())
+                .unwrap_or_else(|| "unknown time".to_string());
+            sections.push(format!("### @{} ({when})", comment.author));
+            sections.push(comment.body.clone());
+        }
+
+        sections.join("\n\n")
+    }
+
+    fn fetch_pr_preview(
+        client: &GitHubClient,
+        repo: &str,
+        number: String,
+        preloaded_comments: &[PullRequestComment],
+        comments_requested: bool,
+    ) -> Result<PreviewData> {
         let (owner, repo_name) = repo
             .split_once('/')
             .ok_or_else(|| crate::error::Error::Config("Invalid repo format".to_string()))?;
@@ -802,6 +856,16 @@ impl PreviewFetcher {
             .and_then(|v| v.as_str())
             .unwrap_or("No description")
             .to_string();
+        let pr_comments = if !comments_requested {
+            Vec::new()
+        } else if preloaded_comments.is_empty() {
+            client
+                .get_pull_request_comments(owner, repo_name, &number, 30)
+                .unwrap_or_default()
+        } else {
+            preloaded_comments.to_vec()
+        };
+        let body = Self::format_pull_request_body_with_comments(&body, &pr_comments);
         let merged = pr.get("merged").and_then(|v| v.as_bool()).unwrap_or(false);
         let state = if merged {
             "merged".to_string()
@@ -864,7 +928,35 @@ impl PreviewFetcher {
             additions,
             deletions,
             changed_files,
+            pr_comments,
         })
+    }
+
+    fn format_pull_request_body_with_comments(
+        body: &str,
+        comments: &[PullRequestComment],
+    ) -> String {
+        if comments.is_empty() {
+            return body.to_string();
+        }
+
+        let mut sections = vec![body.to_string(), "## Comments".to_string()];
+
+        for comment in comments {
+            let kind = if comment.is_review {
+                "review comment"
+            } else {
+                "comment"
+            };
+            let when = comment
+                .created_at
+                .map(|ts| ts.format("%Y-%m-%d %H:%M UTC").to_string())
+                .unwrap_or_else(|| "unknown time".to_string());
+            sections.push(format!("### @{} ({kind}, {when})", comment.author));
+            sections.push(comment.body.clone());
+        }
+
+        sections.join("\n\n")
     }
 
     fn fetch_commit_preview(client: &GitHubClient, repo: &str, sha: &str) -> Result<PreviewData> {
@@ -1523,6 +1615,7 @@ mod tests {
             additions: 0,
             deletions: 0,
             changed_files: 0,
+            pr_comments: Vec::new(),
         };
         let closed_draft = PreviewData::PullRequest {
             number: "2".to_string(),
@@ -1539,6 +1632,7 @@ mod tests {
             additions: 0,
             deletions: 0,
             changed_files: 0,
+            pr_comments: Vec::new(),
         };
         let merged_draft = PreviewData::PullRequest {
             number: "3".to_string(),
@@ -1555,6 +1649,7 @@ mod tests {
             additions: 0,
             deletions: 0,
             changed_files: 0,
+            pr_comments: Vec::new(),
         };
 
         let open_header = PreviewView::from(&open_draft).header[0].text();
@@ -1564,5 +1659,28 @@ mod tests {
         assert!(open_header.ends_with("[draft]"));
         assert!(closed_header.ends_with("[closed]"));
         assert!(merged_header.ends_with("[merged]"));
+    }
+
+    #[test]
+    fn format_issue_body_with_comments_appends_comment_section() {
+        let comments = vec![IssueComment {
+            author: "octocat".to_string(),
+            body: "LGTM!".to_string(),
+            created_at: None,
+            url: Some("https://github.com/owner/repo/issues/1#issuecomment-1".to_string()),
+        }];
+
+        let body = PreviewFetcher::format_issue_body_with_comments("Issue body", &comments);
+
+        assert!(body.contains("Issue body"));
+        assert!(body.contains("## Comments"));
+        assert!(body.contains("@octocat"));
+        assert!(body.contains("LGTM!"));
+    }
+
+    #[test]
+    fn format_issue_body_with_comments_keeps_body_when_no_comments() {
+        let body = PreviewFetcher::format_issue_body_with_comments("Issue body", &[]);
+        assert_eq!(body, "Issue body");
     }
 }

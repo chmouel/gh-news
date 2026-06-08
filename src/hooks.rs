@@ -104,6 +104,9 @@ mod tests {
             author: None,
             context: None,
             event_body: None,
+            pr_comments: Vec::new(),
+            issue_comments: Vec::new(),
+            comments_requested: false,
         }
     }
 

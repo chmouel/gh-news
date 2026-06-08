@@ -4,6 +4,23 @@ use serde::{Deserialize, Serialize};
 use url::Url;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PullRequestComment {
+    pub author: String,
+    pub body: String,
+    pub created_at: Option<DateTime<Utc>>,
+    pub url: Option<String>,
+    pub is_review: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IssueComment {
+    pub author: String,
+    pub body: String,
+    pub created_at: Option<DateTime<Utc>>,
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Notification {
     pub id: String,
     pub unread: bool,
@@ -30,6 +47,18 @@ pub struct Notification {
     /// Not part of the GitHub API response — populated when converting events to notifications.
     #[serde(skip)]
     pub event_body: Option<String>,
+    /// Pull request comments (issue comments and review comments) for PR subjects.
+    /// Not part of the GitHub notifications API response — populated via follow-up API calls.
+    #[serde(skip, default)]
+    pub pr_comments: Vec<PullRequestComment>,
+    /// Issue comments for issue subjects.
+    /// Not part of the GitHub notifications API response — populated via follow-up API calls.
+    #[serde(skip, default)]
+    pub issue_comments: Vec<IssueComment>,
+    /// Whether detailed comments should be fetched for previews.
+    /// Set interactively by the user to avoid eager API calls.
+    #[serde(skip, default)]
+    pub comments_requested: bool,
 }
 
 impl Notification {
@@ -420,6 +449,9 @@ mod tests {
             author: None,
             context: None,
             event_body: None,
+            pr_comments: Vec::new(),
+            issue_comments: Vec::new(),
+            comments_requested: false,
         }
     }
 

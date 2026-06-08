@@ -233,6 +233,10 @@ impl HelpWidget {
                         desc: "Scroll preview (page)",
                     },
                     HelpLine {
+                        key: "c",
+                        desc: "Load comments for selected issue/PR",
+                    },
+                    HelpLine {
                         key: "1/2",
                         desc: "Focus pane 1 (list) / 2 (preview)",
                     },

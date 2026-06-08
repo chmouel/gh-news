@@ -98,6 +98,9 @@ pub(crate) fn event_to_notification(
         author: Some(actor.to_string()),
         context: Some(event_type.to_string()),
         event_body,
+        pr_comments: Vec::new(),
+        issue_comments: Vec::new(),
+        comments_requested: false,
     })
 }
 
