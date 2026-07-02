@@ -60,7 +60,7 @@ Easiest way is to just run `gh auth login` if you have the GitHub CLI installed.
 
 ## Usage
 
-Press `Ctrl+R` to force a refresh. gh-news shows the current refresh stage in the loading panel while it refreshes notifications and any enabled extra sources. When GitHub returns rate-limit headers, the status bar shows the remaining API quota.
+Press `Ctrl+R` to force a refresh. gh-news shows the current refresh stage in the loading panel while it refreshes notifications and any enabled extra sources. When GitHub returns rate-limit headers, the status bar shows the remaining API quota. Local actions such as marking notifications read or archiving them update the on-disk cache straight away, so dismissed notifications do not reappear on the next startup. Should a background refresh fail, the status bar reports the error rather than failing silently.
 
 ### Options
 

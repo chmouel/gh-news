@@ -95,6 +95,9 @@ pub struct AppState {
     // Cursor position in the session picker popup
     pub session_picker_index: usize,
     pub rate_limit: Option<RateLimitDisplay>,
+    // Bumped on every local notification mutation (mark read/unread, remove)
+    // so the app can persist the cache and invalidate in-flight refreshes.
+    pub notification_mutation_seq: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -193,7 +196,14 @@ impl AppState {
             view_picker_index: 0,
             session_picker_index: 0,
             rate_limit: None,
+            notification_mutation_seq: 0,
         }
+    }
+
+    /// Record a local mutation to the notification list so the cache can be
+    /// re-persisted and any in-flight refresh snapshot invalidated.
+    pub fn note_notification_mutation(&mut self) {
+        self.notification_mutation_seq = self.notification_mutation_seq.wrapping_add(1);
     }
 
     pub fn active_view_name(&self) -> Option<&str> {
@@ -528,6 +538,7 @@ impl AppState {
             .find(|n| n.id == notification_id)
         {
             notif.unread = false;
+            self.note_notification_mutation();
         }
     }
 
@@ -538,7 +549,9 @@ impl AppState {
             .find(|n| n.id == notification_id)
         {
             notif.unread = !notif.unread;
-            Some(notif.unread)
+            let unread = notif.unread;
+            self.note_notification_mutation();
+            Some(unread)
         } else {
             None
         }
@@ -574,12 +587,14 @@ impl AppState {
 
     pub fn remove_notification(&mut self, notification_id: &str) {
         self.notifications.retain(|n| n.id != notification_id);
+        self.note_notification_mutation();
         self.apply_filter();
     }
 
     pub fn remove_notifications(&mut self, notification_ids: &[String]) {
         let id_set: HashSet<&String> = notification_ids.iter().collect();
         self.notifications.retain(|n| !id_set.contains(&n.id));
+        self.note_notification_mutation();
         self.apply_filter();
     }
 

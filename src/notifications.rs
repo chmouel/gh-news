@@ -51,6 +51,20 @@ pub fn fetch_notifications(
     NotificationFetcher::new(client, options).fetch()
 }
 
+/// Fetch standard notifications plus all opt-in extra sources in one call.
+/// This is the single fetch pipeline shared by the initial load, the
+/// cache-hit background refresh, and the auto-refresh timer.
+pub fn fetch_all_notifications(
+    client: &GitHubClient,
+    config: &Config,
+    options: NotificationFetchOptions,
+) -> Result<Vec<Notification>> {
+    let mut notifications = fetch_notifications(client, options)?;
+    let extra = fetch_extra_sources(client, config, &notifications);
+    notifications.extend(extra);
+    Ok(notifications)
+}
+
 pub fn refresh_stages(config: &Config) -> Vec<RefreshStage> {
     let mut stages = vec![RefreshStage::FetchNotifications];
 

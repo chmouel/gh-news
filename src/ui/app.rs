@@ -7,8 +7,8 @@ use crate::hooks;
 use crate::models::Notification;
 use crate::models::NotificationType;
 use crate::notifications::{
-    fetch_extra_sources, fetch_extra_sources_with_progress, fetch_notifications, refresh_stages,
-    NotificationFetchOptions, RefreshStage,
+    fetch_all_notifications, fetch_extra_sources_with_progress, fetch_notifications,
+    refresh_stages, NotificationFetchOptions, RefreshStage,
 };
 use crate::preview::PreviewData;
 use crate::preview_manager::{CacheStatus, PreviewManager, PRIORITY_HIGH, PRIORITY_LOW};
@@ -137,7 +137,16 @@ pub struct App {
     // Notification cache
     cache_path: Option<PathBuf>,
     cache_options_hash: Option<String>,
-    background_refresh_rx: Option<Receiver<crate::error::Result<InitialLoadData>>>,
+    // In-flight background refresh, tagged with the generation it was
+    // spawned at so stale results can be discarded.
+    background_refresh_rx: Option<(u64, Receiver<crate::error::Result<InitialLoadData>>)>,
+    // Bumped whenever an in-flight refresh snapshot becomes stale (manual
+    // refresh, local mutation).  Results tagged with an older generation
+    // are discarded instead of merged.
+    refresh_generation: u64,
+    // Last observed AppState::notification_mutation_seq, used to detect
+    // local mutations from the main loop.
+    last_seen_mutation_seq: u64,
     author_enrichment_rx: Option<Receiver<EnrichmentResult>>,
 }
 
@@ -196,6 +205,8 @@ impl App {
             cache_path: None,
             cache_options_hash: None,
             background_refresh_rx: None,
+            refresh_generation: 0,
+            last_seen_mutation_seq: 0,
             author_enrichment_rx: None,
         }
     }
@@ -275,17 +286,6 @@ impl App {
     pub fn apply_cached_load(&mut self, data: InitialLoadData, settings: PendingStateSettings) {
         self.pending_state_settings = Some(settings);
         self.apply_initial_load(data);
-    }
-
-    /// Start a background refresh that will silently update notifications
-    /// after a cache-hit startup.
-    pub fn start_background_refresh(
-        &mut self,
-        rx: Receiver<crate::error::Result<InitialLoadData>>,
-    ) {
-        self.background_refresh_rx = Some(rx);
-        self.state.status_message = Some("Refreshing from GitHub...".to_string());
-        self.last_refresh = Instant::now();
     }
 
     pub fn set_api_client(&mut self, client: crate::api::GitHubClient) {
@@ -571,19 +571,69 @@ impl App {
         max_notifications: Option<usize>,
     ) {
         // Always store refresh args for manual refresh (Ctrl+R)
-        self.refresh_args = Some((all, participating, max_notifications));
+        self.set_refresh_args(all, participating, max_notifications);
 
         // Auto-refresh disabled if interval is 0, but manual refresh still works
         // Store refresh args - we'll check the timer in the main loop
         // No need for a separate thread since we're already polling events
     }
 
+    /// Update the refresh arguments, keeping the cache options hash in sync
+    /// so refreshed data is never saved under a stale cache key.
+    fn set_refresh_args(
+        &mut self,
+        all: bool,
+        participating: bool,
+        max_notifications: Option<usize>,
+    ) {
+        self.refresh_args = Some((all, participating, max_notifications));
+        if self.cache_path.is_some() {
+            self.cache_options_hash = Some(crate::cache::compute_options_hash(
+                all,
+                participating,
+                max_notifications,
+                &self.config,
+            ));
+        }
+    }
+
     fn cancel_background_refresh(&mut self) {
         self.background_refresh_rx = None;
+        // Invalidate any result an orphaned worker thread might still produce.
+        self.refresh_generation = self.refresh_generation.wrapping_add(1);
+    }
+
+    /// Persist the current in-memory notifications to the on-disk cache so a
+    /// restart reflects local actions (mark read, archive, ...) immediately.
+    fn persist_notifications_to_cache(&self) {
+        let show_all = self
+            .refresh_args
+            .map(|(all, _, _)| all)
+            .unwrap_or(self.state.show_all);
+        let snapshot: Vec<Notification> = self
+            .state
+            .notifications
+            .iter()
+            .filter(|n| show_all || n.is_unread())
+            .cloned()
+            .collect();
+        self.save_notifications_cache(&snapshot);
+    }
+
+    /// Detect local notification mutations (mark read/unread, remove) made
+    /// since the last tick: persist them to the cache and invalidate any
+    /// in-flight refresh whose snapshot predates the mutation.
+    fn process_local_mutations(&mut self) {
+        let seq = self.state.notification_mutation_seq;
+        if seq != self.last_seen_mutation_seq {
+            self.last_seen_mutation_seq = seq;
+            self.refresh_generation = self.refresh_generation.wrapping_add(1);
+            self.persist_notifications_to_cache();
+        }
     }
 
     /// Spawn a background thread to fetch notifications without blocking the UI.
-    fn spawn_background_refresh(&mut self) {
+    pub fn spawn_background_refresh(&mut self) {
         let Some(ref client) = self.api_client else {
             return;
         };
@@ -596,27 +646,25 @@ impl App {
         let (tx, rx) = mpsc::channel();
 
         std::thread::spawn(move || {
-            let result = (|| -> crate::error::Result<InitialLoadData> {
-                let mut notifications = fetch_notifications(
-                    &client,
-                    NotificationFetchOptions {
-                        show_all: all,
-                        participating,
-                        max_notifications,
-                        per_page: config.pagination_size,
-                    },
-                )?;
-                let extra = fetch_extra_sources(&client, &config, &notifications);
-                notifications.extend(extra);
-                Ok(InitialLoadData {
-                    notifications,
-                    pinned_notifications: Vec::new(),
-                })
-            })();
+            let result = fetch_all_notifications(
+                &client,
+                &config,
+                NotificationFetchOptions {
+                    show_all: all,
+                    participating,
+                    max_notifications,
+                    per_page: config.pagination_size,
+                },
+            )
+            .map(|notifications| InitialLoadData {
+                notifications,
+                pinned_notifications: Vec::new(),
+            });
             let _ = tx.send(result);
         });
 
-        self.background_refresh_rx = Some(rx);
+        self.refresh_generation = self.refresh_generation.wrapping_add(1);
+        self.background_refresh_rx = Some((self.refresh_generation, rx));
         self.state.status_message = Some("Refreshing from GitHub...".to_string());
         self.last_refresh = Instant::now();
     }
@@ -1396,7 +1444,13 @@ impl App {
                     Ok(result) => {
                         self.initial_load_rx = None;
                         match result {
-                            Ok(data) => self.apply_initial_load(data),
+                            Ok(data) => {
+                                self.apply_initial_load(data);
+                                // Persist the fresh fetch (post dismissed-filtering)
+                                // on the UI thread; workers never write the cache.
+                                self.persist_notifications_to_cache();
+                                self.last_seen_mutation_seq = self.state.notification_mutation_seq;
+                            }
                             Err(e) => return Err(e),
                         }
                     }
@@ -1446,16 +1500,28 @@ impl App {
                 }
             }
 
+            // Persist local mutations (mark read, remove, ...) to the cache and
+            // invalidate in-flight refresh snapshots that predate them.
+            self.process_local_mutations();
+
             // Poll background refresh (after cache-hit startup)
-            if let Some(ref rx) = self.background_refresh_rx {
+            if let Some((generation, ref rx)) = self.background_refresh_rx {
                 match rx.try_recv() {
                     Ok(Ok(data)) => {
                         self.background_refresh_rx = None;
-                        self.merge_refreshed_notifications(data.notifications);
+                        if generation == self.refresh_generation {
+                            self.merge_refreshed_notifications(data.notifications);
+                        } else {
+                            // The snapshot predates a local mutation or manual
+                            // refresh; discard it and fetch a fresh one.
+                            self.spawn_background_refresh();
+                        }
                     }
-                    Ok(Err(_)) => {
+                    Ok(Err(e)) => {
                         // Background refresh failed; keep showing cached data
+                        // but tell the user instead of failing silently.
                         self.background_refresh_rx = None;
+                        self.state.status_message = Some(format!("Refresh failed: {}", e));
                     }
                     Err(TryRecvError::Disconnected) => {
                         self.background_refresh_rx = None;
@@ -2171,7 +2237,7 @@ impl App {
             if self.state.show_all != show_read {
                 self.state.show_all = show_read;
                 if let Some((_, participating, max_notifications)) = self.refresh_args {
-                    self.refresh_args = Some((show_read, participating, max_notifications));
+                    self.set_refresh_args(show_read, participating, max_notifications);
                 }
                 self.queue_blocking_action(BlockingAction::Refresh, "Refreshing session...");
             }
@@ -3253,8 +3319,7 @@ impl App {
                 // Toggle showing read notifications
                 self.state.show_all = !self.state.show_all;
                 if let Some((_, participating, max_notifications)) = self.refresh_args {
-                    self.refresh_args =
-                        Some((self.state.show_all, participating, max_notifications));
+                    self.set_refresh_args(self.state.show_all, participating, max_notifications);
                 }
                 self.queue_blocking_action(BlockingAction::Refresh, "Refreshing notifications...");
             }
@@ -3361,7 +3426,7 @@ impl App {
         if self.state.show_all {
             self.state.show_all = false;
             if let Some((_, participating, max_notifications)) = self.refresh_args {
-                self.refresh_args = Some((false, participating, max_notifications));
+                self.set_refresh_args(false, participating, max_notifications);
             }
         }
 
@@ -3383,6 +3448,7 @@ impl App {
         }
 
         self.state.set_notifications(kept);
+        self.state.note_notification_mutation();
 
         let existing_ids: HashSet<String> = self
             .state
@@ -4098,11 +4164,12 @@ mod tests {
     }
 
     #[test]
-    fn start_background_refresh_sets_visible_status_message() {
+    fn spawn_background_refresh_sets_visible_status_message() {
         let mut app = App::new(Config::default());
-        let (_tx, rx) = mpsc::channel();
+        app.set_api_client(GitHubClient::new_test());
+        app.refresh_args = Some((false, false, Some(0)));
 
-        app.start_background_refresh(rx);
+        app.spawn_background_refresh();
 
         assert_eq!(
             app.state.status_message.as_deref(),
@@ -4145,7 +4212,7 @@ mod tests {
             pinned_notifications: Vec::new(),
         }))
         .unwrap();
-        app.background_refresh_rx = Some(rx);
+        app.background_refresh_rx = Some((app.refresh_generation, rx));
 
         app.refresh_notifications(None).unwrap();
 
@@ -4157,7 +4224,7 @@ mod tests {
     fn terminal_progress_state_uses_indeterminate_for_background_refresh() {
         let mut app = App::new(Config::default());
         let (_tx, rx) = mpsc::channel();
-        app.background_refresh_rx = Some(rx);
+        app.background_refresh_rx = Some((app.refresh_generation, rx));
 
         assert_eq!(app.terminal_progress_state(), ProgressState::Indeterminate);
     }
@@ -4280,6 +4347,73 @@ mod tests {
             app.state.status_message.as_deref(),
             Some("Printed 1 notification")
         );
+    }
+
+    #[test]
+    fn set_refresh_args_keeps_cache_options_hash_in_sync() {
+        let mut app = App::new(Config::default());
+        app.set_cache_info(
+            PathBuf::from("/tmp/gh-news-test-cache.json"),
+            "stale".to_string(),
+        );
+
+        app.set_refresh_args(true, false, Some(50));
+
+        let expected = crate::cache::compute_options_hash(true, false, Some(50), &app.config);
+        assert_eq!(app.cache_options_hash.as_deref(), Some(expected.as_str()));
+    }
+
+    #[test]
+    fn set_refresh_args_without_cache_leaves_hash_unset() {
+        let mut app = App::new(Config::default());
+
+        app.set_refresh_args(true, false, None);
+
+        assert!(app.cache_options_hash.is_none());
+    }
+
+    #[test]
+    fn local_mutation_bumps_generation_and_persists_cache() {
+        let dir =
+            std::env::temp_dir().join(format!("gh-news-app-cache-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let cache_path = dir.join("cache.json");
+
+        let mut app = App::new(Config::default());
+        let hash = crate::cache::compute_options_hash(false, false, None, &app.config);
+        app.set_cache_info(cache_path.clone(), hash.clone());
+        app.set_refresh_args(false, false, None);
+        app.state.set_notifications(vec![
+            notification_with("1", "First", "mention", None),
+            notification_with("2", "Second", "mention", None),
+        ]);
+        app.last_seen_mutation_seq = app.state.notification_mutation_seq;
+        let generation = app.refresh_generation;
+
+        app.state.mark_notification_read("1");
+        app.process_local_mutations();
+
+        // Generation bumped so any in-flight refresh snapshot is discarded.
+        assert_ne!(app.refresh_generation, generation);
+        // Cache rewritten without the read notification (show_all = false).
+        let cached = crate::cache::load_cache(&cache_path, &hash).unwrap();
+        assert_eq!(cached.len(), 1);
+        assert_eq!(cached[0].id, "2");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn process_local_mutations_is_idempotent_without_changes() {
+        let mut app = App::new(Config::default());
+        app.state
+            .set_notifications(vec![notification_with("1", "First", "mention", None)]);
+        app.last_seen_mutation_seq = app.state.notification_mutation_seq;
+        let generation = app.refresh_generation;
+
+        app.process_local_mutations();
+
+        assert_eq!(app.refresh_generation, generation);
     }
 }
 

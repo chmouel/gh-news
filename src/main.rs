@@ -182,125 +182,82 @@ fn run() -> Result<()> {
 
     // Notification cache setup
     let use_cache = !args.no_cache && !args.static_display;
-    let options_hash = cache::compute_options_hash(
-        opts.show_all,
-        opts.participating,
-        opts.max_notifications,
-        &config,
-    );
     let cache_path = cache::get_cache_path(config.cache_file.as_deref())?;
 
-    // Pass cache info to app so refreshes can update it
-    app.set_cache_info(cache_path.clone(), options_hash.clone());
+    // Pass cache info to app so refreshes can update it.  Skipped entirely
+    // with --no-cache so the app never writes the cache either.
+    if use_cache {
+        let options_hash = cache::compute_options_hash(
+            opts.show_all,
+            opts.participating,
+            opts.max_notifications,
+            &config,
+        );
+        app.set_cache_info(cache_path.clone(), options_hash.clone());
 
-    // Try loading from cache -- if a cache exists, show it immediately and
-    // always refresh in the background so the user sees fresh data shortly.
-    let cached = if use_cache {
-        cache::load_cache(&cache_path, &options_hash)
-    } else {
-        None
-    };
-
-    if let Some(cached_notifications) = cached {
-        // Cache hit: display immediately, then refresh in background
-        let pinned_notifications =
-            state_file::AppStateFile::load_pinned_notifications().unwrap_or_default();
-        let mut notifications = cached_notifications;
-        for pinned in &pinned_notifications {
-            if !notifications.iter().any(|n| n.id == pinned.id) {
-                notifications.push(pinned.clone());
+        // Try loading from cache -- if a cache exists, show it immediately and
+        // always refresh in the background so the user sees fresh data shortly.
+        if let Some(cached_notifications) = cache::load_cache(&cache_path, &options_hash) {
+            // Cache hit: display immediately, then refresh in background
+            let pinned_notifications =
+                state_file::AppStateFile::load_pinned_notifications().unwrap_or_default();
+            let mut notifications = cached_notifications;
+            for pinned in &pinned_notifications {
+                if !notifications.iter().any(|n| n.id == pinned.id) {
+                    notifications.push(pinned.clone());
+                }
             }
+
+            let data = InitialLoadData {
+                notifications,
+                pinned_notifications,
+            };
+            app.apply_cached_load(data, settings);
+
+            // Spawn a background refresh so we still get fresh data; the app
+            // merges the result and persists the cache on the UI thread.
+            app.spawn_background_refresh();
+
+            app.run(&mut terminal)?;
+            return Ok(());
         }
-
-        let data = InitialLoadData {
-            notifications,
-            pinned_notifications,
-        };
-        app.apply_cached_load(data, settings);
-
-        // Spawn background refresh so we still get fresh data
-        let (tx, rx) = channel();
-        let config_clone = config.clone();
-        let opts_clone = opts.clone();
-        let client_clone = client.clone();
-        let cache_path_clone = cache_path.clone();
-        let options_hash_clone = options_hash.clone();
-        thread::spawn(move || {
-            let result = (|| {
-                let mut notifications = fetch_notifications(
-                    &client_clone,
-                    NotificationFetchOptions {
-                        show_all: opts_clone.show_all,
-                        participating: opts_clone.participating,
-                        max_notifications: opts_clone.max_notifications,
-                        per_page: config_clone.pagination_size,
-                    },
-                )?;
-                let extra = fetch_extra_sources(&client_clone, &config_clone, &notifications);
-                notifications.extend(extra);
-                // Save to cache
-                let _ = cache::save_cache(&cache_path_clone, &notifications, &options_hash_clone);
-
-                let pinned_notifications =
-                    state_file::AppStateFile::load_pinned_notifications().unwrap_or_default();
-                for pinned in &pinned_notifications {
-                    if !notifications.iter().any(|n| n.id == pinned.id) {
-                        notifications.push(pinned.clone());
-                    }
-                }
-                Ok(InitialLoadData {
-                    notifications,
-                    pinned_notifications,
-                })
-            })();
-            let _ = tx.send(result);
-        });
-        app.start_background_refresh(rx);
-    } else {
-        // No cache: show loading screen, fetch from API
-        let (tx, rx) = channel();
-        let config_clone = config.clone();
-        let opts_clone = opts.clone();
-        let client_clone = client.clone();
-        let cache_path_clone = cache_path.clone();
-        let options_hash_clone = options_hash.clone();
-        let use_cache_clone = use_cache;
-        thread::spawn(move || {
-            let result = (|| {
-                let mut notifications = fetch_notifications(
-                    &client_clone,
-                    NotificationFetchOptions {
-                        show_all: opts_clone.show_all,
-                        participating: opts_clone.participating,
-                        max_notifications: opts_clone.max_notifications,
-                        per_page: config_clone.pagination_size,
-                    },
-                )?;
-                let extra = fetch_extra_sources(&client_clone, &config_clone, &notifications);
-                notifications.extend(extra);
-                // Save to cache if enabled
-                if use_cache_clone {
-                    let _ =
-                        cache::save_cache(&cache_path_clone, &notifications, &options_hash_clone);
-                }
-
-                let pinned_notifications =
-                    state_file::AppStateFile::load_pinned_notifications().unwrap_or_default();
-                for pinned in &pinned_notifications {
-                    if !notifications.iter().any(|n| n.id == pinned.id) {
-                        notifications.push(pinned.clone());
-                    }
-                }
-                Ok(InitialLoadData {
-                    notifications,
-                    pinned_notifications,
-                })
-            })();
-            let _ = tx.send(result);
-        });
-
-        app.start_initial_load(rx, settings);
     }
+
+    // No cache (miss or disabled): show loading screen, fetch from API
+    let (tx, rx) = channel();
+    let config_clone = config.clone();
+    let opts_clone = opts.clone();
+    let client_clone = client.clone();
+    thread::spawn(move || {
+        let result = (|| {
+            let notifications = notifications::fetch_all_notifications(
+                &client_clone,
+                &config_clone,
+                NotificationFetchOptions {
+                    show_all: opts_clone.show_all,
+                    participating: opts_clone.participating,
+                    max_notifications: opts_clone.max_notifications,
+                    per_page: config_clone.pagination_size,
+                },
+            )?;
+
+            let mut notifications = notifications;
+            let pinned_notifications =
+                state_file::AppStateFile::load_pinned_notifications().unwrap_or_default();
+            for pinned in &pinned_notifications {
+                if !notifications.iter().any(|n| n.id == pinned.id) {
+                    notifications.push(pinned.clone());
+                }
+            }
+            Ok(InitialLoadData {
+                notifications,
+                pinned_notifications,
+            })
+        })();
+        let _ = tx.send(result);
+    });
+
+    app.start_initial_load(rx, settings);
 
     // Run the app
     app.run(&mut terminal)?;

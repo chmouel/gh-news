@@ -61,8 +61,10 @@ pub fn get_cache_path(custom_path: Option<&str>) -> Result<PathBuf> {
 }
 
 /// Try to load cached notifications.  Returns `Some` when the file exists
-/// and the version and options hash match.  No TTL check -- the caller
-/// always triggers a background refresh after displaying cached data.
+/// and the version and options hash match.  An empty cache is treated as a
+/// miss so startup performs a full refresh instead of showing an empty
+/// list.  No TTL check -- the caller always triggers a background refresh
+/// after displaying cached data.
 pub fn load_cache(cache_path: &Path, options_hash: &str) -> Option<Vec<Notification>> {
     let content = fs::read_to_string(cache_path).ok()?;
     let cache: NotificationCache = serde_json::from_str(&content).ok()?;
@@ -71,6 +73,9 @@ pub fn load_cache(cache_path: &Path, options_hash: &str) -> Option<Vec<Notificat
         return None;
     }
     if cache.fetch_options_hash != options_hash {
+        return None;
+    }
+    if cache.notifications.is_empty() {
         return None;
     }
 
@@ -163,6 +168,17 @@ mod tests {
 
         save_cache(&path, &[sample_notification()], "hash_a").unwrap();
         assert!(load_cache(&path, "hash_b").is_none());
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn empty_cache_is_treated_as_miss() {
+        let dir = test_dir();
+        let path = dir.join("cache.json");
+
+        save_cache(&path, &[], "hash").unwrap();
+        assert!(load_cache(&path, "hash").is_none());
 
         let _ = fs::remove_dir_all(&dir);
     }
