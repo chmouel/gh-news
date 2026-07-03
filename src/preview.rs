@@ -4,6 +4,15 @@ use crate::models::{Notification, NotificationType};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+/// The comment that triggered a notification, shown in place of the
+/// issue/PR description when available.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LatestComment {
+    pub author: String,
+    pub body: String,
+    pub created_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PreviewData {
     PullRequest {
@@ -21,6 +30,8 @@ pub enum PreviewData {
         additions: u64,
         deletions: u64,
         changed_files: u64,
+        #[serde(default)]
+        latest_comment: Option<LatestComment>,
     },
     Issue {
         number: String,
@@ -31,6 +42,8 @@ pub enum PreviewData {
         comments: u64,
         body: String,
         labels: Vec<String>,
+        #[serde(default)]
+        latest_comment: Option<LatestComment>,
     },
     Commit {
         sha: String,
@@ -459,7 +472,7 @@ impl PreviewView {
 
         Self {
             header,
-            body: preview.body().to_string(),
+            body: preview.display_body(),
         }
     }
 
@@ -487,6 +500,43 @@ impl PreviewData {
             PreviewData::Generic { body, .. } => body,
         }
     }
+
+    pub fn latest_comment(&self) -> Option<&LatestComment> {
+        match self {
+            PreviewData::PullRequest { latest_comment, .. }
+            | PreviewData::Issue { latest_comment, .. } => latest_comment.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// The body shown in the preview pane: the comment that triggered the
+    /// notification when one is available, otherwise the description.
+    pub fn display_body(&self) -> String {
+        match self.latest_comment() {
+            Some(comment) => {
+                let date = format_comment_date(&comment.created_at);
+                let attribution = if date.is_empty() {
+                    format!("💬 Comment by @{}", comment.author)
+                } else {
+                    format!("💬 Comment by @{} · {}", comment.author, date)
+                };
+                format!("{}\n\n{}", attribution, comment.body)
+            }
+            None => self.body().to_string(),
+        }
+    }
+}
+
+/// Format an ISO 8601 timestamp as a local, human-readable date.
+/// Returns an empty string if the timestamp cannot be parsed.
+fn format_comment_date(created_at: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(created_at)
+        .map(|dt| {
+            dt.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_default()
 }
 
 impl fmt::Display for PreviewData {
@@ -523,13 +573,29 @@ impl PreviewFetcher {
                 // Extract number from subject URL
                 let number =
                     Self::extract_number_from_url(notification.subject_url(), notification_type)?;
-                Self::fetch_issue_preview(client, repo_full_name, number)?
+                let mut data = Self::fetch_issue_preview(client, repo_full_name, number)?;
+                if let PreviewData::Issue {
+                    ref mut latest_comment,
+                    ..
+                } = data
+                {
+                    *latest_comment = Self::fetch_latest_comment(client, notification);
+                }
+                data
             }
             NotificationType::PullRequest => {
                 // Extract number from subject URL
                 let number =
                     Self::extract_number_from_url(notification.subject_url(), notification_type)?;
-                Self::fetch_pr_preview(client, repo_full_name, number)?
+                let mut data = Self::fetch_pr_preview(client, repo_full_name, number)?;
+                if let PreviewData::PullRequest {
+                    ref mut latest_comment,
+                    ..
+                } = data
+                {
+                    *latest_comment = Self::fetch_latest_comment(client, notification);
+                }
+                data
             }
             NotificationType::Commit => {
                 // Extract SHA from subject URL
@@ -607,6 +673,44 @@ impl PreviewFetcher {
         };
 
         Ok(preview_data)
+    }
+
+    /// Fetch the comment that triggered the notification, when the
+    /// notification points at a comment rather than the thread itself.
+    /// Any failure falls back silently to showing the description.
+    fn fetch_latest_comment(
+        client: &GitHubClient,
+        notification: &Notification,
+    ) -> Option<LatestComment> {
+        let comment_url = notification.latest_comment_url()?;
+        // When the notification is about the thread itself (opened, merged,
+        // ...), latest_comment_url equals the subject URL: no comment to show.
+        if Some(comment_url) == notification.subject_url() {
+            return None;
+        }
+
+        let value = client.get_json_by_url(comment_url).ok()?;
+        let body = value.get("body")?.as_str()?.trim().to_string();
+        if body.is_empty() {
+            return None;
+        }
+        let author = value
+            .get("user")
+            .and_then(|u| u.get("login"))
+            .and_then(|l| l.as_str())
+            .unwrap_or("unknown")
+            .to_string();
+        let created_at = value
+            .get("created_at")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+
+        Some(LatestComment {
+            author,
+            body,
+            created_at,
+        })
     }
 
     fn extract_number_from_url(
@@ -734,6 +838,7 @@ impl PreviewFetcher {
             comments,
             body,
             labels,
+            latest_comment: None,
         })
     }
 
@@ -864,6 +969,7 @@ impl PreviewFetcher {
             additions,
             deletions,
             changed_files,
+            latest_comment: None,
         })
     }
 
@@ -1523,6 +1629,7 @@ mod tests {
             additions: 0,
             deletions: 0,
             changed_files: 0,
+            latest_comment: None,
         };
         let closed_draft = PreviewData::PullRequest {
             number: "2".to_string(),
@@ -1539,6 +1646,7 @@ mod tests {
             additions: 0,
             deletions: 0,
             changed_files: 0,
+            latest_comment: None,
         };
         let merged_draft = PreviewData::PullRequest {
             number: "3".to_string(),
@@ -1555,6 +1663,7 @@ mod tests {
             additions: 0,
             deletions: 0,
             changed_files: 0,
+            latest_comment: None,
         };
 
         let open_header = PreviewView::from(&open_draft).header[0].text();
@@ -1564,5 +1673,155 @@ mod tests {
         assert!(open_header.ends_with("[draft]"));
         assert!(closed_header.ends_with("[closed]"));
         assert!(merged_header.ends_with("[merged]"));
+    }
+
+    fn issue_preview_with_comment(latest_comment: Option<LatestComment>) -> PreviewData {
+        PreviewData::Issue {
+            number: "7".to_string(),
+            title: "Broken things".to_string(),
+            state: "open".to_string(),
+            state_reason: String::new(),
+            author: "octocat".to_string(),
+            comments: 3,
+            body: "The description".to_string(),
+            labels: Vec::new(),
+            latest_comment,
+        }
+    }
+
+    #[test]
+    fn display_body_falls_back_to_description_without_comment() {
+        let preview = issue_preview_with_comment(None);
+        assert_eq!(preview.display_body(), "The description");
+    }
+
+    #[test]
+    fn display_body_shows_latest_comment_with_attribution() {
+        let preview = issue_preview_with_comment(Some(LatestComment {
+            author: "hubot".to_string(),
+            body: "I fixed it in a follow-up.".to_string(),
+            created_at: "2026-07-01T10:00:00Z".to_string(),
+        }));
+
+        let body = preview.display_body();
+        assert!(body.starts_with("💬 Comment by @hubot · "));
+        assert!(body.ends_with("I fixed it in a follow-up."));
+        assert!(!body.contains("The description"));
+    }
+
+    #[test]
+    fn display_body_omits_date_when_unparseable() {
+        let preview = issue_preview_with_comment(Some(LatestComment {
+            author: "hubot".to_string(),
+            body: "No date here.".to_string(),
+            created_at: "not-a-date".to_string(),
+        }));
+
+        assert!(preview
+            .display_body()
+            .starts_with("💬 Comment by @hubot\n\n"));
+    }
+
+    #[test]
+    fn deserialises_cached_preview_without_latest_comment_field() {
+        // Persisted preview caches written before the field existed must
+        // still load.
+        let json = r#"{"Issue":{"number":"1","title":"t","state":"open",
+            "state_reason":"","author":"a","comments":0,"body":"b","labels":[]}}"#;
+        let preview: PreviewData = serde_json::from_str(json).unwrap();
+        assert!(preview.latest_comment().is_none());
+    }
+
+    #[test]
+    fn fetch_latest_comment_skips_when_url_matches_subject() {
+        let client = GitHubClient::new_test();
+        // Real API shape: latest_comment_url lives inside `subject`.
+        let notification: Notification = serde_json::from_value(json!({
+            "id": "1",
+            "unread": true,
+            "reason": "subscribed",
+            "repository": {
+                "id": 1,
+                "name": "repo",
+                "full_name": "owner/repo",
+                "owner": { "login": "owner", "id": 1, "type": "User" },
+                "private": false
+            },
+            "subject": {
+                "title": "Test",
+                "type": "Issue",
+                "url": "https://api.github.com/repos/owner/repo/issues/1",
+                "latest_comment_url": "https://api.github.com/repos/owner/repo/issues/1"
+            }
+        }))
+        .unwrap();
+
+        assert_eq!(
+            notification.latest_comment_url(),
+            Some("https://api.github.com/repos/owner/repo/issues/1")
+        );
+        assert!(PreviewFetcher::fetch_latest_comment(&client, &notification).is_none());
+    }
+
+    #[test]
+    fn fetch_latest_comment_returns_comment_from_api() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request_line = String::new();
+            reader.read_line(&mut request_line).unwrap();
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+            }
+            let body = serde_json::json!({
+                "body": "Looks good to me!",
+                "user": { "login": "hubot" },
+                "created_at": "2026-07-01T10:00:00Z"
+            })
+            .to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+
+        let client = GitHubClient::new_test_with_base(base_url.clone());
+        let notification: Notification = serde_json::from_value(json!({
+            "id": "1",
+            "unread": true,
+            "reason": "mention",
+            "repository": {
+                "id": 1,
+                "name": "repo",
+                "full_name": "owner/repo",
+                "owner": { "login": "owner", "id": 1, "type": "User" },
+                "private": false
+            },
+            "subject": {
+                "title": "Test",
+                "type": "Issue",
+                "url": format!("{}/repos/owner/repo/issues/1", base_url),
+                "latest_comment_url": format!("{}/repos/owner/repo/issues/comments/99", base_url)
+            }
+        }))
+        .unwrap();
+
+        let comment = PreviewFetcher::fetch_latest_comment(&client, &notification).unwrap();
+        assert_eq!(comment.author, "hubot");
+        assert_eq!(comment.body, "Looks good to me!");
+        assert_eq!(comment.created_at, "2026-07-01T10:00:00Z");
+
+        handle.join().unwrap();
     }
 }

@@ -63,6 +63,16 @@ impl Notification {
         self.subject.url.as_deref()
     }
 
+    /// URL of the comment that triggered this notification, if any.
+    /// GitHub returns this inside `subject`; the top-level field is kept
+    /// for synthetic notifications and cached data.
+    pub fn latest_comment_url(&self) -> Option<&str> {
+        self.subject
+            .latest_comment_url
+            .as_deref()
+            .or(self.latest_comment_url.as_deref())
+    }
+
     pub fn subject_number(&self) -> Option<String> {
         let url = self.subject.url.as_deref()?;
         let number = url.rsplit('/').next()?;
@@ -256,9 +266,14 @@ impl Notification {
 
         // Prefer latest_comment_url if available (goes directly to the comment).
         // Skip for Discussions — the comment URL logic only handles issues/PRs
-        // and would incorrectly rewrite to /issues/.
+        // and would incorrectly rewrite to /issues/.  Thread-level
+        // notifications set latest_comment_url to the subject URL itself,
+        // which has no "/comments/" segment and must not get an anchor.
         if !matches!(self.notification_type(), NotificationType::Discussion) {
-            if let Some(comment_url) = &self.latest_comment_url {
+            if let Some(comment_url) = self
+                .latest_comment_url()
+                .filter(|u| u.contains("/comments/"))
+            {
                 // Convert API URL to web URL
                 // API: https://api.github.com/repos/owner/repo/issues/comments/123456
                 // Web: https://github.com/owner/repo/issues/123#issuecomment-123456

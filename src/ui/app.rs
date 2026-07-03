@@ -711,7 +711,7 @@ impl App {
             .notifications
             .iter()
             .filter_map(|n| {
-                let needs_author = n.author.is_none() && n.latest_comment_url.is_some();
+                let needs_author = n.author.is_none() && n.latest_comment_url().is_some();
                 let needs_context =
                     n.reason_enum() == NotificationReason::StateChange && n.subject_url().is_some();
 
@@ -724,7 +724,7 @@ impl App {
                 Some(FetchItem {
                     id: n.id.clone(),
                     comment_url: if needs_author {
-                        n.latest_comment_url.clone()
+                        n.latest_comment_url().map(String::from)
                     } else {
                         None
                     },
