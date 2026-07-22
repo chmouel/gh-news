@@ -6,6 +6,7 @@ mod cache;
 mod cli;
 mod config;
 mod doctor;
+mod emoji;
 mod error;
 mod events;
 mod filter;
@@ -298,7 +299,7 @@ fn handle_static_display(config: &Config, opts: &RuntimeOptions) -> Result<()> {
             name,
             notification.notification_type(),
             notification.reason_enum(),
-            notification.title()
+            emoji::expand_shortcodes(notification.title())
         );
     }
 

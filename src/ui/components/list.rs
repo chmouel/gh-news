@@ -1,3 +1,4 @@
+use crate::emoji::{display_width, expand_shortcodes, truncate_display_width};
 use crate::models::{NotificationReason, NotificationType};
 use crate::state::AppState;
 use crate::ui::theme::{ColorPalette, Theme};
@@ -233,6 +234,7 @@ impl ListWidget {
                     crate::state::TreeItem::Notification(notif_idx) => {
                         if let Some(notif) = app_state.notifications.get(*notif_idx) {
                             let time = notif.time_display();
+                            let title = expand_shortcodes(notif.title());
                             let is_pinned = app_state.is_pinned(&notif.id);
                             let is_multi_selected = app_state.is_selected(&notif.id);
 
@@ -294,21 +296,23 @@ impl ListWidget {
                             match config.list_layout {
                                 crate::config::ListLayout::RightAligned => {
                                     let inner_width = area.width.saturating_sub(4) as usize;
-                                    let left_width = 2 + 2 + time.chars().count() + 1 + 2;
+                                    let left_width = checkbox_span.width()
+                                        + dot_span.width()
+                                        + time_span.width()
+                                        + type_icon_span.width();
 
                                     let reason_str = notif.display_reason();
                                     let right_text = match notif.subject_number() {
                                         Some(ref n) => format!("#{n} {reason_str}"),
                                         None => reason_str,
                                     };
-                                    let right_width = right_text.chars().count();
+                                    let right_width = display_width(&right_text);
 
                                     let available =
                                         inner_width.saturating_sub(left_width + right_width + 1);
-                                    let truncated: String =
-                                        notif.title().chars().take(available).collect();
+                                    let truncated = truncate_display_width(&title, available);
                                     let padding_count = inner_width.saturating_sub(
-                                        left_width + truncated.chars().count() + right_width,
+                                        left_width + display_width(&truncated) + right_width,
                                     );
 
                                     ListItem::new(Line::from(vec![
@@ -323,8 +327,8 @@ impl ListWidget {
                                 }
                                 crate::config::ListLayout::IconOnly => {
                                     let title_text = match notif.subject_number() {
-                                        Some(ref n) => format!("#{n} {}", notif.title()),
-                                        None => notif.title().to_string(),
+                                        Some(ref n) => format!("#{n} {title}"),
+                                        None => title.clone(),
                                     };
                                     ListItem::new(Line::from(vec![
                                         checkbox_span,
@@ -339,7 +343,7 @@ impl ListWidget {
                                     let line1 = Line::from(vec![
                                         checkbox_span,
                                         dot_span,
-                                        Span::styled(notif.title().to_string(), title_style),
+                                        Span::styled(title, title_style),
                                     ]);
                                     let display_reason = notif.display_reason();
                                     let sub_text = match notif.subject_number() {
