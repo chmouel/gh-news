@@ -98,23 +98,18 @@ gh news --static-display | grep "something" # List notifications without TUI
 
 ### Actions
 
-- `Enter` - Open notification in browser and mark as read, or toggle repository collapse on headers
-- `o` - Open notification in browser without marking as read
+Multi-select first with `Space` (magenta checkmark); the actions below then apply to the whole selection instead of just the current notification.
+
+- `Enter` - Open in browser and mark as read, or toggle repository collapse on headers
+- `o` - Open in browser without marking as read
 - `O` - Open URL menu (open/copy/print) for the current selection
 - `.` - Toggle read/unread status
-- `d` - Archive (done) notification — removes from inbox
+- `d` - Archive (done), removing it from the inbox
+- `m` - Merge the previewed pull request (confirmation dialog; method set by `merge_method` in config, default squash)
 - `!` - Pin/unpin notification (pinned appear at top)
 - `h` - Collapse current repository
 - `x` - Open action menu (built-in and custom actions on notifications)
-
-### Multi-select
-
-- `Space` - Toggle selection on notification (magenta checkmark)
 - `Esc` - Clear selection (or quit if no selection)
-- `Enter` - Open all selected + mark as read
-- `o` - Open all selected without marking as read
-- `.` - Mark all selected as read
-- `d` - Archive all selected
 - `Ctrl+A` - Act on selected notifications, or on the current filtered list if none are selected
 - `Ctrl+Alt+A` - Toggle select all notifications in current repository
 
@@ -129,6 +124,7 @@ gh news --static-display | grep "something" # List notifications without TUI
 - `J`/`K` - Scroll preview (line by line)
 - `Shift+U`/`Shift+D` - Scroll preview (5 lines)
 - `Ctrl+U`/`Ctrl+D` - Scroll preview (page)
+- `c` - Expand/collapse pull request CI checks
 - `1`/`2` - Focus pane 1 (list) / pane 2 (preview)
 - `M` - Toggle auto-mark-read on/off (persisted across sessions)
 
@@ -150,100 +146,40 @@ gh-news can be configured via a TOML file at `~/.config/gh-news/config.toml`. Al
 
 ### Example Config
 
-See also the example config file [here](./config.example.toml).
+Full reference with every option and its default: [config.example.toml](./config.example.toml).
 
 ```toml
 # API & Network
 auto_refresh_interval = 120  # seconds, 0 to disable
-api_timeout = 30             # seconds
 max_notifications = 100      # limit notifications fetched
-pagination_size = 50         # notifications per API page
 
 # Default filters (same as CLI flags)
 show_read = false            # show read notifications (like --all)
-participating_only = false   # only participating (like --participating)
-default_filter = ""          # regex filter always applied (matched against: repo title type reason author)
-
-# Structured exclude filters
-exclude_types = ["CheckSuite"]           # by type: Issue, PR, Release, CheckSuite, etc.
-exclude_reasons = ["subscribed"]         # by reason: subscribed, ci_activity, etc.
-exclude_repos = ["noisy-org/*"]          # by repo: exact or glob pattern
-exclude_subjects = ["^Bump ", "\\[bot\\]"] # by title: regex patterns (case-insensitive)
+exclude_repos = ["noisy-org/*"]
 
 # Theme
-theme = "tokyo_night"            # see Themes section below for all options
-# [theme_colors]                 # override individual palette colours (hex)
-# blue = "#7aa2f7"
-
-# Display
-default_preview_mode = "vertical"    # "off", "horizontal", or "vertical"
-repos_collapsed = false              # start with repos collapsed
-org_grouping = "auto"               # "off", "auto", or "always"
-list_layout = "right_aligned"       # "right_aligned", "icon_only", or "two_line"
+theme = "tokyo_night"        # see Themes section below for all options
 
 # Behaviour
-auto_mark_read = false                # mark notifications read when navigating to them (disabled by default)
-auto_mark_read_delay_ms = 400        # dwell time (ms) before marking as read (only when auto_mark_read is enabled)
-auto_archive = false                 # archive notifications when navigating away (implies auto_mark_read)
-auto_mark_on_open = true             # mark notifications read when opening them in the browser
-
-# Notification cache (cached data is shown instantly on startup, then refreshed).
-# Preview details are also cached locally and reused until the notification changes.
-cache_file = ""              # custom cache path (default: ~/.cache/gh-news/notifications_cache.json)
-
-# External commands
-browser_command = ""         # custom browser, e.g. "firefox" (uses system default if empty)
-open_method = "builtin"      # how `o`/Enter delivers URLs: "builtin" (browser), "osc" (OSC 52 clipboard), "print" (suspend UI, print to stdout)
-
-# Notification hooks
-on_new_notification_command = ""  # command to run when new notifications appear
-
-# GitHub Enterprise (optional)
-github_host = "github.com"   # change for GHE, e.g. "github.mycompany.com"
-
-# GitHub Actions workflow notifications (opt-in)
-enable_actions = false       # set to true to show workflow run notifications
-actions_failed_only = true   # only show failed/cancelled runs (default when actions enabled)
-actions_repos = []           # repos to watch (empty = derive from your notifications)
-
-# GitHub Activity Events feed (opt-in)
-enable_events = false        # set to true to show activity events
-event_types = []             # filter event types, e.g. ["WatchEvent", "ForkEvent"] (empty = all)
-
-# Repository event watching (opt-in)
-watch_repos = []             # repos to watch for all events, e.g. ["owner/repo", "org/*"]
-                             # supports glob patterns; event_types filter applies here too
+auto_mark_read = false       # mark notifications read when navigating to them
 ```
 
 ### Themes
 
-gh-news ships with built-in colour themes. Set the `theme` key in your
-config to switch:
+gh-news ships with 21 built-in colour themes, both dark and light. Set the
+`theme` key in your config to switch:
 
 | Name | Style |
-|------|-------|
+| ------ | ------- |
 | `tokyo_night` (default) | Dark blue with soft white text |
 | `catppuccin_mocha` | Warm dark (Catppuccin dark variant) |
 | `catppuccin_latte` | Light (Catppuccin light variant) |
 | `nord` | Arctic blue-grey |
 | `dracula` | Dark with vivid accents |
 | `gruvbox_dark` | Retro warm colours |
-| `dracula_light` | Dracula light variant |
-| `narna` | Balanced dark theme with blue accents |
-| `clean_light` | Optimized for light terminal backgrounds |
-| `rose_pine_dawn` | Rosé Pine Dawn (Light) |
-| `one_light` | Atom One Light |
-| `everforest_light` | Everforest Light (Medium) |
-| `everforest_dark` | Everforest Dark (Medium) |
-| `one_dark` | One Dark |
-| `rose_pine` | Rosé Pine (Dark) |
-| `ayu_mirage` | Ayu Mirage |
-| `modern` | Sleek, modern dark theme with vibrant accents |
-| `kanagawa` | Kanagawa (Wave) |
-| `solarized_dark` | Solarized dark |
-| `solarized_light` | Solarized light |
-| `gruvbox_light` | Gruvbox light |
-| `monokai` | Monokai |
+
+See [config.example.toml](./config.example.toml) for the full list, including
+`one_light`, `rose_pine`, `solarized_dark`, `kanagawa`, `monokai`, and more.
 
 ```toml
 theme = "catppuccin_mocha"
@@ -263,15 +199,11 @@ red  = "#ff0000"
 Available colour fields: `bg`, `bg_dark`, `bg_highlight`, `fg`, `fg_muted`,
 `fg_dim`, `blue`, `cyan`, `green`, `yellow`, `red`, `magenta`, `orange`.
 
-#### Theme Screenshots
+#### Theme Screenshot
 
 **rose_pine_dawn**
 
 <img width="3730" height="2484" alt="rose_pine_dawn" src="https://github.com/user-attachments/assets/0179bf1c-1ef8-437b-86e7-60bdf993f423" />
-
-**one_light**
-
-<img width="3730" height="2484" alt="one_light" src="https://github.com/user-attachments/assets/9e7e5f22-a108-4262-9eab-7c5d1f7d2aff" />
 
 ### Notification Hooks
 
@@ -284,7 +216,7 @@ on_new_notification_command = "/path/to/your/script.sh"
 The command runs once per new notification with these environment variables:
 
 | Variable | Description |
-|----------|-------------|
+| ---------- | ------------- |
 | `GH_NEWS_ID` | Notification ID |
 | `GH_NEWS_TITLE` | Notification title |
 | `GH_NEWS_REPO` | Repository name |
@@ -295,20 +227,7 @@ The command runs once per new notification with these environment variables:
 | `GH_NEWS_UNREAD` | Read status (true/false) |
 | `GH_NEWS_UPDATED_AT` | ISO 8601 timestamp (if available) |
 
-**Example: Desktop notification (Linux)**
-
-```bash
-#!/bin/bash
-notify-send "GitHub: $GH_NEWS_TYPE" "$GH_NEWS_TITLE"
-```
-
-**Example: Sound alert**
-
-```toml
-on_new_notification_command = "paplay /usr/share/sounds/freedesktop/stereo/message.oga"
-```
-
-**Example: Conditional action**
+**Example: Notify only on review requests**
 
 ```bash
 #!/bin/bash
@@ -324,7 +243,7 @@ fi
 The action menu (press `x`) always includes these built-in actions:
 
 | Action | Description |
-|--------|-------------|
+| -------- | ------------- |
 | Mute Thread | Sets the thread subscription to ignored via the GitHub API. Future notifications for the thread are suppressed until you comment or are `@mentioned` again. |
 | Mute Repository | Sets the repository subscription to ignored via the GitHub API. Suppresses all notifications from that repository. |
 | Snooze (4 hours) | Hides the notification until 4 hours from now. |
@@ -359,35 +278,20 @@ interactive = true  # Suspend TUI for interactive commands
 
 Actions support placeholder substitution:
 
-| Placeholder | Description |
-|-------------|-------------|
-| `{id}` | Notification ID |
-| `{title}` | Notification title |
-| `{number}` | PR/issue/discussion number (empty for other types) |
-| `{url}` | Web URL for the notification |
-| `{repo}` | Repository name (without owner) |
-| `{owner}` | Repository owner |
-| `{full_name}` | Full repository name (owner/repo) |
-| `{type}` | Notification type (Issue, PullRequest, etc.) |
-| `{reason}` | Notification reason (mention, review_requested, etc.) |
-| `{unread}` | Read status (true/false) |
+| Placeholder | Description | Plural form (batch, space-separated) |
+| ------------- | ------------- | ------------- |
+| `{id}` | Notification ID | `{ids}` |
+| `{title}` | Notification title | `{titles}` |
+| `{number}` | PR/issue/discussion number (empty for other types) | - |
+| `{url}` | Web URL for the notification | `{urls}` |
+| `{repo}` | Repository name (without owner) | `{repos}` |
+| `{owner}` | Repository owner | `{owners}` |
+| `{full_name}` | Full repository name (owner/repo) | `{full_names}` |
+| `{type}` | Notification type (Issue, PullRequest, etc.) | `{types}` |
+| `{reason}` | Notification reason (mention, review_requested, etc.) | `{reasons}` |
+| `{unread}` | Read status (true/false) | - |
 
-**Batch Placeholders (plural forms):**
-
-Use plural placeholders to run a single command with all selected notifications:
-
-| Placeholder | Description |
-|-------------|-------------|
-| `{ids}` | All notification IDs, space-separated |
-| `{titles}` | All notification titles, space-separated |
-| `{urls}` | All web URLs, space-separated |
-| `{repos}` | All repository names, space-separated |
-| `{owners}` | All repository owners, space-separated |
-| `{full_names}` | All full repository names, space-separated |
-| `{types}` | All notification types, space-separated |
-| `{reasons}` | All notification reasons, space-separated |
-
-Example batch action:
+Plural placeholders run the command once with all selected notifications instead of once per notification. Example:
 
 ```toml
 [[actions]]
@@ -401,14 +305,12 @@ When you select multiple notifications and run this action, it executes once as 
 **Action Options:**
 
 | Option | Default | Description |
-|--------|---------|-------------|
+| -------- | --------- | ------------- |
 | `name` | required | Display name in the action menu |
 | `command` | required | Command template with placeholders |
 | `priority` | unset | Lower numbers sort earlier in the action menu |
 | `interactive` | `false` | Suspend TUI and run command with full terminal access (for TUI tools like fzf, vim) |
 | `show_output` | `false` | Capture command output and display it in a scrollable TUI popup (incompatible with `interactive`) |
-
-With singular placeholders, the command runs once per selected notification. With plural placeholders (e.g., `{urls}`), it runs once with all values.
 
 ### Named Views
 
@@ -417,7 +319,7 @@ Named views are saved filter presets you can switch between instantly with `V`. 
 **Built-in views:**
 
 | View | What it shows |
-|------|---------------|
+| ------ | --------------- |
 | Participating | Everything except passive subscriptions and CI noise (`subscribed`, `ci_activity` reasons excluded) |
 | Mentions | Direct `@mention` and team mention notifications |
 | Review Requests | PRs where your review has been requested |
@@ -429,7 +331,7 @@ Named views are saved filter presets you can switch between instantly with `V`. 
 
 **Custom views:**
 
-Define your own in `config.toml` using `[[views]]` sections. All filter fields are optional — unset fields inherit from the global config defaults.
+Define your own in `config.toml` using `[[views]]` sections. All filter fields are optional; unset fields inherit from the global config defaults.
 
 ```toml
 [[views]]
@@ -450,7 +352,7 @@ filter = "dependabot"
 **View fields:**
 
 | Field | Description |
-|-------|-------------|
+| ------- | ------------- |
 | `name` | Display name shown in the picker (required) |
 | `filter` | Regex applied to `repo title type reason author` (author populated by background enrichment) |
 | `exclude_types` | Override global `exclude_types` for this view |
@@ -477,7 +379,7 @@ repos_collapsed = true
 **Session fields:**
 
 | Field | Description |
-|-------|-------------|
+| ------- | ------------- |
 | `name` | Display name shown in the session picker (required) |
 | `view` | Built-in or custom view name to activate |
 | `filter` | Extra regex filter layered on top of the selected view/default filter |
