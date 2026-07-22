@@ -52,6 +52,12 @@ pub struct AppState {
     pub focused_pane: PaneFocus,
     pub show_help: bool,
     pub preview_content: Option<PreviewData>,
+    /// Cache key of the notification `preview_content` belongs to, so that
+    /// actions such as quick-merge never act on a stale preview.
+    pub preview_content_key: Option<String>,
+    /// Bumped on every `preview_content` change; used as a cheap render-cache
+    /// signature instead of hashing or debug-formatting the whole preview.
+    pub preview_content_version: u64,
     pub preview_scroll: usize,
     pub help_scroll: usize,
     pub help_search_query: String,
@@ -185,6 +191,8 @@ impl AppState {
             focused_pane: PaneFocus::None,
             show_help: false,
             preview_content: None,
+            preview_content_key: None,
+            preview_content_version: 0,
             preview_scroll: 0,
             help_scroll: 0,
             help_search_query: String::new(),
@@ -547,6 +555,14 @@ impl AppState {
 
     pub fn show_preview(&self) -> bool {
         self.preview_mode != PreviewMode::Off && !self.notifications.is_empty()
+    }
+
+    /// Replace the preview pane content, keeping the owning-notification key
+    /// and the render-cache version in sync.
+    pub fn set_preview_content(&mut self, content: Option<PreviewData>, key: Option<String>) {
+        self.preview_content = content;
+        self.preview_content_key = key;
+        self.preview_content_version = self.preview_content_version.wrapping_add(1);
     }
 
     pub fn mark_notification_read(&mut self, notification_id: &str) {
