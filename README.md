@@ -35,6 +35,10 @@ GitHub notifications TUI built with Rust and ratatui.
 - GitHub Actions workflow run notifications (opt-in)
 - GitHub Activity Events feed (opt-in)
 
+Recognised GitHub shortcodes such as `:white_check_mark:` render as Unicode emoji
+when the terminal font supports them. Repository-specific or image-only custom
+emoji remain visible as their original `:shortcode:` text.
+
 ## Installation
 
 Install as a `gh` CLI extension (easiest):

@@ -1,3 +1,4 @@
+use crate::emoji::{display_width, expand_shortcodes};
 use crate::ui::theme::ColorPalette;
 use comrak::nodes::{AstNode, NodeValue};
 use comrak::{parse_document, Arena};
@@ -435,7 +436,7 @@ impl MarkdownToRatatui {
 
         for (cells, _) in &rows {
             for (i, cell) in cells.iter().enumerate() {
-                col_widths[i] = col_widths[i].max(cell.len().min(30)); // Cap at 30 chars
+                col_widths[i] = col_widths[i].max(display_width(cell).min(30)); // Cap at 30 columns
             }
         }
 
@@ -460,7 +461,8 @@ impl MarkdownToRatatui {
             let mut row_spans = vec![Span::styled("│ ", Style::default().fg(self.colors.bg_dark))];
 
             for (i, cell) in cells.iter().enumerate() {
-                let padded = format!("{:<width$}", cell, width = col_widths[i]);
+                let padding = col_widths[i].saturating_sub(display_width(cell));
+                let padded = format!("{}{}", cell, " ".repeat(padding));
                 let style = if *is_header_row {
                     Style::default()
                         .fg(self.colors.blue)
@@ -533,7 +535,7 @@ impl MarkdownToRatatui {
                         let parts: Vec<&str> = text_str.split('\n').collect();
                         for (i, part) in parts.iter().enumerate() {
                             if !part.is_empty() {
-                                current_spans.push(Span::raw(part.to_string()));
+                                current_spans.push(Span::raw(expand_shortcodes(part)));
                             }
                             // If not the last part, start a new line
                             if i < parts.len() - 1 {
@@ -546,7 +548,7 @@ impl MarkdownToRatatui {
                             }
                         }
                     } else {
-                        current_spans.push(Span::raw(text_str));
+                        current_spans.push(Span::raw(expand_shortcodes(&text_str)));
                     }
                 }
                 _ => {
@@ -597,7 +599,7 @@ impl MarkdownToRatatui {
                     let parts: Vec<&str> = text_str.split('\n').collect();
                     for (i, part) in parts.iter().enumerate() {
                         if !part.is_empty() {
-                            spans.push(Span::raw(part.to_string()));
+                            spans.push(Span::raw(expand_shortcodes(part)));
                         }
                         // Add a soft break after each part except the last
                         if i < parts.len() - 1 {
@@ -605,7 +607,7 @@ impl MarkdownToRatatui {
                         }
                     }
                 } else {
-                    spans.push(Span::raw(text_str));
+                    spans.push(Span::raw(expand_shortcodes(&text_str)));
                 }
             }
             NodeValue::Code(ref code) => {
@@ -629,6 +631,7 @@ impl MarkdownToRatatui {
                     spans.push(span);
                 }
             }
+
             NodeValue::Strong => {
                 let inner = self.render_inline(node);
                 for mut span in inner {
@@ -680,15 +683,13 @@ impl MarkdownToRatatui {
                     }
                 }
                 let url = image.url.as_str();
+                let alt_display = if alt_text.is_empty() {
+                    "image".to_string()
+                } else {
+                    expand_shortcodes(&alt_text)
+                };
                 spans.push(Span::styled(
-                    format!(
-                        "[Image: {}]",
-                        if alt_text.is_empty() {
-                            "image"
-                        } else {
-                            &alt_text
-                        }
-                    ),
+                    format!("[Image: {}]", alt_display),
                     Style::default().fg(self.colors.cyan),
                 ));
                 if !url.is_empty() {
@@ -722,5 +723,34 @@ impl MarkdownToRatatui {
         }
 
         spans
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rendered_text(markdown: &str) -> String {
+        MarkdownRenderer::render_simple(markdown, &ColorPalette::tokyo_night())
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn expands_shortcodes_in_markdown_text() {
+        let text = rendered_text(":white_check_mark: done\n\n- :warning: check");
+        assert!(text.contains("✅ done"));
+        assert!(text.contains("⚠️ check"));
+    }
+
+    #[test]
+    fn preserves_shortcodes_in_code() {
+        let text = rendered_text("Text :warning: and `:rocket:`.\n\n```\n:warning:\n```");
+        assert!(text.contains("Text ⚠️"));
+        assert!(text.contains(":rocket:"));
+        assert!(text.contains(":warning:"));
     }
 }

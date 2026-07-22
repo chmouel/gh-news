@@ -1,3 +1,4 @@
+use crate::emoji::expand_shortcodes;
 use crate::markdown::MarkdownRenderer;
 use crate::preview::{
     LatestComment, PreviewData, PreviewHeaderKind, PreviewView, TimelineEntry, TimelineKind,
@@ -211,7 +212,12 @@ impl PreviewWidget {
                                         .add_modifier(Modifier::BOLD)
                                 }
                             };
-                            Span::styled(part.text.clone(), style)
+                            let text = if part.kind == PreviewHeaderKind::Title {
+                                expand_shortcodes(&part.text)
+                            } else {
+                                part.text.clone()
+                            };
+                            Span::styled(text, style)
                         })
                         .collect();
                 Line::from(spans)
@@ -410,7 +416,7 @@ impl PreviewWidget {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                title.clone(),
+                expand_shortcodes(title),
                 Style::default().fg(colors.fg).add_modifier(Modifier::BOLD),
             ),
             Span::raw("  "),
