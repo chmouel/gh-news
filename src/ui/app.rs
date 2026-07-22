@@ -1214,7 +1214,7 @@ impl App {
                 } else if selected_was_invalidated {
                     // Preview pane is off but the selected entry was invalidated: clear the
                     // cached UI content so pressing Tab won't show stale data.
-                    self.state.preview_content = None;
+                    self.state.set_preview_content(None, None);
                 }
 
                 // Background-revalidate all remaining stale entries (low priority).
@@ -1337,7 +1337,7 @@ impl App {
             .map(|n| invalidated.contains(&n.preview_cache_key()))
             .unwrap_or(false)
         {
-            self.state.preview_content = None;
+            self.state.set_preview_content(None, None);
         }
 
         if let Some(ref pm) = self.preview_manager {
@@ -1374,40 +1374,41 @@ impl App {
         let notification = match self.state.selected_notification() {
             Some(n) => n.clone(),
             None => {
-                self.state.preview_content = None;
+                self.state.set_preview_content(None, None);
                 return;
             }
         };
 
         let Some(preview_manager) = self.preview_manager.as_ref() else {
-            self.state.preview_content = None;
+            self.state.set_preview_content(None, None);
             return;
         };
 
+        let cache_key = notification.preview_cache_key();
         match preview_manager.get_cached_status(&notification) {
             CacheStatus::Fresh(data) => {
-                self.state.preview_content = Some(data);
+                self.state.set_preview_content(Some(data), Some(cache_key));
                 self.state.preview_scroll = 0;
             }
             CacheStatus::Stale(data) => {
                 // Show the cached content immediately and revalidate in the background.
-                self.state.preview_content = Some(data);
-                self.state.preview_scroll = 0;
                 preview_manager.request_revalidation(&notification, PRIORITY_HIGH);
+                self.state.set_preview_content(Some(data), Some(cache_key));
+                self.state.preview_scroll = 0;
             }
             CacheStatus::Miss => {
+                let loading = PreviewData::Generic {
+                    title: "Loading details...".to_string(),
+                    body: "⏳ Fetching details...\n\nThis may take a moment.".to_string(),
+                };
                 if preview_manager.is_loading(&notification) {
-                    self.state.preview_content = Some(PreviewData::Generic {
-                        title: "Loading details...".to_string(),
-                        body: "⏳ Fetching details...\n\nThis may take a moment.".to_string(),
-                    });
+                    self.state
+                        .set_preview_content(Some(loading), Some(cache_key));
                     return;
                 }
                 preview_manager.request_preview(&notification, PRIORITY_HIGH);
-                self.state.preview_content = Some(PreviewData::Generic {
-                    title: "Loading details...".to_string(),
-                    body: "⏳ Fetching details...\n\nThis may take a moment.".to_string(),
-                });
+                self.state
+                    .set_preview_content(Some(loading), Some(cache_key));
                 self.state.preview_scroll = 0;
             }
         }
@@ -1626,7 +1627,8 @@ impl App {
                     if let Some(current_notif) = self.state.selected_notification() {
                         if current_notif.preview_cache_key() == completed_key {
                             if let Some(data) = preview_manager.get_cached_by_key(&completed_key) {
-                                self.state.preview_content = Some(data);
+                                self.state
+                                    .set_preview_content(Some(data), Some(completed_key));
                                 self.state.preview_scroll = 0;
                             }
                         }
@@ -2707,6 +2709,15 @@ impl App {
         };
         let notification_id = notification.id.clone();
         let repo = notification.repo_full_name().to_string();
+        let selected_key = notification.preview_cache_key();
+
+        // Only merge when the preview shown belongs to the selected
+        // notification; a stale preview must never drive a merge.
+        if self.state.preview_content_key.as_deref() != Some(selected_key.as_str()) {
+            self.state.status_message =
+                Some("Preview is out of date: reopen the preview before merging".to_string());
+            return;
+        }
 
         let Some(PreviewData::PullRequest {
             number,

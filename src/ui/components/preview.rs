@@ -21,6 +21,9 @@ pub struct PreviewWidget {
     scrollbar_state: ScrollbarState,
     cached_lines: Vec<Line<'static>>,
     cached_signature: Option<String>,
+    /// Wrapped line count of `cached_lines` for a given width, so
+    /// `Paragraph::line_count` is not recomputed every frame.
+    cached_height: Option<(u16, usize)>,
     expanded_ci_key: Option<String>,
 }
 
@@ -32,6 +35,7 @@ impl PreviewWidget {
             scrollbar_state: ScrollbarState::default(),
             cached_lines: Vec::new(),
             cached_signature: None,
+            cached_height: None,
             expanded_ci_key: None,
         }
     }
@@ -54,6 +58,7 @@ impl PreviewWidget {
             self.expanded_ci_key = Some(key);
         }
         self.cached_signature = None;
+        self.cached_height = None;
     }
 
     pub fn render(&mut self, frame: &mut Frame, area: Rect, state: &AppState) {
@@ -239,12 +244,13 @@ impl PreviewWidget {
                 .selected_notification()
                 .and_then(|n| state.effective_read_cutoff(n));
             let signature = format!(
-                "pr|{:?}|{:?}|{}|{}",
-                preview_data, cutoff, area.width, ci_expanded
+                "pr|{}|{:?}|{}|{}",
+                state.preview_content_version, cutoff, area.width, ci_expanded
             );
             if self.cached_signature.as_ref() != Some(&signature) {
                 self.cached_lines = self.build_pr_lines(preview_data, cutoff, ci_expanded);
                 self.cached_signature = Some(signature);
+                self.cached_height = None;
             }
         } else {
             let preview_view = PreviewView::from(preview_data);
@@ -270,6 +276,7 @@ impl PreviewWidget {
 
                 self.cached_signature = Some(signature);
                 self.cached_lines = all_lines;
+                self.cached_height = None;
             }
         }
 
@@ -288,7 +295,15 @@ impl PreviewWidget {
             .wrap(ratatui::widgets::Wrap { trim: false });
 
         // Wrapped visual rows, so long comment lines scroll correctly.
-        let content_height = paragraph.line_count(area.width);
+        // Recomputed only when the cached content or the pane width changes.
+        let content_height = match self.cached_height {
+            Some((width, height)) if width == area.width => height,
+            _ => {
+                let height = paragraph.line_count(area.width);
+                self.cached_height = Some((area.width, height));
+                height
+            }
+        };
         let max_scroll = content_height.saturating_sub(visible_height);
         let offset = state.preview_scroll.min(max_scroll);
 
@@ -356,6 +371,7 @@ impl PreviewWidget {
             additions,
             deletions,
             changed_files,
+            body,
             latest_comment,
             ci_checks,
             ci_total_count,
@@ -509,6 +525,14 @@ impl PreviewWidget {
             )]));
         }
         lines.push(Line::from(""));
+
+        // ── Description ──────────────────────────────────────────────────
+        if !body.trim().is_empty() {
+            lines.push(self.section_heading("Description", Vec::new()));
+            lines.push(Line::from(""));
+            lines.extend(MarkdownRenderer::render_simple(body, colors));
+            lines.push(Line::from(""));
+        }
 
         // ── New activity since last read ─────────────────────────────────
         let activity = merge_pr_activity(timeline, latest_comment.as_ref());
