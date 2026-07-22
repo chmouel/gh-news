@@ -28,7 +28,84 @@ impl ConfirmWidget {
                     format!(" Mark {} Notifications ", count)
                 }
             }
+            ConfirmAction::MergePullRequest { number, .. } => {
+                format!(" Merge Pull Request #{} ", number)
+            }
         }
+    }
+
+    /// Dedicated Enter/Esc-only dialog for merging a pull request.
+    fn render_merge(
+        &self,
+        frame: &mut Frame,
+        centered_area: Rect,
+        repo: &str,
+        number: u64,
+        title: &str,
+        method: crate::config::MergeMethod,
+    ) {
+        let colors = &self.colors;
+        let max_title = centered_area.width.saturating_sub(6) as usize;
+        let mut display_title = title.to_string();
+        if display_title.chars().count() > max_title {
+            display_title = display_title
+                .chars()
+                .take(max_title.saturating_sub(1))
+                .collect();
+            display_title.push('…');
+        }
+
+        let content = vec![
+            Line::from(""),
+            Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    display_title,
+                    Style::default().fg(colors.fg).add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(vec![
+                Span::raw("  "),
+                Span::styled(format!("{repo}#{number}"), Style::default().fg(colors.cyan)),
+                Span::styled(" · method: ", Style::default().fg(colors.fg_dim)),
+                Span::styled(
+                    method.api_value(),
+                    Style::default()
+                        .fg(colors.magenta)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::raw("  "),
+                Span::styled("Enter", Style::default().fg(colors.green)),
+                Span::raw(" merge  "),
+                Span::styled("Esc", Style::default().fg(colors.red)),
+                Span::raw(" cancel"),
+            ]),
+        ];
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(vec![
+                Span::styled(" ", Style::default()),
+                Span::styled(
+                    format!(" Merge Pull Request #{} ", number),
+                    Style::default()
+                        .fg(colors.green)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(" ", Style::default()),
+            ])
+            .title_alignment(Alignment::Center)
+            .border_style(Style::default().fg(colors.green))
+            .border_type(ratatui::widgets::BorderType::Rounded);
+
+        let paragraph = Paragraph::new(content)
+            .block(block)
+            .alignment(Alignment::Left);
+
+        frame.render_widget(paragraph, centered_area);
     }
 
     pub fn render(
@@ -55,9 +132,22 @@ impl ConfirmWidget {
 
         frame.render_widget(Clear, centered_area);
 
+        if let ConfirmAction::MergePullRequest {
+            repo,
+            number,
+            title,
+            method,
+            ..
+        } = action
+        {
+            self.render_merge(frame, centered_area, repo, *number, title, *method);
+            return;
+        }
+
         let selected = match action {
             ConfirmAction::MarkAllRead { selected } => *selected,
             ConfirmAction::ArchiveSelected { option, .. } => *option,
+            ConfirmAction::MergePullRequest { .. } => unreachable!(),
         };
 
         let (archive_indicator, read_indicator) = match selected {

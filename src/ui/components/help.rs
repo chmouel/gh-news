@@ -140,6 +140,14 @@ impl HelpWidget {
                         desc: "Archive (done) notification(s)",
                     },
                     HelpLine {
+                        key: "m",
+                        desc: "Merge pull request (with confirmation)",
+                    },
+                    HelpLine {
+                        key: "c",
+                        desc: "Expand/collapse pull request CI checks",
+                    },
+                    HelpLine {
                         key: "!",
                         desc: "Pin/unpin notification",
                     },

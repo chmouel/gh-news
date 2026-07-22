@@ -104,6 +104,12 @@ pub struct AppStateFile {
     pub snoozed_notifications: HashMap<String, SnoozeEntry>,
     #[serde(default)]
     pub dismissed_synthetic_ids: Vec<String>,
+    /// Per-thread local read timestamps, recorded when the user marks a
+    /// notification read in the app.  GitHub's `last_read_at` does not
+    /// advance for local reads, so this drives the "new since last read"
+    /// preview feed.
+    #[serde(default)]
+    pub read_cutoffs: HashMap<String, DateTime<Utc>>,
 }
 
 fn default_auto_mark_read() -> bool {
@@ -118,6 +124,7 @@ impl AppStateFile {
             pinned_notifications: Vec::new(),
             snoozed_notifications: HashMap::new(),
             dismissed_synthetic_ids: Vec::new(),
+            read_cutoffs: HashMap::new(),
         }
     }
 
@@ -249,6 +256,47 @@ impl AppStateFile {
         Ok(state.dismissed_synthetic_ids.into_iter().collect())
     }
 
+    /// Load local read cutoffs, dropping entries older than 30 days.
+    pub fn load_read_cutoffs() -> Result<HashMap<String, DateTime<Utc>>> {
+        let state = Self::load_full()?;
+        let horizon = Utc::now() - chrono::Duration::days(30);
+        Ok(state
+            .read_cutoffs
+            .into_iter()
+            .filter(|(_, ts)| *ts > horizon)
+            .collect())
+    }
+
+    /// Record a local read timestamp for a notification thread.
+    pub fn save_read_cutoff(thread_id: &str, cutoff: DateTime<Utc>) -> Result<()> {
+        Self::update_with(|state| {
+            state.read_cutoffs.insert(thread_id.to_string(), cutoff);
+            let horizon = Utc::now() - chrono::Duration::days(30);
+            state.read_cutoffs.retain(|_, ts| *ts > horizon);
+        })
+    }
+
+    /// Record the same local read timestamp for several notification threads.
+    pub fn save_read_cutoffs(thread_ids: &[String], cutoff: DateTime<Utc>) -> Result<()> {
+        if thread_ids.is_empty() {
+            return Ok(());
+        }
+        Self::update_with(|state| {
+            for thread_id in thread_ids {
+                state.read_cutoffs.insert(thread_id.clone(), cutoff);
+            }
+            let horizon = Utc::now() - chrono::Duration::days(30);
+            state.read_cutoffs.retain(|_, ts| *ts > horizon);
+        })
+    }
+
+    /// Remove a local read cutoff (e.g. when a mark-read is reverted).
+    pub fn remove_read_cutoff(thread_id: &str) -> Result<()> {
+        Self::update_with(|state| {
+            state.read_cutoffs.remove(thread_id);
+        })
+    }
+
     /// Keep only the most recent 200 entries, dropping the oldest.
     fn trim_dismissed(ids: &mut Vec<String>) {
         const MAX_DISMISSED: usize = 200;
@@ -308,7 +356,14 @@ pub fn load_context_cache() -> HashMap<String, String> {
 pub struct PersistedPreviewCacheEntry {
     pub data: PreviewData,
     pub updated_at: Option<DateTime<Utc>>,
+    /// Bumped whenever `PreviewData` gains fields that older entries lack;
+    /// entries with an older version are revalidated in the background.
+    #[serde(default)]
+    pub schema_version: u32,
 }
+
+/// Current preview-cache schema version.  Bump when `PreviewData` grows.
+pub const PREVIEW_CACHE_SCHEMA_VERSION: u32 = 1;
 
 /// Path of the preview cache file (sibling of the state file).
 fn get_preview_cache_path() -> Result<PathBuf> {

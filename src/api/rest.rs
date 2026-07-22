@@ -312,6 +312,68 @@ impl GitHubClient {
         self.send_no_content(self.client.delete(&url))
     }
 
+    /// Merge a pull request.  `head_sha` guards against merging commits
+    /// pushed after the user confirmed.  Returns GitHub's response message.
+    pub fn merge_pull_request(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+        merge_method: &str,
+        head_sha: &str,
+    ) -> Result<String> {
+        let url = format!(
+            "{}/repos/{}/{}/pulls/{}/merge",
+            self.api_base, owner, repo, number
+        );
+        let mut body = serde_json::json!({ "merge_method": merge_method });
+        if !head_sha.is_empty() {
+            body["sha"] = serde_json::Value::String(head_sha.to_string());
+        }
+
+        let request = self.client.put(&url).json(&body);
+        let response = self.client.execute(request.build().map_err(Error::from)?);
+        let response = response.map_err(Error::from)?;
+        self.record_rate_limit_headers(response.headers());
+        let status = response.status();
+        let bytes = response.bytes().map_err(Error::from)?.to_vec();
+        let value: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
+        // GitHub explains refusals (403/405/409/422) in `message`.
+        let message = value
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or_default()
+            .to_string();
+
+        if !status.is_success() {
+            return Err(ApiError::HttpStatus {
+                status: status.as_u16(),
+                message: if message.is_empty() {
+                    "Merge failed".to_string()
+                } else {
+                    message
+                },
+            }
+            .into());
+        }
+        let merged = value
+            .get("merged")
+            .and_then(|m| m.as_bool())
+            .unwrap_or(false);
+        if !merged {
+            return Err(ApiError::HttpStatus {
+                status: status.as_u16(),
+                message: if message.is_empty() {
+                    "Pull request was not merged".to_string()
+                } else {
+                    message
+                },
+            }
+            .into());
+        }
+        Ok(message)
+    }
+
     pub fn get_vulnerability_alert_by_url(&self, url: &str) -> Result<Value> {
         self.get_json(url)
     }
@@ -643,6 +705,58 @@ mod tests {
             client.rate_limit_status().and_then(|s| s.remaining),
             Some(4998)
         );
+
+        server.join();
+    }
+
+    #[test]
+    fn merge_pull_request_returns_message_on_success() {
+        let server = spawn_json_server(vec![(
+            "/repos/owner/repo/pulls/7/merge".to_string(),
+            200,
+            r#"{"merged":true,"message":"Pull Request successfully merged","sha":"abc"}"#
+                .to_string(),
+        )]);
+        let client = GitHubClient::new_test_with_base(server.base_url.clone());
+
+        let message = client
+            .merge_pull_request("owner", "repo", 7, "squash", "abc123")
+            .unwrap();
+        assert_eq!(message, "Pull Request successfully merged");
+
+        server.join();
+    }
+
+    #[test]
+    fn merge_pull_request_surfaces_github_error_message() {
+        let server = spawn_json_server(vec![(
+            "/repos/owner/repo/pulls/7/merge".to_string(),
+            405,
+            r#"{"message":"Pull Request is not mergeable"}"#.to_string(),
+        )]);
+        let client = GitHubClient::new_test_with_base(server.base_url.clone());
+
+        let err = client
+            .merge_pull_request("owner", "repo", 7, "squash", "abc123")
+            .unwrap_err();
+        assert!(err.to_string().contains("Pull Request is not mergeable"));
+
+        server.join();
+    }
+
+    #[test]
+    fn merge_pull_request_rejects_unmerged_success_response() {
+        let server = spawn_json_server(vec![(
+            "/repos/owner/repo/pulls/7/merge".to_string(),
+            200,
+            r#"{"merged":false,"message":"Queued for merge"}"#.to_string(),
+        )]);
+        let client = GitHubClient::new_test_with_base(server.base_url.clone());
+
+        let err = client
+            .merge_pull_request("owner", "repo", 7, "merge", "abc123")
+            .unwrap_err();
+        assert!(err.to_string().contains("Queued for merge"));
 
         server.join();
     }

@@ -184,6 +184,10 @@ auto_mark_read_delay_ms = 400
 #       and saved to state file.
 auto_archive = false
 
+# Merge method used by the quick-merge action (m key on a pull request
+# preview). One of: "merge", "squash", "rebase". Default: "squash"
+merge_method = "squash"
+
 # ==============================================================================
 # EXTERNAL COMMANDS & HOOKS
 # ==============================================================================

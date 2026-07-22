@@ -13,6 +13,39 @@ pub struct LatestComment {
     pub created_at: String,
 }
 
+/// A single CI check (check run or commit status), normalised to one state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CiCheck {
+    pub name: String,
+    /// Normalised uppercase state: SUCCESS, FAILURE, ERROR, PENDING,
+    /// IN_PROGRESS, QUEUED, CANCELLED, TIMED_OUT, ACTION_REQUIRED,
+    /// NEUTRAL, SKIPPED, STALE, EXPECTED…
+    pub state: String,
+}
+
+/// Kind of pull-request timeline activity shown in the preview feed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TimelineKind {
+    Comment,
+    Approved,
+    ChangesRequested,
+    Commented,
+    Dismissed,
+}
+
+/// A comment or review event on a pull request.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimelineEntry {
+    pub author: String,
+    pub kind: TimelineKind,
+    pub body: String,
+    /// RFC 3339 timestamp (reviews use their submission time).
+    pub timestamp: String,
+}
+
+// Previews are allocated one at a time, so the size gap between the rich
+// pull-request variant and the others is harmless.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PreviewData {
     PullRequest {
@@ -32,6 +65,22 @@ pub enum PreviewData {
         changed_files: u64,
         #[serde(default)]
         latest_comment: Option<LatestComment>,
+        #[serde(default)]
+        ci_checks: Vec<CiCheck>,
+        #[serde(default)]
+        ci_total_count: u64,
+        #[serde(default)]
+        merge_state_status: String,
+        #[serde(default)]
+        head_ref_oid: String,
+        #[serde(default)]
+        base_ref: String,
+        #[serde(default)]
+        head_ref: String,
+        #[serde(default)]
+        timeline: Vec<TimelineEntry>,
+        #[serde(default)]
+        timeline_total_count: u64,
     },
     Issue {
         number: String,
@@ -851,7 +900,71 @@ impl PreviewFetcher {
             .parse()
             .map_err(|_| crate::error::Error::Config("Invalid PR number".to_string()))?;
 
-        let query = r#"
+        // Rich query: per-check CI contexts, merge state, head SHA and a
+        // recent-activity timeline.  Older GHES schemas may reject some
+        // fields, in which case we retry once with the baseline query.
+        let rich_query = r#"
+            query($owner: String!, $repo: String!, $number: Int!) {
+                repository(owner: $owner, name: $repo) {
+                    pullRequest(number: $number) {
+                        number
+                        title
+                        body
+                        state
+                        merged
+                        isDraft
+                        mergeable
+                        mergeStateStatus
+                        reviewDecision
+                        additions
+                        deletions
+                        changedFiles
+                        headRefOid
+                        baseRefName
+                        headRefName
+                        author { login }
+                        comments { totalCount }
+                        labels(first: 10) { nodes { name } }
+                        commits(last: 1) {
+                            nodes {
+                                commit {
+                                    statusCheckRollup {
+                                        state
+                                        contexts(first: 100) {
+                                            totalCount
+                                            nodes {
+                                                __typename
+                                                ... on CheckRun { name status conclusion }
+                                                ... on StatusContext { context state }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        timelineItems(last: 30, itemTypes: [ISSUE_COMMENT, PULL_REQUEST_REVIEW]) {
+                            totalCount
+                            nodes {
+                                __typename
+                                ... on IssueComment {
+                                    author { login }
+                                    body
+                                    createdAt
+                                }
+                                ... on PullRequestReview {
+                                    author { login }
+                                    body
+                                    state
+                                    submittedAt
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        "#;
+
+        let baseline_query = r#"
             query($owner: String!, $repo: String!, $number: Int!) {
                 repository(owner: $owner, name: $repo) {
                     pullRequest(number: $number) {
@@ -887,7 +1000,11 @@ impl PreviewFetcher {
             "number": pr_num,
         });
 
-        let data = client.graphql(query, variables)?;
+        let data = match client.graphql(rich_query, variables.clone()) {
+            Ok(data) => data,
+            // Older GHES: retry once with the baseline query.
+            Err(_) => client.graphql(baseline_query, variables)?,
+        };
 
         let pr = data
             .get("repository")
@@ -897,6 +1014,148 @@ impl PreviewFetcher {
                 crate::error::Error::Config("Pull request not found in response".to_string())
             })?;
 
+        Ok(Self::parse_pr_response(pr, number))
+    }
+
+    /// Normalise a CheckRun / StatusContext node to a single uppercase state.
+    fn normalise_check_state(node: &serde_json::Value) -> String {
+        if node.get("__typename").and_then(|v| v.as_str()) == Some("StatusContext") {
+            return node
+                .get("state")
+                .and_then(|v| v.as_str())
+                .unwrap_or("PENDING")
+                .to_uppercase();
+        }
+        // CheckRun: conclusion is null while running; fall back to status.
+        match node.get("conclusion").and_then(|v| v.as_str()) {
+            Some(conclusion) => conclusion.to_uppercase(),
+            None => node
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("PENDING")
+                .to_uppercase(),
+        }
+    }
+
+    fn parse_ci_checks(pr: &serde_json::Value) -> (Vec<CiCheck>, u64) {
+        let Some(contexts) = pr
+            .get("commits")
+            .and_then(|v| v.get("nodes"))
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|n| n.get("commit"))
+            .and_then(|c| c.get("statusCheckRollup"))
+            .and_then(|s| s.get("contexts"))
+        else {
+            return (Vec::new(), 0);
+        };
+
+        let total = contexts
+            .get("totalCount")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let checks = contexts
+            .get("nodes")
+            .and_then(|v| v.as_array())
+            .map(|nodes| {
+                nodes
+                    .iter()
+                    .map(|node| {
+                        let name = node
+                            .get("name")
+                            .or_else(|| node.get("context"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unnamed check")
+                            .to_string();
+                        CiCheck {
+                            name,
+                            state: Self::normalise_check_state(node),
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        (checks, total)
+    }
+
+    fn parse_timeline(pr: &serde_json::Value) -> (Vec<TimelineEntry>, u64) {
+        let Some(items) = pr.get("timelineItems") else {
+            return (Vec::new(), 0);
+        };
+
+        let total = items
+            .get("totalCount")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        let entries = items
+            .get("nodes")
+            .and_then(|v| v.as_array())
+            .map(|nodes| {
+                nodes
+                    .iter()
+                    .filter_map(|node| {
+                        let author = node
+                            .get("author")
+                            .and_then(|a| a.get("login"))
+                            .and_then(|l| l.as_str())
+                            .unwrap_or("unknown")
+                            .to_string();
+                        let body = node
+                            .get("body")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .trim()
+                            .to_string();
+                        match node.get("__typename").and_then(|v| v.as_str()) {
+                            Some("IssueComment") => {
+                                if body.is_empty() {
+                                    return None;
+                                }
+                                Some(TimelineEntry {
+                                    author,
+                                    kind: TimelineKind::Comment,
+                                    body,
+                                    timestamp: node
+                                        .get("createdAt")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                })
+                            }
+                            Some("PullRequestReview") => {
+                                let kind = match node.get("state").and_then(|v| v.as_str()) {
+                                    Some("APPROVED") => TimelineKind::Approved,
+                                    Some("CHANGES_REQUESTED") => TimelineKind::ChangesRequested,
+                                    Some("DISMISSED") => TimelineKind::Dismissed,
+                                    Some("COMMENTED") => TimelineKind::Commented,
+                                    // PENDING (draft) reviews are not activity yet.
+                                    _ => return None,
+                                };
+                                // Skip empty COMMENTED reviews (inline-only review shells).
+                                if body.is_empty() && kind == TimelineKind::Commented {
+                                    return None;
+                                }
+                                Some(TimelineEntry {
+                                    author,
+                                    kind,
+                                    body,
+                                    timestamp: node
+                                        .get("submittedAt")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or_default()
+                                        .to_string(),
+                                })
+                            }
+                            _ => None,
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        (entries, total)
+    }
+
+    fn parse_pr_response(pr: &serde_json::Value, number: String) -> PreviewData {
         let title = pr
             .get("title")
             .and_then(|v| v.as_str())
@@ -922,6 +1181,26 @@ impl PreviewFetcher {
             Some("CONFLICTING") => "No".to_string(),
             _ => "Unknown".to_string(),
         };
+        let merge_state_status = pr
+            .get("mergeStateStatus")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let head_ref_oid = pr
+            .get("headRefOid")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let base_ref = pr
+            .get("baseRefName")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let head_ref = pr
+            .get("headRefName")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
         let review_decision = pr
             .get("reviewDecision")
             .and_then(|v| v.as_str())
@@ -941,6 +1220,7 @@ impl PreviewFetcher {
         let additions = pr.get("additions").and_then(|v| v.as_u64()).unwrap_or(0);
         let deletions = pr.get("deletions").and_then(|v| v.as_u64()).unwrap_or(0);
         let changed_files = pr.get("changedFiles").and_then(|v| v.as_u64()).unwrap_or(0);
+        // Server-side aggregate: authoritative even when contexts are truncated.
         let ci_status = pr
             .get("commits")
             .and_then(|v| v.get("nodes"))
@@ -952,9 +1232,11 @@ impl PreviewFetcher {
             .and_then(|v| v.as_str())
             .unwrap_or("UNKNOWN")
             .to_string();
+        let (ci_checks, ci_total_count) = Self::parse_ci_checks(pr);
+        let (timeline, timeline_total_count) = Self::parse_timeline(pr);
         let labels = extract_label_names(pr);
 
-        Ok(PreviewData::PullRequest {
+        PreviewData::PullRequest {
             number,
             title,
             state,
@@ -970,7 +1252,15 @@ impl PreviewFetcher {
             deletions,
             changed_files,
             latest_comment: None,
-        })
+            ci_checks,
+            ci_total_count,
+            merge_state_status,
+            head_ref_oid,
+            base_ref,
+            head_ref,
+            timeline,
+            timeline_total_count,
+        }
     }
 
     fn fetch_commit_preview(client: &GitHubClient, repo: &str, sha: &str) -> Result<PreviewData> {
@@ -1614,57 +1904,36 @@ mod tests {
 
     #[test]
     fn test_preview_view_displays_draft_only_for_open_pull_requests() {
-        let open_draft = PreviewData::PullRequest {
-            number: "1".to_string(),
-            title: "Open draft".to_string(),
-            state: "open".to_string(),
-            author: "octocat".to_string(),
-            comments: 0,
-            mergeable: "Unknown".to_string(),
-            body: String::new(),
-            labels: Vec::new(),
-            review_decision: "NONE".to_string(),
-            is_draft: true,
-            ci_status: "UNKNOWN".to_string(),
-            additions: 0,
-            deletions: 0,
-            changed_files: 0,
-            latest_comment: None,
-        };
-        let closed_draft = PreviewData::PullRequest {
-            number: "2".to_string(),
-            title: "Closed draft".to_string(),
-            state: "closed".to_string(),
-            author: "octocat".to_string(),
-            comments: 0,
-            mergeable: "Unknown".to_string(),
-            body: String::new(),
-            labels: Vec::new(),
-            review_decision: "NONE".to_string(),
-            is_draft: true,
-            ci_status: "UNKNOWN".to_string(),
-            additions: 0,
-            deletions: 0,
-            changed_files: 0,
-            latest_comment: None,
-        };
-        let merged_draft = PreviewData::PullRequest {
-            number: "3".to_string(),
-            title: "Merged draft".to_string(),
-            state: "merged".to_string(),
-            author: "octocat".to_string(),
-            comments: 0,
-            mergeable: "Unknown".to_string(),
-            body: String::new(),
-            labels: Vec::new(),
-            review_decision: "NONE".to_string(),
-            is_draft: true,
-            ci_status: "UNKNOWN".to_string(),
-            additions: 0,
-            deletions: 0,
-            changed_files: 0,
-            latest_comment: None,
-        };
+        fn draft_pr(number: &str, title: &str, state: &str) -> PreviewData {
+            PreviewData::PullRequest {
+                number: number.to_string(),
+                title: title.to_string(),
+                state: state.to_string(),
+                author: "octocat".to_string(),
+                comments: 0,
+                mergeable: "Unknown".to_string(),
+                body: String::new(),
+                labels: Vec::new(),
+                review_decision: "NONE".to_string(),
+                is_draft: true,
+                ci_status: "UNKNOWN".to_string(),
+                additions: 0,
+                deletions: 0,
+                changed_files: 0,
+                latest_comment: None,
+                ci_checks: Vec::new(),
+                ci_total_count: 0,
+                merge_state_status: String::new(),
+                head_ref_oid: String::new(),
+                base_ref: String::new(),
+                head_ref: String::new(),
+                timeline: Vec::new(),
+                timeline_total_count: 0,
+            }
+        }
+        let open_draft = draft_pr("1", "Open draft", "open");
+        let closed_draft = draft_pr("2", "Closed draft", "closed");
+        let merged_draft = draft_pr("3", "Merged draft", "merged");
 
         let open_header = PreviewView::from(&open_draft).header[0].text();
         let closed_header = PreviewView::from(&closed_draft).header[0].text();
@@ -1673,6 +1942,165 @@ mod tests {
         assert!(open_header.ends_with("[draft]"));
         assert!(closed_header.ends_with("[closed]"));
         assert!(merged_header.ends_with("[merged]"));
+    }
+
+    #[test]
+    fn parse_pr_response_extracts_rich_fields() {
+        let pr = json!({
+            "title": "Add pills",
+            "body": "The description",
+            "state": "OPEN",
+            "merged": false,
+            "isDraft": false,
+            "mergeable": "MERGEABLE",
+            "mergeStateStatus": "CLEAN",
+            "reviewDecision": "APPROVED",
+            "additions": 12,
+            "deletions": 4,
+            "changedFiles": 3,
+            "headRefOid": "abc123",
+            "baseRefName": "main",
+            "headRefName": "feature",
+            "author": { "login": "octocat" },
+            "comments": { "totalCount": 2 },
+            "labels": { "nodes": [{ "name": "bug" }] },
+            "commits": { "nodes": [{ "commit": { "statusCheckRollup": {
+                "state": "SUCCESS",
+                "contexts": {
+                    "totalCount": 3,
+                    "nodes": [
+                        { "__typename": "CheckRun", "name": "lint", "status": "COMPLETED", "conclusion": "SUCCESS" },
+                        { "__typename": "CheckRun", "name": "tests", "status": "IN_PROGRESS", "conclusion": null },
+                        { "__typename": "StatusContext", "context": "ci/legacy", "state": "FAILURE" }
+                    ]
+                }
+            }}}]},
+            "timelineItems": {
+                "totalCount": 2,
+                "nodes": [
+                    { "__typename": "IssueComment", "author": { "login": "alice" },
+                      "body": "Nice one", "createdAt": "2026-07-01T10:00:00Z" },
+                    { "__typename": "PullRequestReview", "author": { "login": "bob" },
+                      "body": "", "state": "APPROVED", "submittedAt": "2026-07-01T11:00:00Z" }
+                ]
+            }
+        });
+
+        let data = PreviewFetcher::parse_pr_response(&pr, "42".to_string());
+        match data {
+            PreviewData::PullRequest {
+                merge_state_status,
+                head_ref_oid,
+                base_ref,
+                head_ref,
+                ci_status,
+                ci_checks,
+                ci_total_count,
+                timeline,
+                timeline_total_count,
+                ..
+            } => {
+                assert_eq!(merge_state_status, "CLEAN");
+                assert_eq!(head_ref_oid, "abc123");
+                assert_eq!(base_ref, "main");
+                assert_eq!(head_ref, "feature");
+                assert_eq!(ci_status, "SUCCESS");
+                assert_eq!(ci_total_count, 3);
+                assert_eq!(ci_checks.len(), 3);
+                assert_eq!(ci_checks[0].name, "lint");
+                assert_eq!(ci_checks[0].state, "SUCCESS");
+                // Null conclusion falls back to status.
+                assert_eq!(ci_checks[1].state, "IN_PROGRESS");
+                assert_eq!(ci_checks[2].name, "ci/legacy");
+                assert_eq!(ci_checks[2].state, "FAILURE");
+                assert_eq!(timeline_total_count, 2);
+                assert_eq!(timeline.len(), 2);
+                assert_eq!(timeline[0].author, "alice");
+                assert_eq!(timeline[0].kind, TimelineKind::Comment);
+                assert_eq!(timeline[1].kind, TimelineKind::Approved);
+                assert_eq!(timeline[1].timestamp, "2026-07-01T11:00:00Z");
+            }
+            _ => panic!("Expected PreviewData::PullRequest"),
+        }
+    }
+
+    #[test]
+    fn parse_pr_response_handles_baseline_shape() {
+        // Baseline GHES fallback: no rich fields at all.
+        let pr = json!({
+            "title": "Old server",
+            "body": "b",
+            "state": "OPEN",
+            "merged": false,
+            "isDraft": false,
+            "mergeable": "MERGEABLE",
+            "reviewDecision": null,
+            "author": { "login": "octocat" },
+            "comments": { "totalCount": 0 },
+            "commits": { "nodes": [{ "commit": { "statusCheckRollup": { "state": "PENDING" } } }] }
+        });
+
+        let data = PreviewFetcher::parse_pr_response(&pr, "1".to_string());
+        match data {
+            PreviewData::PullRequest {
+                ci_status,
+                ci_checks,
+                merge_state_status,
+                head_ref_oid,
+                timeline,
+                ..
+            } => {
+                assert_eq!(ci_status, "PENDING");
+                assert!(ci_checks.is_empty());
+                assert!(merge_state_status.is_empty());
+                assert!(head_ref_oid.is_empty());
+                assert!(timeline.is_empty());
+            }
+            _ => panic!("Expected PreviewData::PullRequest"),
+        }
+    }
+
+    #[test]
+    fn parse_timeline_skips_pending_reviews_and_empty_comments() {
+        let pr = json!({
+            "timelineItems": {
+                "totalCount": 3,
+                "nodes": [
+                    { "__typename": "PullRequestReview", "author": { "login": "a" },
+                      "body": "wip", "state": "PENDING", "submittedAt": null },
+                    { "__typename": "PullRequestReview", "author": { "login": "b" },
+                      "body": "", "state": "COMMENTED", "submittedAt": "2026-07-01T09:00:00Z" },
+                    { "__typename": "IssueComment", "author": { "login": "c" },
+                      "body": "   ", "createdAt": "2026-07-01T09:30:00Z" }
+                ]
+            }
+        });
+        let (entries, total) = PreviewFetcher::parse_timeline(&pr);
+        assert_eq!(total, 3);
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn deserialises_cached_pr_preview_without_new_fields() {
+        // Persisted preview caches written before the redesign must still load.
+        let json = r#"{"PullRequest":{"number":"1","title":"t","state":"open",
+            "author":"a","comments":0,"mergeable":"Yes","body":"b","labels":[],
+            "review_decision":"NONE","is_draft":false,"ci_status":"SUCCESS",
+            "additions":1,"deletions":1,"changed_files":1}}"#;
+        let preview: PreviewData = serde_json::from_str(json).unwrap();
+        match preview {
+            PreviewData::PullRequest {
+                ci_checks,
+                timeline,
+                merge_state_status,
+                ..
+            } => {
+                assert!(ci_checks.is_empty());
+                assert!(timeline.is_empty());
+                assert!(merge_state_status.is_empty());
+            }
+            _ => panic!("Expected PreviewData::PullRequest"),
+        }
     }
 
     fn issue_preview_with_comment(latest_comment: Option<LatestComment>) -> PreviewData {

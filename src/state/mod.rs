@@ -80,6 +80,9 @@ pub struct AppState {
     pub url_menu_index: usize,
     // Cached snoozed notification IDs — refreshed on fetch and after snooze/mute actions
     pub snoozed_ids: HashMap<String, SnoozeEntry>,
+    /// Per-thread local read timestamps driving the "new since last read"
+    /// PR preview feed (GitHub's last_read_at ignores local mark-reads).
+    pub local_read_cutoffs: HashMap<String, chrono::DateTime<chrono::Utc>>,
     // Captured output from a show_output action
     pub command_output: Option<CommandOutputData>,
     // Named view presets (cloned from config at startup)
@@ -148,10 +151,23 @@ pub enum MarkAllOption {
     MarkReadAndArchive, // Mark as read AND archive (done)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfirmAction {
-    MarkAllRead { selected: MarkAllOption },
-    ArchiveSelected { count: usize, option: MarkAllOption },
+    MarkAllRead {
+        selected: MarkAllOption,
+    },
+    ArchiveSelected {
+        count: usize,
+        option: MarkAllOption,
+    },
+    MergePullRequest {
+        notification_id: String,
+        repo: String,
+        number: u64,
+        title: String,
+        method: crate::config::MergeMethod,
+        head_sha: String,
+    },
 }
 
 impl AppState {
@@ -188,6 +204,8 @@ impl AppState {
             action_menu_index: 0,
             url_menu_index: 0,
             snoozed_ids: HashMap::new(),
+            local_read_cutoffs: crate::state_file::AppStateFile::load_read_cutoffs()
+                .unwrap_or_default(),
             command_output: None,
             views: Vec::new(),
             sessions: Vec::new(),
@@ -538,7 +556,47 @@ impl AppState {
             .find(|n| n.id == notification_id)
         {
             notif.unread = false;
+            self.record_read_cutoff(notification_id);
             self.note_notification_mutation();
+        }
+    }
+
+    /// Record the current time as the local read cutoff for a thread.
+    pub fn record_read_cutoff(&mut self, notification_id: &str) {
+        let now = chrono::Utc::now();
+        self.local_read_cutoffs
+            .insert(notification_id.to_string(), now);
+        let _ = crate::state_file::AppStateFile::save_read_cutoff(notification_id, now);
+    }
+
+    /// Record one shared cutoff for a successfully completed batch operation.
+    pub fn record_read_cutoffs(&mut self, notification_ids: &[String]) {
+        if notification_ids.is_empty() {
+            return;
+        }
+        let now = chrono::Utc::now();
+        for notification_id in notification_ids {
+            self.local_read_cutoffs.insert(notification_id.clone(), now);
+        }
+        let _ = crate::state_file::AppStateFile::save_read_cutoffs(notification_ids, now);
+    }
+
+    fn clear_read_cutoff(&mut self, notification_id: &str) {
+        if self.local_read_cutoffs.remove(notification_id).is_some() {
+            let _ = crate::state_file::AppStateFile::remove_read_cutoff(notification_id);
+        }
+    }
+
+    /// The boundary for the "new since last read" preview feed: the later of
+    /// GitHub's `last_read_at` and any local read timestamp.
+    pub fn effective_read_cutoff(
+        &self,
+        notification: &Notification,
+    ) -> Option<chrono::DateTime<chrono::Utc>> {
+        let local = self.local_read_cutoffs.get(&notification.id).copied();
+        match (notification.last_read_at, local) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
         }
     }
 
@@ -550,6 +608,13 @@ impl AppState {
         {
             notif.unread = !notif.unread;
             let unread = notif.unread;
+            if unread {
+                // Marked unread (or a failed mark-read was reverted): the
+                // thread's activity should count as new again.
+                self.clear_read_cutoff(notification_id);
+            } else {
+                self.record_read_cutoff(notification_id);
+            }
             self.note_notification_mutation();
             Some(unread)
         } else {

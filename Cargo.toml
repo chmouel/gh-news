@@ -12,7 +12,7 @@ keywords = ["github", "notifications", "tui", "cli", "ratatui"]
 categories = ["command-line-utilities"]
 
 [dependencies]
-ratatui = "0.27"
+ratatui = { version = "0.27", features = ["unstable-rendered-line-info"] }
 crossterm = "0.28"
 reqwest = { version = "0.12", default-features = false, features = [
   "json",
