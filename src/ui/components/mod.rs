@@ -6,6 +6,7 @@ pub mod help;
 pub mod help_search;
 pub mod list;
 pub mod loading;
+pub mod pills;
 pub mod preview;
 pub mod session_picker;
 pub mod status;

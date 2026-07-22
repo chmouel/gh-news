@@ -16,6 +16,7 @@ GitHub notifications TUI built with Rust and ratatui.
 - Multi-select for batch operations on notifications
 - Auto-refresh with configurable interval
 - Preview notifications with rich details (GraphQL-powered for Issues, PRs, Discussions, Commits)
+- Quick-merge pull requests straight from the preview (`m`, with confirmation)
 - When a notification is triggered by a comment, the preview shows that comment instead of the issue/PR description
 - Persisted preview cache for faster repeated detail views
 - Regex filtering to filter specific notifications

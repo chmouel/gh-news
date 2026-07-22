@@ -148,6 +148,27 @@ pub struct App {
     // local mutations from the main loop.
     last_seen_mutation_seq: u64,
     author_enrichment_rx: Option<Receiver<EnrichmentResult>>,
+    // In-flight quick-merge, one at a time (guards double-submission).
+    merge_rx: Option<Receiver<MergeOutcome>>,
+}
+
+/// Result of a background pull-request merge.
+struct MergeOutcome {
+    notification_id: String,
+    repo: String,
+    number: u64,
+    result: crate::error::Result<String>,
+}
+
+fn collect_successful_batch_result(
+    successful_ids: &mut Vec<String>,
+    notification_id: &str,
+    result: crate::error::Result<()>,
+) {
+    match result {
+        Ok(()) => successful_ids.push(notification_id.to_string()),
+        Err(e) => eprintln!("Failed to process notification {notification_id}: {e}"),
+    }
 }
 
 /// Results from the background enrichment thread that resolves author logins
@@ -208,6 +229,7 @@ impl App {
             refresh_generation: 0,
             last_seen_mutation_seq: 0,
             author_enrichment_rx: None,
+            merge_rx: None,
         }
     }
 
@@ -937,6 +959,7 @@ impl App {
 
                 // Take the client temporarily to avoid borrow conflicts during render
                 if let Some(client) = self.api_client.take() {
+                    let mut successful_ids = Vec::new();
                     for (i, notification_id) in to_process.iter().enumerate() {
                         // Update progress
                         self.state.loading_progress = Some((i + 1, total));
@@ -948,15 +971,21 @@ impl App {
                         }
 
                         // Make the API call
-                        match selected {
+                        let result = match selected {
                             MarkAllOption::MarkReadAndArchive => {
-                                let _ = client.mark_thread_done(notification_id);
+                                client.mark_thread_done(notification_id)
                             }
                             MarkAllOption::MarkReadOnly => {
-                                let _ = client.mark_notification_read(notification_id);
+                                client.mark_notification_read(notification_id)
                             }
-                        }
+                        };
+                        collect_successful_batch_result(
+                            &mut successful_ids,
+                            notification_id,
+                            result,
+                        );
                     }
+                    self.state.record_read_cutoffs(&successful_ids);
 
                     // Clear progress and restore client
                     self.state.loading_progress = None;
@@ -996,6 +1025,7 @@ impl App {
                 let total = notification_ids.len();
                 // Take the client temporarily to avoid borrow conflicts during render
                 if let Some(client) = self.api_client.take() {
+                    let mut successful_ids = Vec::new();
                     for (i, notification_id) in notification_ids.iter().enumerate() {
                         // Update progress
                         self.state.loading_progress = Some((i + 1, total));
@@ -1016,10 +1046,13 @@ impl App {
                             }
                         };
 
-                        if let Err(e) = result {
-                            eprintln!("Failed to process notification {}: {}", notification_id, e);
-                        }
+                        collect_successful_batch_result(
+                            &mut successful_ids,
+                            notification_id,
+                            result,
+                        );
                     }
+                    self.state.record_read_cutoffs(&successful_ids);
 
                     // Clear progress and restore client
                     self.state.loading_progress = None;
@@ -1443,15 +1476,13 @@ impl App {
                 match rx.try_recv() {
                     Ok(result) => {
                         self.initial_load_rx = None;
-                        match result {
-                            Ok(data) => {
-                                self.apply_initial_load(data);
-                                // Persist the fresh fetch (post dismissed-filtering)
-                                // on the UI thread; workers never write the cache.
-                                self.persist_notifications_to_cache();
-                                self.last_seen_mutation_seq = self.state.notification_mutation_seq;
-                            }
-                            Err(e) => return Err(e),
+                        {
+                            let data = result?;
+                            self.apply_initial_load(data);
+                            // Persist the fresh fetch (post dismissed-filtering)
+                            // on the UI thread; workers never write the cache.
+                            self.persist_notifications_to_cache();
+                            self.last_seen_mutation_seq = self.state.notification_mutation_seq;
                         }
                     }
                     Err(TryRecvError::Disconnected) => {
@@ -1503,6 +1534,9 @@ impl App {
             // Persist local mutations (mark read, remove, ...) to the cache and
             // invalidate in-flight refresh snapshots that predate them.
             self.process_local_mutations();
+
+            // Apply any completed quick-merge.
+            self.process_merge_outcome();
 
             // Poll background refresh (after cache-hit startup)
             if let Some((generation, ref rx)) = self.background_refresh_rx {
@@ -1832,6 +1866,7 @@ impl App {
             if let Some(ref action) = self.state.confirm_action {
                 let count = match action {
                     ConfirmAction::ArchiveSelected { count, .. } => *count,
+                    ConfirmAction::MergePullRequest { .. } => 1,
                     ConfirmAction::MarkAllRead { .. } => self
                         .state
                         .filtered_notifications
@@ -1925,7 +1960,7 @@ impl App {
                 Some(ConfirmAction::ArchiveSelected { ref mut option, .. }) => {
                     *option = MarkAllOption::MarkReadAndArchive;
                 }
-                None => {}
+                Some(ConfirmAction::MergePullRequest { .. }) | None => {}
             },
             KeyCode::Down | KeyCode::Char('j') => match &mut self.state.confirm_action {
                 Some(ConfirmAction::MarkAllRead { ref mut selected }) => {
@@ -1934,7 +1969,7 @@ impl App {
                 Some(ConfirmAction::ArchiveSelected { ref mut option, .. }) => {
                     *option = MarkAllOption::MarkReadOnly;
                 }
-                None => {}
+                Some(ConfirmAction::MergePullRequest { .. }) | None => {}
             },
             KeyCode::Enter => {
                 if let Some(action) = self.state.confirm_action.take() {
@@ -2649,8 +2684,176 @@ impl App {
                     msg,
                 );
             }
+            ConfirmAction::MergePullRequest {
+                notification_id,
+                repo,
+                number,
+                title: _,
+                method,
+                head_sha,
+            } => {
+                self.spawn_merge(notification_id, repo, number, method, head_sha);
+            }
         }
         Ok(())
+    }
+
+    /// Open the merge confirmation dialog for the selected PR notification,
+    /// provided the preview data supports a safe merge.
+    fn request_merge_confirmation(&mut self) {
+        let Some(notification) = self.state.selected_notification() else {
+            self.state.status_message = Some("No notification selected".to_string());
+            return;
+        };
+        let notification_id = notification.id.clone();
+        let repo = notification.repo_full_name().to_string();
+
+        let Some(PreviewData::PullRequest {
+            number,
+            title,
+            state: pr_state,
+            is_draft,
+            head_ref_oid,
+            ..
+        }) = self.state.preview_content.as_ref()
+        else {
+            self.state.status_message =
+                Some("Merge is only available on pull request previews".to_string());
+            return;
+        };
+
+        if pr_state != "open" {
+            self.state.status_message = Some(format!("Pull request is {pr_state}"));
+            return;
+        }
+        if *is_draft {
+            self.state.status_message = Some("Draft pull requests cannot be merged".to_string());
+            return;
+        }
+        if head_ref_oid.is_empty() {
+            // Baseline GHES data lacks the head SHA: refuse rather than
+            // merging an unverified head.
+            self.state.status_message =
+                Some("Merge unavailable: head commit unknown (refresh the preview)".to_string());
+            return;
+        }
+        let Ok(number) = number.parse::<u64>() else {
+            self.state.status_message = Some("Invalid pull request number".to_string());
+            return;
+        };
+        if self.merge_rx.is_some() {
+            self.state.status_message = Some("A merge is already in progress".to_string());
+            return;
+        }
+
+        self.state.confirm_action = Some(ConfirmAction::MergePullRequest {
+            notification_id,
+            repo,
+            number,
+            title: title.clone(),
+            method: self.config.merge_method,
+            head_sha: head_ref_oid.clone(),
+        });
+        self.state.input_mode = InputMode::Confirm;
+    }
+
+    /// Run the merge on a background thread; the result is polled from the
+    /// main loop.  Only one merge may be in flight at a time.
+    fn spawn_merge(
+        &mut self,
+        notification_id: String,
+        repo: String,
+        number: u64,
+        method: crate::config::MergeMethod,
+        head_sha: String,
+    ) {
+        if self.merge_rx.is_some() {
+            self.state.status_message = Some("A merge is already in progress".to_string());
+            return;
+        }
+        let Some(ref client) = self.api_client else {
+            self.state.status_message = Some("No API client available".to_string());
+            return;
+        };
+        let Some((owner, repo_name)) = repo
+            .split_once('/')
+            .map(|(o, r)| (o.to_string(), r.to_string()))
+        else {
+            self.state.status_message = Some(format!("Invalid repository: {repo}"));
+            return;
+        };
+
+        let client = client.clone();
+        let (tx, rx) = mpsc::channel();
+        self.merge_rx = Some(rx);
+        self.state.status_message = Some(format!("Merging {repo}#{number}…"));
+
+        std::thread::spawn(move || {
+            let result = client.merge_pull_request(
+                &owner,
+                &repo_name,
+                number,
+                method.api_value(),
+                &head_sha,
+            );
+            let _ = tx.send(MergeOutcome {
+                notification_id,
+                repo,
+                number,
+                result,
+            });
+        });
+    }
+
+    /// Apply a completed merge: status message, mark read, refresh preview.
+    fn process_merge_outcome(&mut self) {
+        let Some(ref rx) = self.merge_rx else {
+            return;
+        };
+        let outcome = match rx.try_recv() {
+            Ok(outcome) => outcome,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => {
+                self.merge_rx = None;
+                self.state.status_message = Some("Merge thread ended unexpectedly".to_string());
+                return;
+            }
+        };
+        self.merge_rx = None;
+
+        match outcome.result {
+            Ok(message) => {
+                self.state.status_message = Some(if message.is_empty() {
+                    format!("Merged {}#{}", outcome.repo, outcome.number)
+                } else {
+                    format!("Merged {}#{}: {}", outcome.repo, outcome.number, message)
+                });
+                // Mark read locally (records the read cutoff, clearing the
+                // new-activity feed) and persist on GitHub's side.
+                self.state.mark_notification_read(&outcome.notification_id);
+                if let Some(ref client) = self.api_client {
+                    let _ = client.mark_notification_read(&outcome.notification_id);
+                }
+                // Revalidate the preview so the merged state shows up.
+                let notification = self
+                    .state
+                    .notifications
+                    .iter()
+                    .find(|n| n.id == outcome.notification_id)
+                    .cloned();
+                if let (Some(pm), Some(notification)) =
+                    (self.preview_manager.as_ref(), notification)
+                {
+                    pm.request_revalidation(&notification, crate::preview_manager::PRIORITY_HIGH);
+                }
+            }
+            Err(e) => {
+                self.state.status_message = Some(format!(
+                    "Merge of {}#{} failed: {}",
+                    outcome.repo, outcome.number, e
+                ));
+            }
+        }
     }
 
     fn handle_normal_key(&mut self, key: KeyEvent) -> Result<()> {
@@ -3273,6 +3476,12 @@ impl App {
                 let _ = crate::state_file::AppStateFile::save_auto_mark_read(
                     self.auto_mark_read_enabled,
                 );
+            }
+            KeyCode::Char('m') => {
+                self.request_merge_confirmation();
+            }
+            KeyCode::Char('c') => {
+                self.preview_widget.toggle_ci_checks(&self.state);
             }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::SHIFT) => {
                 // Scroll preview up
@@ -3967,6 +4176,20 @@ mod tests {
         // Local state should be updated (no API client, so no API call)
         assert!(!app.state.notifications[0].is_unread());
         assert!(app.pending_mark_read.is_none());
+    }
+
+    #[test]
+    fn batch_cutoffs_exclude_failed_operations() {
+        let mut successful_ids = Vec::new();
+
+        collect_successful_batch_result(&mut successful_ids, "ok", Ok(()));
+        collect_successful_batch_result(
+            &mut successful_ids,
+            "failed",
+            Err(crate::error::Error::Config("request failed".to_string())),
+        );
+
+        assert_eq!(successful_ids, ["ok"]);
     }
 
     #[test]

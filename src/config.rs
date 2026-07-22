@@ -19,6 +19,27 @@ pub enum OpenMethod {
     Print,
 }
 
+/// Merge method for the quick-merge pull request action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeMethod {
+    Merge,
+    #[default]
+    Squash,
+    Rebase,
+}
+
+impl MergeMethod {
+    /// Value for the REST merge API's `merge_method` field.
+    pub fn api_value(self) -> &'static str {
+        match self {
+            MergeMethod::Merge => "merge",
+            MergeMethod::Squash => "squash",
+            MergeMethod::Rebase => "rebase",
+        }
+    }
+}
+
 /// Layout mode for the notification list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -175,6 +196,10 @@ pub struct Config {
     pub auto_archive: bool,
     pub auto_mark_on_open: bool,
 
+    /// Merge method used by the quick-merge action (merge|squash|rebase).
+    #[serde(default)]
+    pub merge_method: MergeMethod,
+
     // External commands
     pub browser_command: Option<String>,
     pub open_method: OpenMethod,
@@ -268,6 +293,7 @@ impl Default for Config {
             auto_mark_read_delay_ms: 400,
             auto_archive: false,
             auto_mark_on_open: true,
+            merge_method: MergeMethod::default(),
             cache_file: None,
             browser_command: None,
             open_method: OpenMethod::default(),

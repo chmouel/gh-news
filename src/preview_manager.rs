@@ -1,7 +1,7 @@
 use crate::api::GitHubClient;
 use crate::models::Notification;
 use crate::preview::{PreviewData, PreviewFetcher};
-use crate::state_file::PersistedPreviewCacheEntry;
+use crate::state_file::{PersistedPreviewCacheEntry, PREVIEW_CACHE_SCHEMA_VERSION};
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use std::collections::{BinaryHeap, HashMap, HashSet};
@@ -18,6 +18,16 @@ pub const PRIORITY_LOW: u8 = 1;
 struct CachedPreview {
     data: PreviewData,
     updated_at: Option<DateTime<Utc>>,
+    /// Preview-cache schema version this entry was written with.
+    schema_version: u32,
+}
+
+impl CachedPreview {
+    /// Entries written before the current schema lack newer fields and must
+    /// be revalidated in the background.
+    fn is_outdated_schema(&self) -> bool {
+        self.schema_version < PREVIEW_CACHE_SCHEMA_VERSION
+    }
 }
 
 /// Freshness status of a cached preview relative to the current notification state.
@@ -189,6 +199,7 @@ fn preview_worker_thread(
                 CachedPreview {
                     data,
                     updated_at: notification_updated_at,
+                    schema_version: PREVIEW_CACHE_SCHEMA_VERSION,
                 },
             );
             if should_persist {
@@ -217,6 +228,7 @@ fn load_persisted_cache() -> HashMap<String, CachedPreview> {
                 CachedPreview {
                     data: entry.data,
                     updated_at: entry.updated_at,
+                    schema_version: entry.schema_version,
                 },
             )
         })
@@ -232,6 +244,7 @@ fn persist_cache_snapshot(cache: &HashMap<String, CachedPreview>) {
                 PersistedPreviewCacheEntry {
                     data: cached.data.clone(),
                     updated_at: cached.updated_at,
+                    schema_version: cached.schema_version,
                 },
             )
         })
@@ -295,12 +308,13 @@ impl PreviewManager {
         match cache.get(&cache_key) {
             None => CacheStatus::Miss,
             Some(cached) => {
-                let is_stale = notification.preview_is_dynamic()
-                    && match (notification.updated_at, cached.updated_at) {
-                        (Some(new_ts), Some(old_ts)) => new_ts > old_ts,
-                        (Some(_), None) => true,
-                        _ => false,
-                    };
+                let is_stale = cached.is_outdated_schema()
+                    || (notification.preview_is_dynamic()
+                        && match (notification.updated_at, cached.updated_at) {
+                            (Some(new_ts), Some(old_ts)) => new_ts > old_ts,
+                            (Some(_), None) => true,
+                            _ => false,
+                        });
                 if is_stale {
                     CacheStatus::Stale(cached.data.clone())
                 } else {
@@ -381,12 +395,13 @@ impl PreviewManager {
         for notification in notifications {
             let cache_key = notification.preview_cache_key();
             if let Some(cached) = cache.get(&cache_key) {
-                let is_stale = notification.preview_is_dynamic()
-                    && match (notification.updated_at, cached.updated_at) {
-                        (Some(new_ts), Some(old_ts)) => new_ts > old_ts,
-                        (Some(_), None) => true,
-                        _ => false,
-                    };
+                let is_stale = cached.is_outdated_schema()
+                    || (notification.preview_is_dynamic()
+                        && match (notification.updated_at, cached.updated_at) {
+                            (Some(new_ts), Some(old_ts)) => new_ts > old_ts,
+                            (Some(_), None) => true,
+                            _ => false,
+                        });
                 if is_stale {
                     let entry = gen_lock.entry(cache_key.clone()).or_insert(0);
                     *entry += 1;
@@ -515,6 +530,7 @@ mod tests {
                 body: "b".into(),
             },
             updated_at,
+            schema_version: PREVIEW_CACHE_SCHEMA_VERSION,
         }
     }
 
@@ -545,6 +561,19 @@ mod tests {
         assert!(matches!(
             pm.get_cached_status(&notif),
             CacheStatus::Fresh(_)
+        ));
+    }
+
+    #[test]
+    fn outdated_schema_entry_is_reported_stale() {
+        let old = ts(2024, 1, 1);
+        let notif = make_notification("42", Some(old));
+        let mut cached = make_cached(Some(old));
+        cached.schema_version = PREVIEW_CACHE_SCHEMA_VERSION - 1;
+        let pm = manager_with_cache(vec![(&notif.preview_cache_key(), cached)]);
+        assert!(matches!(
+            pm.get_cached_status(&notif),
+            CacheStatus::Stale(_)
         ));
     }
 
