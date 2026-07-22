@@ -3494,6 +3494,9 @@ impl App {
             KeyCode::Char('c') => {
                 self.preview_widget.toggle_ci_checks(&self.state);
             }
+            KeyCode::Char('v') => {
+                self.preview_widget.toggle_description(&self.state);
+            }
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::SHIFT) => {
                 // Scroll preview up
                 self.state.preview_scroll = self.state.preview_scroll.saturating_sub(5);

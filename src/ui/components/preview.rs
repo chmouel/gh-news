@@ -26,7 +26,12 @@ pub struct PreviewWidget {
     /// `Paragraph::line_count` is not recomputed every frame.
     cached_height: Option<(u16, usize)>,
     expanded_ci_key: Option<String>,
+    expanded_description_key: Option<String>,
 }
+
+/// Rendered description lines shown before the collapsed preview offers to
+/// expand the rest.
+const DESCRIPTION_COLLAPSE_THRESHOLD: usize = 8;
 
 impl PreviewWidget {
     pub fn new(palette: &ColorPalette) -> Self {
@@ -38,6 +43,7 @@ impl PreviewWidget {
             cached_signature: None,
             cached_height: None,
             expanded_ci_key: None,
+            expanded_description_key: None,
         }
     }
 
@@ -57,6 +63,29 @@ impl PreviewWidget {
             self.expanded_ci_key = None;
         } else {
             self.expanded_ci_key = Some(key);
+        }
+        self.cached_signature = None;
+        self.cached_height = None;
+    }
+
+    pub fn toggle_description(&mut self, state: &AppState) {
+        let has_long_body = matches!(
+            state.preview_content,
+            Some(PreviewData::PullRequest { ref body, .. })
+                if MarkdownRenderer::render_simple(body, &self.colors).len()
+                    > DESCRIPTION_COLLAPSE_THRESHOLD
+        );
+        let Some(key) = has_long_body
+            .then(|| state.selected_notification().map(|n| n.preview_cache_key()))
+            .flatten()
+        else {
+            return;
+        };
+
+        if self.expanded_description_key.as_deref() == Some(&key) {
+            self.expanded_description_key = None;
+        } else {
+            self.expanded_description_key = Some(key);
         }
         self.cached_signature = None;
         self.cached_height = None;
@@ -246,15 +275,22 @@ impl PreviewWidget {
                 .selected_notification()
                 .map(|notification| notification.preview_cache_key());
             let ci_expanded = selected_key.as_ref() == self.expanded_ci_key.as_ref();
+            let description_expanded =
+                selected_key.as_ref() == self.expanded_description_key.as_ref();
             let cutoff = state
                 .selected_notification()
                 .and_then(|n| state.effective_read_cutoff(n));
             let signature = format!(
-                "pr|{}|{:?}|{}|{}",
-                state.preview_content_version, cutoff, area.width, ci_expanded
+                "pr|{}|{:?}|{}|{}|{}",
+                state.preview_content_version,
+                cutoff,
+                area.width,
+                ci_expanded,
+                description_expanded
             );
             if self.cached_signature.as_ref() != Some(&signature) {
-                self.cached_lines = self.build_pr_lines(preview_data, cutoff, ci_expanded);
+                self.cached_lines =
+                    self.build_pr_lines(preview_data, cutoff, ci_expanded, description_expanded);
                 self.cached_signature = Some(signature);
                 self.cached_height = None;
             }
@@ -357,12 +393,13 @@ impl PreviewWidget {
     }
 
     /// Build the redesigned pull-request preview: readiness pills, the
-    /// new-activity feed, then CI checks.
+    /// new-activity feed, then the (collapsible) description and CI checks.
     fn build_pr_lines(
         &self,
         preview_data: &PreviewData,
         read_cutoff: Option<chrono::DateTime<chrono::Utc>>,
         ci_expanded: bool,
+        description_expanded: bool,
     ) -> Vec<Line<'static>> {
         let PreviewData::PullRequest {
             number,
@@ -532,15 +569,9 @@ impl PreviewWidget {
         }
         lines.push(Line::from(""));
 
-        // ── Description ──────────────────────────────────────────────────
-        if !body.trim().is_empty() {
-            lines.push(self.section_heading("Description", Vec::new()));
-            lines.push(Line::from(""));
-            lines.extend(MarkdownRenderer::render_simple(body, colors));
-            lines.push(Line::from(""));
-        }
-
         // ── New activity since last read ─────────────────────────────────
+        // Shown before the description so the comment or review that
+        // triggered the notification is never buried under a long PR body.
         let activity = merge_pr_activity(timeline, latest_comment.as_ref());
         let new_entries: Vec<&TimelineEntry> = match read_cutoff {
             Some(cutoff) => activity
@@ -569,6 +600,36 @@ impl PreviewWidget {
             for entry in &new_entries {
                 lines.push(Line::from(""));
                 lines.extend(self.timeline_entry_lines(entry));
+            }
+            lines.push(Line::from(""));
+        }
+
+        // ── Description (collapsed beyond the threshold) ─────────────────
+        if !body.trim().is_empty() {
+            let body_lines = MarkdownRenderer::render_simple(body, colors);
+            let hidden = body_lines
+                .len()
+                .saturating_sub(DESCRIPTION_COLLAPSE_THRESHOLD);
+            lines.push(self.section_heading("Description", Vec::new()));
+            lines.push(Line::from(""));
+            if hidden > 0 && !description_expanded {
+                lines.extend(body_lines.into_iter().take(DESCRIPTION_COLLAPSE_THRESHOLD));
+                lines.push(Line::from(Span::styled(
+                    format!("  … v expand description ({hidden} more lines)"),
+                    Style::default()
+                        .fg(colors.fg_dim)
+                        .add_modifier(Modifier::ITALIC),
+                )));
+            } else {
+                lines.extend(body_lines);
+                if hidden > 0 {
+                    lines.push(Line::from(Span::styled(
+                        "  v collapse description",
+                        Style::default()
+                            .fg(colors.fg_dim)
+                            .add_modifier(Modifier::ITALIC),
+                    )));
+                }
             }
             lines.push(Line::from(""));
         }
@@ -797,5 +858,96 @@ mod tests {
         let activity = merge_pr_activity(&[], Some(&latest));
 
         assert!(!activity_is_new(&activity[0], cutoff));
+    }
+
+    fn pr_preview(body: &str, timeline: Vec<TimelineEntry>) -> PreviewData {
+        PreviewData::PullRequest {
+            number: "1".to_string(),
+            title: "A PR".to_string(),
+            state: "open".to_string(),
+            author: "alice".to_string(),
+            comments: 0,
+            mergeable: "Yes".to_string(),
+            body: body.to_string(),
+            labels: Vec::new(),
+            review_decision: String::new(),
+            is_draft: false,
+            ci_status: "UNKNOWN".to_string(),
+            additions: 1,
+            deletions: 1,
+            changed_files: 1,
+            latest_comment: None,
+            ci_checks: Vec::new(),
+            ci_total_count: 0,
+            merge_state_status: String::new(),
+            head_ref_oid: String::new(),
+            base_ref: String::new(),
+            head_ref: String::new(),
+            timeline,
+            timeline_total_count: 1,
+        }
+    }
+
+    fn line_texts(lines: &[Line<'_>]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    fn find_line(texts: &[String], needle: &str) -> usize {
+        texts
+            .iter()
+            .position(|t| t.contains(needle))
+            .unwrap_or_else(|| panic!("line containing {needle:?} not found in {texts:?}"))
+    }
+
+    #[test]
+    fn new_activity_is_rendered_before_the_description() {
+        let widget = PreviewWidget::new(&ColorPalette::tokyo_night());
+        let preview = pr_preview(
+            "the description",
+            vec![entry("bob", "fresh comment", "2026-07-01T10:00:00Z")],
+        );
+
+        let texts = line_texts(&widget.build_pr_lines(&preview, None, false, false));
+
+        assert!(find_line(&texts, "New since last read") < find_line(&texts, "Description"));
+    }
+
+    #[test]
+    fn long_description_is_collapsed_with_expand_hint() {
+        let widget = PreviewWidget::new(&ColorPalette::tokyo_night());
+        let long_body = (1..=20)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let preview = pr_preview(&long_body, Vec::new());
+
+        let collapsed = line_texts(&widget.build_pr_lines(&preview, None, false, false));
+        assert!(collapsed.iter().any(|t| t.contains("v expand description")));
+        assert!(!collapsed.iter().any(|t| t.contains("line 20")));
+
+        let expanded = line_texts(&widget.build_pr_lines(&preview, None, false, true));
+        assert!(expanded.iter().any(|t| t.contains("line 20")));
+        assert!(expanded
+            .iter()
+            .any(|t| t.contains("v collapse description")));
+    }
+
+    #[test]
+    fn short_description_is_shown_without_hint() {
+        let widget = PreviewWidget::new(&ColorPalette::tokyo_night());
+        let preview = pr_preview("short body", Vec::new());
+
+        let texts = line_texts(&widget.build_pr_lines(&preview, None, false, false));
+
+        assert!(texts.iter().any(|t| t.contains("short body")));
+        assert!(!texts.iter().any(|t| t.contains("expand description")));
     }
 }

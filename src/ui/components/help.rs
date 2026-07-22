@@ -148,6 +148,10 @@ impl HelpWidget {
                         desc: "Expand/collapse pull request CI checks",
                     },
                     HelpLine {
+                        key: "v",
+                        desc: "Expand/collapse pull request description",
+                    },
+                    HelpLine {
                         key: "!",
                         desc: "Pin/unpin notification",
                     },

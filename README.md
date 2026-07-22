@@ -129,6 +129,7 @@ Multi-select first with `Space` (magenta checkmark); the actions below then appl
 - `Shift+U`/`Shift+D` - Scroll preview (5 lines)
 - `Ctrl+U`/`Ctrl+D` - Scroll preview (page)
 - `c` - Expand/collapse pull request CI checks
+- `v` - Expand/collapse pull request description
 - `1`/`2` - Focus pane 1 (list) / pane 2 (preview)
 - `M` - Toggle auto-mark-read on/off (persisted across sessions)
 
