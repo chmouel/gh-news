@@ -398,6 +398,16 @@ repos_collapsed = true
 - `GITHUB_TOKEN` - GitHub personal access token (fallback if `GH_TOKEN` not set)
 - `GH_NEWS_AUTO_REFRESH_INTERVAL` - Auto-refresh interval in seconds (default: 120). Set to 0 to disable.
 
+## Author
+
+[![Sponsor](https://img.shields.io/badge/Sponsor-❤️-ff69b4?style=for-the-badge&logo=github)](https://github.com/sponsors/chmouel)
+
+### Chmouel Boudjnah
+
+- Fediverse - [@chmouel@chmouel.com](https://fosstodon.org/@chmouel)
+- Twitter - [@chmouel](https://twitter.com/chmouel)
+- Blog  - [https://blog.chmouel.com](https://blog.chmouel.com)
+
 ## License
 
 [Apache 2.0](LICENSE)
