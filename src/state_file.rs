@@ -91,6 +91,53 @@ pub struct SnoozeEntry {
     pub note: Option<String>,
 }
 
+/// Recent successful archives, matched against the activity the user saw.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ArchivedThreads(Vec<ArchivedThread>);
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ArchivedThread {
+    host: String,
+    id: String,
+    updated_at: DateTime<Utc>,
+}
+
+impl ArchivedThreads {
+    pub fn record(&mut self, host: &str, notification: &Notification) {
+        let mut updated_at = notification.updated_at.unwrap_or_else(Utc::now);
+        if let Some(previous) = self
+            .0
+            .iter()
+            .find(|entry| entry.host == host && entry.id == notification.id)
+        {
+            // Another window may still be displaying an older snapshot.
+            updated_at = updated_at.max(previous.updated_at);
+        }
+        self.0
+            .retain(|entry| entry.host != host || entry.id != notification.id);
+        self.0.push(ArchivedThread {
+            host: host.to_string(),
+            id: notification.id.clone(),
+            updated_at,
+        });
+        const MAX_ARCHIVED: usize = 200;
+        if self.0.len() > MAX_ARCHIVED {
+            self.0.drain(..self.0.len() - MAX_ARCHIVED);
+        }
+    }
+
+    pub fn is_archived(&self, host: &str, notification: &Notification) -> bool {
+        self.0.iter().any(|entry| {
+            entry.host == host
+                && entry.id == notification.id
+                && notification
+                    .updated_at
+                    .is_none_or(|updated_at| updated_at <= entry.updated_at)
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppStateFile {
     #[serde(default = "default_auto_mark_read")]
@@ -104,6 +151,8 @@ pub struct AppStateFile {
     pub snoozed_notifications: HashMap<String, SnoozeEntry>,
     #[serde(default)]
     pub dismissed_synthetic_ids: Vec<String>,
+    #[serde(default)]
+    pub archived_threads: ArchivedThreads,
     /// Per-thread local read timestamps, recorded when the user marks a
     /// notification read in the app.  GitHub's `last_read_at` does not
     /// advance for local reads, so this drives the "new since last read"
@@ -124,6 +173,7 @@ impl AppStateFile {
             pinned_notifications: Vec::new(),
             snoozed_notifications: HashMap::new(),
             dismissed_synthetic_ids: Vec::new(),
+            archived_threads: ArchivedThreads::default(),
             read_cutoffs: HashMap::new(),
         }
     }
@@ -254,6 +304,14 @@ impl AppStateFile {
     pub fn load_dismissed_synthetic_ids() -> Result<HashSet<String>> {
         let state = Self::load_full()?;
         Ok(state.dismissed_synthetic_ids.into_iter().collect())
+    }
+
+    pub fn load_archived_threads() -> Result<ArchivedThreads> {
+        Ok(Self::load_full()?.archived_threads)
+    }
+
+    pub fn save_archived_thread(host: &str, notification: &Notification) -> Result<()> {
+        Self::update_with(|state| state.archived_threads.record(host, notification))
     }
 
     /// Load local read cutoffs, dropping entries older than 30 days.

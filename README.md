@@ -68,6 +68,11 @@ Easiest way is to just run `gh auth login` if you have the GitHub CLI installed.
 
 Press `Ctrl+R` to force a refresh. gh-news shows the current refresh stage in the loading panel while it refreshes notifications and any enabled extra sources. When GitHub returns rate-limit headers, the status bar shows the remaining API quota. Local actions such as marking notifications read or archiving them update the on-disk cache straight away, so dismissed notifications do not reappear on the next startup. Should a background refresh fail, the status bar reports the error rather than failing silently.
 
+Successful archives in the TUI also remember the last-seen activity for the
+200 most recently archived threads. This keeps stale API results out of the
+inbox across refreshes and restarts, including with `--all`. Newer activity on
+an archived thread makes it visible again.
+
 ### Options
 
 - `-a, --all` - Show all notifications (not just unread)
