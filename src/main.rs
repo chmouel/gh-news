@@ -164,8 +164,10 @@ fn run() -> Result<()> {
     // Always use config's default preview mode on startup
     let preview_mode = config.get_default_preview_mode();
 
-    let auto_mark_read =
-        state_file::AppStateFile::load_auto_mark_read().unwrap_or(config.auto_mark_read);
+    let auto_mark_read = state_file::AppStateFile::load_auto_mark_read()
+        .ok()
+        .flatten()
+        .unwrap_or(config.auto_mark_read);
     let auto_archive = config.auto_archive;
 
     // Set initial values. `set_auto_archive` will correctly enforce `auto_mark_read` if needed.
