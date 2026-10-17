@@ -65,13 +65,19 @@ fn write_atomically(path: &Path, contents: &[u8]) -> Result<()> {
     let tmp_extension = path
         .extension()
         .and_then(|ext| ext.to_str())
-        .map(|ext| format!("{ext}.tmp"))
-        .unwrap_or_else(|| "tmp".to_string());
+        .map(|ext| format!("{ext}.{}.tmp", std::process::id()))
+        .unwrap_or_else(|| format!("{}.tmp", std::process::id()));
     let tmp_path = path.with_extension(tmp_extension);
 
     fs::write(&tmp_path, contents).map_err(Error::Io)?;
     fs::rename(&tmp_path, path).map_err(Error::Io)?;
     Ok(())
+}
+
+fn lock_path(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".lock");
+    PathBuf::from(name)
 }
 
 fn current_state_base_path() -> Result<PathBuf> {
@@ -91,10 +97,51 @@ pub struct SnoozeEntry {
     pub note: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Successful archives per host and thread ID, with the latest activity the
+/// user saw before archiving.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ArchivedThreads(HashMap<String, HashMap<String, DateTime<Utc>>>);
+
+impl ArchivedThreads {
+    /// Remember an archive, keeping the newest cutoff for the thread so an
+    /// older snapshot never lowers what another window saved.
+    pub fn record(&mut self, host: &str, id: &str, updated_at: Option<DateTime<Utc>>) {
+        let updated_at = updated_at.unwrap_or_else(Utc::now);
+        let cutoff = self
+            .0
+            .entry(host.to_string())
+            .or_default()
+            .entry(id.to_string())
+            .or_insert(updated_at);
+        *cutoff = (*cutoff).max(updated_at);
+    }
+
+    pub fn merge(&mut self, other: &ArchivedThreads) {
+        for (host, threads) in &other.0 {
+            for (id, updated_at) in threads {
+                self.record(host, id, Some(*updated_at));
+            }
+        }
+    }
+
+    pub fn is_archived(&self, host: &str, notification: &Notification) -> bool {
+        self.0
+            .get(host)
+            .and_then(|threads| threads.get(&notification.id))
+            .is_some_and(|cutoff| {
+                notification
+                    .updated_at
+                    .is_none_or(|updated_at| updated_at <= *cutoff)
+            })
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AppStateFile {
-    #[serde(default = "default_auto_mark_read")]
-    pub auto_mark_read: bool,
+    /// Unset until the user toggles it, so the config value applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_mark_read: Option<bool>,
     #[serde(default)]
     pub auto_archive: bool,
     #[serde(default)]
@@ -104,6 +151,8 @@ pub struct AppStateFile {
     pub snoozed_notifications: HashMap<String, SnoozeEntry>,
     #[serde(default)]
     pub dismissed_synthetic_ids: Vec<String>,
+    #[serde(default)]
+    pub archived_threads: ArchivedThreads,
     /// Per-thread local read timestamps, recorded when the user marks a
     /// notification read in the app.  GitHub's `last_read_at` does not
     /// advance for local reads, so this drives the "new since last read"
@@ -112,22 +161,7 @@ pub struct AppStateFile {
     pub read_cutoffs: HashMap<String, DateTime<Utc>>,
 }
 
-fn default_auto_mark_read() -> bool {
-    false
-}
-
 impl AppStateFile {
-    pub fn new(auto_mark_read: bool) -> Self {
-        Self {
-            auto_mark_read,
-            auto_archive: false,
-            pinned_notifications: Vec::new(),
-            snoozed_notifications: HashMap::new(),
-            dismissed_synthetic_ids: Vec::new(),
-            read_cutoffs: HashMap::new(),
-        }
-    }
-
     fn load_full() -> Result<AppStateFile> {
         let path = get_state_path()?;
 
@@ -154,26 +188,36 @@ impl AppStateFile {
         Ok(())
     }
 
-    fn load_or_default(auto_mark_read: bool) -> AppStateFile {
-        Self::load_full().unwrap_or_else(|_| Self::new(auto_mark_read))
-    }
-
-    fn update_with<F>(update: F) -> Result<()>
+    /// Read, change and write the state file while holding a lock, so
+    /// several gh-news windows cannot overwrite each other's changes.
+    fn update_with<T, F>(update: F) -> Result<T>
     where
-        F: FnOnce(&mut AppStateFile),
+        F: FnOnce(&mut AppStateFile) -> T,
     {
-        let mut state = Self::load_or_default(default_auto_mark_read());
-        update(&mut state);
-        state.save_full()
+        let path = get_state_path()?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(Error::Io)?;
+        }
+        let lock = fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(lock_path(&path))
+            .map_err(Error::Io)?;
+        lock.lock().map_err(Error::Io)?;
+        let mut state = Self::load_full().unwrap_or_default();
+        let value = update(&mut state);
+        state.save_full()?;
+        Ok(value)
     }
 
     pub fn save_auto_mark_read(auto_mark_read: bool) -> Result<()> {
         Self::update_with(|state| {
-            state.auto_mark_read = auto_mark_read;
+            state.auto_mark_read = Some(auto_mark_read);
         })
     }
 
-    pub fn load_auto_mark_read() -> Result<bool> {
+    pub fn load_auto_mark_read() -> Result<Option<bool>> {
         let state = Self::load_full()?;
         Ok(state.auto_mark_read)
     }
@@ -254,6 +298,23 @@ impl AppStateFile {
     pub fn load_dismissed_synthetic_ids() -> Result<HashSet<String>> {
         let state = Self::load_full()?;
         Ok(state.dismissed_synthetic_ids.into_iter().collect())
+    }
+
+    pub fn load_archived_threads() -> Result<ArchivedThreads> {
+        Ok(Self::load_full()?.archived_threads)
+    }
+
+    /// Merge `local` into the saved archive history and return the result,
+    /// which also contains archives saved by other gh-news windows.
+    pub fn save_archived_threads(host: &str, local: &ArchivedThreads) -> Result<ArchivedThreads> {
+        Self::update_with(|state| {
+            state.archived_threads.merge(local);
+            let archived = &state.archived_threads;
+            state
+                .pinned_notifications
+                .retain(|n| !archived.is_archived(host, n));
+            archived.clone()
+        })
     }
 
     /// Load local read cutoffs, dropping entries older than 30 days.
@@ -393,7 +454,7 @@ mod tests {
     use chrono::Duration;
 
     fn make_state_with_snoozes(entries: &[(&str, DateTime<Utc>)]) -> AppStateFile {
-        let mut state = AppStateFile::new(true);
+        let mut state = AppStateFile::default();
         for (id, wake_time) in entries {
             state.snoozed_notifications.insert(
                 id.to_string(),
@@ -409,7 +470,7 @@ mod tests {
     #[test]
     fn snooze_entry_is_stored() {
         let wake_time = Utc::now() + Duration::hours(4);
-        let mut state = AppStateFile::new(true);
+        let mut state = AppStateFile::default();
         state.snoozed_notifications.insert(
             "thread-1".to_string(),
             SnoozeEntry {
@@ -458,7 +519,7 @@ mod tests {
     #[test]
     fn snooze_serialises_and_deserialises() {
         let wake_time = Utc::now() + Duration::hours(4);
-        let mut state = AppStateFile::new(true);
+        let mut state = AppStateFile::default();
         state.snoozed_notifications.insert(
             "t1".to_string(),
             SnoozeEntry {
@@ -483,6 +544,16 @@ mod tests {
         let toml_str = "auto_mark_read = true\n";
         let state: AppStateFile = toml::from_str(toml_str).unwrap();
         assert!(state.snoozed_notifications.is_empty());
+    }
+
+    #[test]
+    fn unset_auto_mark_read_is_not_written() {
+        let mut state = AppStateFile::default();
+        state.archived_threads.record("github.com", "1", None);
+        let saved = toml::to_string_pretty(&state).unwrap();
+        assert!(!saved.contains("auto_mark_read"));
+        let restored: AppStateFile = toml::from_str(&saved).unwrap();
+        assert_eq!(restored.auto_mark_read, None);
     }
 
     #[test]

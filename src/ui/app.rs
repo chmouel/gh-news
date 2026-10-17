@@ -16,7 +16,7 @@ use crate::state::{
     AppState, CommandOutputData, ConfirmAction, InputMode, MarkAllOption, PaneFocus, PreviewMode,
     RateLimitDisplay,
 };
-use crate::state_file::AppStateFile;
+use crate::state_file::{AppStateFile, ArchivedThreads};
 use crate::terminal::{ProgressState, Terminal};
 use crate::ui::components::{
     action_menu, command_output, confirm, filter, help, help_search, list, loading, preview,
@@ -121,6 +121,10 @@ pub struct App {
     refresh_args: Option<(bool, bool, Option<usize>)>, // (all, participating, max_notifications)
     preview_manager: Option<PreviewManager>,
     previous_notification_ids: HashSet<String>, // Track notification IDs for new detection
+    archived_threads: ArchivedThreads,
+    // Set when an archive has not been saved yet, e.g. when a bulk archive
+    // stops early because the terminal failed.
+    archived_threads_dirty: bool,
     initial_load_rx: Option<Receiver<crate::error::Result<InitialLoadData>>>,
     pending_state_settings: Option<PendingStateSettings>,
     pending_blocking_action: Option<BlockingAction>,
@@ -213,6 +217,8 @@ impl App {
             refresh_args: None,
             preview_manager: None,
             previous_notification_ids: HashSet::new(),
+            archived_threads: AppStateFile::load_archived_threads().unwrap_or_default(),
+            archived_threads_dirty: false,
             initial_load_rx: None,
             pending_state_settings: None,
             pending_blocking_action: None,
@@ -280,10 +286,20 @@ impl App {
 
                 if is_synthetic_id(notification_id) {
                     let _ = AppStateFile::dismiss_synthetic_id(notification_id);
-                } else if let Some(ref client) = self.api_client {
+                } else if let Some(client) = self.api_client.clone() {
                     if self.auto_archive_enabled {
-                        if let Err(e) = client.mark_thread_done(notification_id) {
-                            eprintln!("Failed to auto-archive notification: {}", e);
+                        let was_pinned = self.state.is_pinned(notification_id);
+                        match self.archive_thread(&client, notification_id) {
+                            Ok(()) => {
+                                self.persist_archived_threads();
+                                if was_pinned {
+                                    self.state.build_tree();
+                                    if !self.state.select_notification_by_id(notification_id) {
+                                        self.state.select_first_notification();
+                                    }
+                                }
+                            }
+                            Err(e) => eprintln!("Failed to auto-archive notification: {}", e),
                         }
                     } else if let Err(e) = client.mark_notification_read(notification_id) {
                         eprintln!("Failed to auto-mark notification as read: {}", e);
@@ -293,6 +309,69 @@ impl App {
                 self.pending_mark_read = None;
             }
         }
+    }
+
+    /// Archive a thread on GitHub, remember it in memory and unpin it so an
+    /// old pinned copy cannot bring it back. Call `persist_archived_threads`
+    /// once the archive action is finished.
+    fn archive_thread(&mut self, client: &crate::api::GitHubClient, id: &str) -> Result<()> {
+        // A selected ID may no longer be in the list after a refresh, in
+        // which case everything before the request counts as archived.
+        let updated_at = self
+            .state
+            .notifications
+            .iter()
+            .find(|n| n.id == id)
+            .and_then(|n| n.updated_at)
+            .unwrap_or_else(chrono::Utc::now);
+        client.mark_thread_done(id)?;
+        if self
+            .pending_mark_read
+            .as_ref()
+            .is_some_and(|(p, _)| p == id)
+        {
+            self.pending_mark_read = None;
+        }
+        if !is_synthetic_id(id) {
+            self.archived_threads
+                .record(&self.config.github_host, id, Some(updated_at));
+            self.archived_threads_dirty = true;
+            self.state.pinned_notifications.retain(|n| n.id != id);
+        }
+        Ok(())
+    }
+
+    /// Save the archive history, picking up archives from other windows.
+    /// On failure the in-memory history is kept so this window stays correct.
+    fn persist_archived_threads(&mut self) {
+        match AppStateFile::save_archived_threads(&self.config.github_host, &self.archived_threads)
+        {
+            Ok(merged) => {
+                self.archived_threads = merged;
+                self.archived_threads_dirty = false;
+            }
+            Err(e) => eprintln!("Failed to save archived notifications: {e}"),
+        }
+    }
+
+    /// Drop dismissed synthetic notifications and archived threads, using
+    /// the saved history so archives from other windows apply too.
+    fn filter_dismissed_notifications(&mut self, notifications: &mut Vec<Notification>) {
+        if let Ok(saved) = AppStateFile::load_archived_threads() {
+            self.archived_threads.merge(&saved);
+        }
+        filter_dismissed_synthetic(notifications);
+        let host = &self.config.github_host;
+        notifications.retain(|n| !self.archived_threads.is_archived(host, n));
+    }
+
+    /// Unpin threads archived in another window. Call only when the
+    /// refreshed list is applied, so the tree is rebuilt with it.
+    fn drop_archived_pins(&mut self) {
+        let host = &self.config.github_host;
+        self.state
+            .pinned_notifications
+            .retain(|n| !self.archived_threads.is_archived(host, n));
     }
 
     fn save_notifications_cache(&self, notifications: &[Notification]) {
@@ -355,7 +434,7 @@ impl App {
         self.base_filter_pattern = settings.filter_pattern.clone();
 
         let mut notifications = data.notifications;
-        filter_dismissed_synthetic(&mut notifications);
+        self.filter_dismissed_notifications(&mut notifications);
         self.seed_cached_enrichment(&mut notifications);
 
         let mut app_state = AppState::new();
@@ -374,8 +453,14 @@ impl App {
 
         let selected_notif_id = app_state.selected_notification().map(|n| n.id.clone());
 
-        if !data.pinned_notifications.is_empty() {
-            app_state.set_pinned_notifications(data.pinned_notifications);
+        let mut pinned = data.pinned_notifications;
+        pinned.retain(|n| {
+            !self
+                .archived_threads
+                .is_archived(&self.config.github_host, n)
+        });
+        if !pinned.is_empty() {
+            app_state.set_pinned_notifications(pinned);
         }
 
         if settings.repos_collapsed {
@@ -714,7 +799,13 @@ impl App {
                     return;
                 }
 
-                filter_dismissed_synthetic(&mut data.notifications);
+                self.filter_dismissed_notifications(&mut data.notifications);
+                let host = &self.config.github_host;
+                let pins_archived = self
+                    .state
+                    .get_pinned_notifications()
+                    .iter()
+                    .any(|n| self.archived_threads.is_archived(host, n));
                 let refreshed: HashMap<_, _> = self
                     .state
                     .get_pinned_notifications()
@@ -729,6 +820,7 @@ impl App {
                     .values()
                     .any(|entry| entry.wake_time <= now);
                 let unchanged = !snoozes_expired
+                    && !pins_archived
                     && refreshed.len() == self.state.notifications.len()
                     && self.state.notifications.iter().all(|notification| {
                         refreshed
@@ -1041,7 +1133,7 @@ impl App {
                         // Make the API call
                         let result = match selected {
                             MarkAllOption::MarkReadAndArchive => {
-                                client.mark_thread_done(notification_id)
+                                self.archive_thread(&client, notification_id)
                             }
                             MarkAllOption::MarkReadOnly => {
                                 client.mark_notification_read(notification_id)
@@ -1054,6 +1146,9 @@ impl App {
                         );
                     }
                     self.state.record_read_cutoffs(&successful_ids);
+                    if matches!(selected, MarkAllOption::MarkReadAndArchive) {
+                        self.persist_archived_threads();
+                    }
 
                     // Clear progress and restore client
                     self.state.loading_progress = None;
@@ -1107,7 +1202,7 @@ impl App {
                         // Make the API call
                         let result = match option {
                             MarkAllOption::MarkReadAndArchive => {
-                                client.mark_thread_done(notification_id)
+                                self.archive_thread(&client, notification_id)
                             }
                             MarkAllOption::MarkReadOnly => {
                                 client.mark_notification_read(notification_id)
@@ -1121,6 +1216,9 @@ impl App {
                         );
                     }
                     self.state.record_read_cutoffs(&successful_ids);
+                    if matches!(option, MarkAllOption::MarkReadAndArchive) {
+                        self.persist_archived_threads();
+                    }
 
                     // Clear progress and restore client
                     self.state.loading_progress = None;
@@ -1196,12 +1294,12 @@ impl App {
                     total_stages,
                 )?;
 
-                // Filter out previously dismissed synthetic notifications
-                filter_dismissed_synthetic(&mut all_notifications);
+                self.filter_dismissed_notifications(&mut all_notifications);
 
                 // Update notification cache
                 self.save_notifications_cache(&all_notifications);
 
+                self.drop_archived_pins();
                 for pinned in self.state.get_pinned_notifications() {
                     if !all_notifications.iter().any(|n| n.id == pinned.id) {
                         all_notifications.push(pinned.clone());
@@ -1303,13 +1401,13 @@ impl App {
     /// the user's selection, filter, scroll position, and collapsed repos.
     /// Used by background refresh (cache-hit startup and auto-refresh timer).
     fn merge_refreshed_notifications(&mut self, mut notifications: Vec<Notification>) {
-        // Filter out previously dismissed synthetic notifications
-        filter_dismissed_synthetic(&mut notifications);
+        self.filter_dismissed_notifications(&mut notifications);
 
         // Save the notification cache
         self.save_notifications_cache(&notifications);
 
         // Merge pinned notifications
+        self.drop_archived_pins();
         for pinned in self.state.get_pinned_notifications() {
             if !notifications.iter().any(|n| n.id == pinned.id) {
                 notifications.push(pinned.clone());
@@ -3373,21 +3471,23 @@ impl App {
                         let _ = AppStateFile::dismiss_synthetic_ids(&synthetic_ids);
                     }
 
-                    if let Some(ref client) = self.api_client {
+                    let mut successful_ids = synthetic_ids;
+                    if let Some(client) = self.api_client.clone() {
                         for notification_id in &selected_ids {
                             if !is_synthetic_id(notification_id) {
-                                if let Err(e) = client.mark_thread_done(notification_id) {
-                                    eprintln!(
-                                        "Failed to archive notification {}: {}",
-                                        notification_id, e
-                                    );
-                                }
+                                let result = self.archive_thread(&client, notification_id);
+                                collect_successful_batch_result(
+                                    &mut successful_ids,
+                                    notification_id,
+                                    result,
+                                );
                             }
                         }
+                        self.persist_archived_threads();
                     }
 
                     let saved_index = self.state.selected_index;
-                    self.state.remove_notifications(&selected_ids);
+                    self.state.remove_notifications(&successful_ids);
                     self.state.clear_selection();
 
                     // Stay near the same position
@@ -3407,7 +3507,11 @@ impl App {
                         self.prefetch_neighbour_previews();
                     }
 
-                    self.state.status_message = Some(format!("Archived {} notifications", count));
+                    self.state.status_message = Some(if successful_ids.len() == count {
+                        format!("Archived {} notifications", count)
+                    } else {
+                        format!("Archived {} of {} notifications; failed to archive the rest", successful_ids.len(), count)
+                    });
                 } else if let Some(notification) = self.state.selected_notification() {
                     let notification_id = notification.id.clone();
                     let saved_index = self.state.selected_index;
@@ -3415,10 +3519,12 @@ impl App {
                     // Skip API call for synthetic notifications (no real thread)
                     if is_synthetic_id(&notification_id) {
                         let _ = AppStateFile::dismiss_synthetic_id(&notification_id);
-                    } else if let Some(ref client) = self.api_client {
-                        if let Err(e) = client.mark_thread_done(&notification_id) {
-                            eprintln!("Failed to archive notification: {}", e);
+                    } else if let Some(client) = self.api_client.clone() {
+                        if let Err(e) = self.archive_thread(&client, &notification_id) {
+                            self.state.status_message = Some(format!("Failed to archive notification: {e}"));
+                            return Ok(());
                         }
+                        self.persist_archived_threads();
                     }
 
                     self.state.remove_notification(&notification_id);
@@ -4296,6 +4402,416 @@ mod tests {
         assert_eq!(app.state.notifications.len(), 0);
     }
 
+    fn archive_test_client(status: u16) -> (GitHubClient, std::thread::JoinHandle<()>) {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client =
+            GitHubClient::new_test_with_base(format!("http://{}", listener.local_addr().unwrap()));
+        listener.set_nonblocking(true).unwrap();
+        let handle = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < deadline, "no archive request received");
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(e) => panic!("{e}"),
+                }
+            };
+            stream.set_nonblocking(false).unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request = String::new();
+            reader.read_line(&mut request).unwrap();
+            assert_eq!(request.trim(), "DELETE /notifications/threads/123 HTTP/1.1");
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+            }
+            write!(
+                stream,
+                "HTTP/1.1 {status} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+            .unwrap();
+        });
+        (client, handle)
+    }
+
+    #[test]
+    fn archived_real_notification_stays_hidden_after_refresh() {
+        let (client, server) = archive_test_client(204);
+        let mut app = App::new(Config::default());
+        app.api_client = Some(client);
+        app.state.show_all = true;
+        let mut notification = test_notification("123", true);
+        notification.updated_at = Some("2026-01-01T12:00:00Z".parse().unwrap());
+        app.state.set_notifications(vec![notification.clone()]);
+
+        app.handle_normal_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))
+            .unwrap();
+        server.join().unwrap();
+        assert!(app.state.notifications.is_empty());
+
+        app.merge_refreshed_notifications(vec![notification.clone()]);
+        assert!(
+            app.state.notifications.is_empty(),
+            "stale API results must stay archived"
+        );
+
+        notification.updated_at = Some("2026-01-01T12:00:01Z".parse().unwrap());
+        app.merge_refreshed_notifications(vec![notification]);
+        assert_eq!(
+            app.state.notifications.len(),
+            1,
+            "new activity must reappear"
+        );
+    }
+
+    #[test]
+    fn failed_archive_keeps_notification_visible() {
+        let (client, server) = archive_test_client(403);
+        let mut app = App::new(Config::default());
+        app.api_client = Some(client);
+        app.state
+            .set_notifications(vec![test_notification("123", true)]);
+
+        app.handle_normal_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))
+            .unwrap();
+        server.join().unwrap();
+
+        assert_eq!(app.state.notifications.len(), 1);
+        assert!(app
+            .state
+            .status_message
+            .as_ref()
+            .unwrap()
+            .contains("Failed"));
+    }
+
+    #[test]
+    fn selected_archive_retains_failed_threads() {
+        for status in [204, 403] {
+            let (client, server) = archive_test_client(status);
+            let mut app = App::new(Config::default());
+            app.api_client = Some(client);
+            app.state.set_notifications(vec![
+                test_notification("123", true),
+                test_notification("event-456", true),
+            ]);
+            app.state.toggle_selection("123".to_string());
+            app.state.toggle_selection("event-456".to_string());
+
+            app.handle_normal_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))
+                .unwrap();
+            server.join().unwrap();
+
+            let expected = if status == 204 { 0 } else { 1 };
+            assert_eq!(app.state.notifications.len(), expected);
+            assert!(!app.state.has_selection());
+            app.merge_refreshed_notifications(vec![test_notification("123", true)]);
+            assert_eq!(app.state.notifications.len(), expected);
+        }
+    }
+
+    #[test]
+    fn auto_archive_suppresses_stale_refresh_results() {
+        let (client, server) = archive_test_client(204);
+        let mut app = App::new(Config::default());
+        app.api_client = Some(client);
+        app.set_auto_archive(true);
+        app.state
+            .set_notifications(vec![test_notification("123", true)]);
+        app.pending_mark_read = Some((
+            "123".to_string(),
+            Instant::now() - Duration::from_millis(app.auto_mark_read_delay_ms + 1),
+        ));
+
+        app.process_pending_mark_read();
+        server.join().unwrap();
+        app.merge_refreshed_notifications(vec![test_notification("123", true)]);
+
+        assert!(app.state.notifications.is_empty());
+    }
+
+    #[test]
+    fn archived_threads_survive_state_round_trip_and_initial_load() {
+        let mut notification = test_notification("123", true);
+        notification.updated_at = Some("2026-01-01T12:00:00Z".parse().unwrap());
+        let mut saved_state = AppStateFile::default();
+        saved_state.archived_threads.record(
+            "github.com",
+            &notification.id,
+            notification.updated_at,
+        );
+        let contents = toml::to_string_pretty(&saved_state).unwrap();
+        let restored: AppStateFile = toml::from_str(&contents).unwrap();
+
+        let mut app = App::new(Config::default());
+        app.archived_threads = restored.archived_threads;
+        app.apply_initial_load(InitialLoadData {
+            notifications: vec![notification, test_notification("456", true)],
+            pinned_notifications: Vec::new(),
+        });
+
+        assert_eq!(app.state.notifications.len(), 1);
+        assert_eq!(app.state.notifications[0].id, "456");
+    }
+
+    #[test]
+    fn archived_threads_accept_legacy_state_and_keep_every_archive() {
+        let mut state: AppStateFile = toml::from_str("auto_mark_read = false\n").unwrap();
+        let notifications: Vec<_> = (0..201)
+            .map(|id| test_notification(&id.to_string(), true))
+            .collect();
+        assert!(!state
+            .archived_threads
+            .is_archived("github.com", &notifications[0]));
+        for notification in &notifications {
+            state
+                .archived_threads
+                .record("github.com", &notification.id, notification.updated_at);
+        }
+        assert!(notifications
+            .iter()
+            .all(|n| state.archived_threads.is_archived("github.com", n)));
+    }
+
+    #[test]
+    fn archiving_a_pinned_notification_unpins_it() {
+        let (client, server) = archive_test_client(204);
+        let mut app = App::new(Config::default());
+        app.api_client = Some(client);
+        let notification = test_notification("123", true);
+        app.state.set_notifications(vec![notification.clone()]);
+        app.state
+            .set_pinned_notifications(vec![notification.clone()]);
+
+        app.handle_normal_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))
+            .unwrap();
+        server.join().unwrap();
+
+        assert!(app.state.get_pinned_notifications().is_empty());
+        app.merge_refreshed_notifications(vec![notification]);
+        assert!(app.state.notifications.is_empty());
+    }
+
+    #[test]
+    fn refresh_unpins_threads_archived_elsewhere() {
+        let mut app = App::new(Config::default());
+        app.state.show_all = true;
+        let notification = test_notification("123", true);
+        app.state
+            .set_pinned_notifications(vec![notification.clone()]);
+        app.archived_threads
+            .record("github.com", &notification.id, notification.updated_at);
+
+        app.merge_refreshed_notifications(vec![notification]);
+
+        assert!(app.state.get_pinned_notifications().is_empty());
+        assert!(app.state.notifications.is_empty());
+    }
+
+    #[test]
+    fn archived_threads_handle_missing_and_older_activity_timestamps() {
+        let mut archived = ArchivedThreads::default();
+        let mut notification = test_notification("123", true);
+        archived.record("github.com", &notification.id, notification.updated_at);
+        assert!(archived.is_archived("github.com", &notification));
+        notification.updated_at = Some(chrono::Utc::now() + chrono::Duration::minutes(1));
+        assert!(!archived.is_archived("github.com", &notification));
+
+        notification.updated_at = Some("2026-01-01T12:00:00Z".parse().unwrap());
+        archived.record("github.com", &notification.id, notification.updated_at);
+        notification.updated_at = Some("2026-01-01T11:59:59Z".parse().unwrap());
+        assert!(archived.is_archived("github.com", &notification));
+        notification.updated_at = None;
+        assert!(archived.is_archived("github.com", &notification));
+    }
+
+    #[test]
+    fn archived_thread_ids_do_not_hide_notifications_on_other_hosts() {
+        let notification = test_notification("123", true);
+        let mut first = App::new(Config::default());
+        first
+            .archived_threads
+            .record("github.com", &notification.id, notification.updated_at);
+        let mut second = App::new(Config {
+            github_host: "github.example.com".to_string(),
+            ..Config::default()
+        });
+        second.archived_threads = first.archived_threads.clone();
+
+        second.merge_refreshed_notifications(vec![notification]);
+
+        assert_eq!(second.state.notifications.len(), 1);
+    }
+
+    #[test]
+    fn archived_threads_persist_across_processes() {
+        const STATE_ENV: &str = "GH_NEWS_ARCHIVE_TEST_STATE";
+        const ID_ENV: &str = "GH_NEWS_ARCHIVE_TEST_ID";
+        if let Ok(path) = std::env::var(STATE_ENV) {
+            crate::state_file::init_state_path(Some(PathBuf::from(path))).unwrap();
+            let id = std::env::var(ID_ENV).unwrap();
+            let notification = test_notification(&id, true);
+            let mut local = ArchivedThreads::default();
+            local.record("github.com", &notification.id, notification.updated_at);
+            AppStateFile::save_archived_threads("github.com", &local).unwrap();
+            assert!(AppStateFile::load_archived_threads()
+                .unwrap()
+                .is_archived("github.com", &notification));
+            return;
+        }
+
+        // The state path is a process-wide OnceLock. Child processes exercise
+        // actual saves and reloads without changing other tests' state paths.
+        let dir =
+            std::env::temp_dir().join(format!("gh-news-archive-state-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.toml");
+        let initial = AppStateFile {
+            auto_mark_read: Some(true),
+            pinned_notifications: vec![
+                test_notification("123", true),
+                test_notification("789", true),
+            ],
+            ..AppStateFile::default()
+        };
+        std::fs::write(&path, toml::to_string_pretty(&initial).unwrap()).unwrap();
+        let results: Vec<_> = ["123", "456"]
+            .iter()
+            .map(|id| {
+                std::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "ui::app::tests::archived_threads_persist_across_processes",
+                    ])
+                    .env(STATE_ENV, &path)
+                    .env(ID_ENV, id)
+                    .output()
+                    .unwrap()
+            })
+            .collect();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        for output in results {
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+        }
+        let restored: AppStateFile = toml::from_str(&contents).unwrap();
+        assert_eq!(restored.auto_mark_read, Some(true));
+        let pinned_ids: Vec<_> = restored
+            .pinned_notifications
+            .iter()
+            .map(|n| n.id.as_str())
+            .collect();
+        assert_eq!(pinned_ids, ["789"]);
+        for id in ["123", "456"] {
+            assert!(restored
+                .archived_threads
+                .is_archived("github.com", &test_notification(id, true)));
+        }
+    }
+
+    #[test]
+    fn archived_history_merges_with_other_windows_and_survives_restart() {
+        const STATE_ENV: &str = "GH_NEWS_ARCHIVE_MERGE_TEST_STATE";
+        if let Ok(path) = std::env::var(STATE_ENV) {
+            crate::state_file::init_state_path(Some(PathBuf::from(path))).unwrap();
+            let mut newer = test_notification("shared", true);
+            newer.updated_at = Some("2026-01-01T12:00:02Z".parse().unwrap());
+            let mut older = newer.clone();
+            older.updated_at = Some("2026-01-01T12:00:01Z".parse().unwrap());
+
+            // Both windows start before either archives anything.
+            let mut window_a = App::new(Config::default());
+            let mut window_b = App::new(Config::default());
+            window_a
+                .archived_threads
+                .record("github.com", &newer.id, newer.updated_at);
+            window_a.persist_archived_threads();
+            window_b
+                .archived_threads
+                .record("github.com", &older.id, older.updated_at);
+            window_b.persist_archived_threads();
+            window_b.merge_refreshed_notifications(vec![newer.clone()]);
+            assert!(window_b.state.notifications.is_empty());
+
+            // A later archive in another window reaches B on its next refresh.
+            let mut newest = newer.clone();
+            newest.updated_at = Some("2026-01-01T12:00:03Z".parse().unwrap());
+            window_a
+                .archived_threads
+                .record("github.com", &newest.id, newest.updated_at);
+            window_a.persist_archived_threads();
+            window_b.merge_refreshed_notifications(vec![newest.clone()]);
+            assert!(window_b.state.notifications.is_empty());
+
+            let many: Vec<_> = (0..201)
+                .map(|id| test_notification(&id.to_string(), true))
+                .collect();
+            for notification in &many {
+                window_b.archived_threads.record(
+                    "github.com",
+                    &notification.id,
+                    notification.updated_at,
+                );
+            }
+            window_b.persist_archived_threads();
+
+            let mut restarted = App::new(Config::default());
+            restarted.merge_refreshed_notifications(many.iter().cloned().chain([newest]).collect());
+            assert!(restarted.state.notifications.is_empty());
+            return;
+        }
+
+        let dir =
+            std::env::temp_dir().join(format!("gh-news-archive-merge-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("state.toml");
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "ui::app::tests::archived_history_merges_with_other_windows_and_survives_restart",
+            ])
+            .env(STATE_ENV, &path)
+            .output()
+            .unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+
+    #[test]
+    fn archiving_an_older_snapshot_preserves_the_latest_cutoff() {
+        let mut archived = ArchivedThreads::default();
+        let mut notification = test_notification("123", true);
+        notification.updated_at = Some("2026-01-01T12:00:02Z".parse().unwrap());
+        archived.record("github.com", &notification.id, notification.updated_at);
+        let mut older = notification.clone();
+        older.updated_at = Some("2026-01-01T12:00:01Z".parse().unwrap());
+        archived.record("github.com", &older.id, older.updated_at);
+
+        assert!(archived.is_archived("github.com", &notification));
+        notification.updated_at = Some("2026-01-01T12:00:03Z".parse().unwrap());
+        assert!(!archived.is_archived("github.com", &notification));
+    }
+
     #[test]
     fn search_keeps_active_view_constraints() {
         let mut app = App::new(Config::default());
@@ -4473,6 +4989,23 @@ mod tests {
         .unwrap();
         app.background_refresh_rx = Some((app.refresh_generation, rx));
         app.process_background_refresh();
+    }
+
+    #[test]
+    fn background_refresh_offers_update_when_a_pin_was_archived_elsewhere() {
+        let mut app = App::new(Config::default());
+        let mut old = test_notification("123", false);
+        old.updated_at = Some("2026-01-01T12:00:00Z".parse().unwrap());
+        let mut newer = old.clone();
+        newer.updated_at = Some("2026-01-01T12:00:05Z".parse().unwrap());
+        app.state.set_pinned_notifications(vec![old.clone()]);
+        app.state.set_notifications(vec![newer.clone()]);
+        app.archived_threads
+            .record("github.com", &old.id, old.updated_at);
+
+        complete_background_refresh(&mut app, vec![newer]);
+
+        assert!(app.pending_refresh.is_some());
     }
 
     #[test]
@@ -5041,6 +5574,9 @@ mod tests {
 
 impl Drop for App {
     fn drop(&mut self) {
+        if self.archived_threads_dirty {
+            self.persist_archived_threads();
+        }
         // Save pinned state if dirty
         if self.pinned_state_dirty {
             let pinned = self.state.get_pinned_notifications();
