@@ -6,7 +6,6 @@ authors = ["Chmouel Boudjnah <chmouel@chmouel.com>"]
 description = "Terminal UI for GitHub notifications with filtering, preview, and auto-refresh"
 license = "Apache-2.0"
 repository = "https://github.com/chmouel/gh-news"
-homepage = "https://github.com/chmouel/gh-news"
 documentation = "https://docs.rs/gh-news"
 keywords = ["github", "notifications", "tui", "cli", "ratatui"]
 categories = ["command-line-utilities"]
