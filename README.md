@@ -2,7 +2,7 @@
 
 <img width="150" height="150" src="https://github.com/user-attachments/assets/5f01123f-a597-4ba1-b378-b0f72176e89b" align="right" />
 
-GitHub notifications TUI built with Rust and ratatui.
+Read and triage GitHub notifications in your terminal.
 
 ## Screenshot
 
@@ -10,30 +10,22 @@ GitHub notifications TUI built with Rust and ratatui.
 
 ## Features
 
-- Terminal-based UI for GitHub notifications using Ratatui
-- Installs as a native gh CLI extension
-- Vim-style navigation with j/k keys
-- Multi-select for batch operations on notifications
-- Auto-refresh with configurable interval
-- Preview notifications with rich details (GraphQL-powered for Issues, PRs, Discussions, Commits)
-- Quick-merge pull requests straight from the preview (`m`, with confirmation)
-- When a notification is triggered by a comment, the preview shows that comment instead of the issue/PR description
-- Persisted preview cache for faster repeated detail views
-- Regex filtering to filter specific notifications
-- Pin important notifications
-- Repository grouping with collapsible headers
-- Notification hooks for custom commands
-- Mute threads and repositories via the GitHub API
-- Snooze notifications locally until a chosen time
-- Custom actions with command templates
-- Named views for instant filter preset switching
-- Saved triage sessions for switching complete work contexts
-- Mark notifications read/unread individually or in bulk
-- Static display mode for scripting and pipelines
-- Configuration doctor for validating filters, actions, token access, and views
-- Progress reporting for supporting terminals via OSC `9;4`
-- GitHub Actions workflow run notifications (opt-in)
-- GitHub Activity Events feed (opt-in)
+- Install as a `gh` CLI extension
+- Navigate with `j`/`k` and select multiple notifications with `Space`
+- Fetch updates in the background and apply them when ready
+- Preview issues, pull requests, discussions, and commits, with cached details
+- Read the comment that triggered a notification in the preview
+- Merge pull requests from the preview (`m`, with confirmation)
+- Filter with regexes or switch between named views
+- Save triage sessions with their own view, filter, and layout
+- Pin notifications and collapse repository groups
+- Mark notifications read or unread, one at a time or in bulk
+- Mute threads and repositories, or snooze notifications until later
+- Run custom actions, with hooks for new notifications
+- Print notifications for scripts and pipelines
+- Check configuration and token access with `--check-config`
+- Show progress in terminals that support OSC `9;4`
+- Include GitHub Actions workflow runs and activity events (opt-in)
 
 Recognised GitHub shortcodes such as `:white_check_mark:` render as Unicode emoji
 when the terminal font supports them. Repository-specific or image-only custom
@@ -41,7 +33,7 @@ emoji remain visible as their original `:shortcode:` text.
 
 ## Installation
 
-Install as a `gh` CLI extension (easiest):
+Install as a `gh` CLI extension:
 
 ```bash
 gh extension install chmouel/gh-news
@@ -57,16 +49,29 @@ gh news
 
 You need a GitHub token. The app looks for it in this order:
 
-1. `GH_TOKEN` env var
-2. `GITHUB_TOKEN` env var
+1. `GH_TOKEN` environment variable
+2. `GITHUB_TOKEN` environment variable
 3. Your `gh` CLI config at `~/.config/gh/hosts.yml` (or `$XDG_CONFIG_HOME/gh/hosts.yml`)
-4. `gh auth token` (queries the `gh` CLI, which reads from the system keyring on modern versions)
+4. `gh auth token`, which can read credentials from your system keyring
 
-Easiest way is to just run `gh auth login` if you have the GitHub CLI installed. Otherwise set `GH_TOKEN` to your personal access token.
+Run `gh auth login` if you use the GitHub CLI, or set `GH_TOKEN` to a personal access token.
 
 ## Usage
 
-Updates are fetched automatically in the background from startup. Press `F5` or `Ctrl+R` to fetch fresh updates at any time, including when auto-refresh is disabled. When ready, a box at the top right prompts you to press the key again to apply them. The current list stays undisturbed until you apply the updates. Unchanged refreshes report “Up to date” without prompting you to apply or disturbing your selection and preview position. Pressing the key during a fetch shows that the refresh is still in progress. Missing activity-event titles are fetched concurrently, with one lookup per subject URL in each feed fetch. gh-news shows the current refresh stage in the loading panel while it refreshes notifications and any enabled extra sources. When GitHub returns rate-limit headers, the status bar shows the remaining API quota. Local actions such as marking notifications read or archiving them update the on-disk cache straight away, so dismissed notifications do not reappear on the next startup. Should a background refresh fail, the status bar reports the error rather than failing silently.
+gh-news fetches updates in the background. Press `F5` or `Ctrl+R` to fetch updates
+on demand, even with auto-refresh disabled. When updates are ready, a box at the
+top right prompts you to press the key again to apply them. Until then, your
+list stays as it is. If nothing changed, the status bar reports “Up to date”
+and keeps your selection and preview position.
+
+Marking notifications read updates the list at once and syncs with GitHub in
+the background. You can keep navigating while requests finish. Failed requests
+appear in the status bar; affected notifications return to unread unless you
+have changed them again. On exit, gh-news waits for pending read updates to finish.
+Local read and archive changes are saved to the cache for the next launch.
+
+The loading panel shows the current refresh stage. The status bar reports
+refresh errors and shows your remaining API quota when GitHub provides it.
 
 When you archive a notification in the TUI, gh-news remembers the activity you
 last saw on that thread. GitHub can keep returning archived threads when asked
@@ -108,7 +113,8 @@ gh news --static-display | grep "something" # List notifications without TUI
 
 ### Actions
 
-Multi-select first with `Space` (magenta checkmark); the actions below then apply to the whole selection instead of just the current notification.
+Press `Space` to select notifications, shown with a magenta checkmark. Actions
+then apply to the selection.
 
 - `Enter` - Open in browser and mark as read, or toggle repository collapse on headers
 - `o` - Open in browser without marking as read
@@ -154,7 +160,8 @@ Multi-select first with `Space` (magenta checkmark); the actions below then appl
 
 ## Configuration
 
-gh-news can be configured via a TOML file at `~/.config/gh-news/config.toml`. All options are optional and have sensible defaults. CLI flags take precedence over config file settings.
+Put settings in `~/.config/gh-news/config.toml`. Every setting is optional;
+CLI flags override the file.
 
 ### Example Config
 
@@ -219,7 +226,7 @@ Available colour fields: `bg`, `bg_dark`, `bg_highlight`, `fg`, `fg_muted`,
 
 ### Notification Hooks
 
-Run a custom command when new notifications appear during auto-refresh:
+Run a command for each new notification when you apply refreshed content:
 
 ```toml
 on_new_notification_command = "/path/to/your/script.sh"
@@ -239,7 +246,7 @@ The command runs once per new notification with these environment variables:
 | `GH_NEWS_UNREAD` | Read status (true/false) |
 | `GH_NEWS_UPDATED_AT` | ISO 8601 timestamp (if available) |
 
-**Example: Notify only on review requests**
+For desktop alerts on review requests:
 
 ```bash
 #!/bin/bash
@@ -248,21 +255,22 @@ if [ "$GH_NEWS_REASON" = "review_requested" ]; then
 fi
 ```
 
-**Note:** For commands with complex arguments or shell features, use a wrapper script.
+Use a wrapper script for commands that need shell features or complex arguments.
 
 ### Built-in Actions
 
-The action menu (press `x`) always includes these built-in actions:
+Press `x` to open the action menu:
 
 | Action | Description |
 | -------- | ------------- |
-| Mute Thread | Sets the thread subscription to ignored via the GitHub API. Future notifications for the thread are suppressed until you comment or are `@mentioned` again. |
-| Mute Repository | Sets the repository subscription to ignored via the GitHub API. Suppresses all notifications from that repository. |
+| Mute Thread | Ignore the thread until you comment or receive another `@mention`. |
+| Mute Repository | Stop notifications from the repository. |
 | Snooze (4 hours) | Hides the notification until 4 hours from now. |
 | Snooze (tomorrow 09:00) | Hides the notification until 09:00 the following day. |
 | Snooze (next week) | Hides the notification until 09:00 one week from now. |
 
-Snoozed notifications are hidden from the default view and stored locally. They reappear automatically once the snooze period expires. Mute actions are reflected back to GitHub immediately.
+Snoozes are stored locally. Notifications reappear after the snooze expires
+and you apply a refresh. Mute actions update your GitHub subscription.
 
 ### Custom Actions
 
@@ -326,7 +334,8 @@ When you select multiple notifications and run this action, it executes once as 
 
 ### Named Views
 
-Named views are saved filter presets you can switch between instantly with `V`. Several built-in views are always available, and you can add your own in `config.toml`.
+Press `V` to switch filter presets. Choose a built-in view or add your own in
+`config.toml`.
 
 **Built-in views:**
 
@@ -372,11 +381,15 @@ filter = "dependabot"
 | `exclude_repos` | Override global `exclude_repos` for this view (glob patterns) |
 | `exclude_subjects` | Override global `exclude_subjects` for this view (regex, case-insensitive) |
 
-User-defined views appear after the built-in views in the picker. Selecting `0. Default` clears the active view and restores the session's base filter. The `/` search works within the active view, and bulk actions (`Ctrl+A`) apply to the visible filtered result set.
+Your views follow the built-in views in the picker. Choose `0. Default` to
+restore your starting filter. Search with `/` within the active view; `Ctrl+A`
+acts on the visible results.
 
 ### Saved Triage Sessions
 
-Saved sessions are named work contexts you can switch to with `S`. They can activate a view, layer on an extra regex filter, change whether read notifications are shown, set the preview mode, and collapse repositories.
+Press `S` to switch saved sessions. Each session can set a view and an extra
+regex filter, show read notifications, and choose the preview layout and
+repository collapse state.
 
 ```toml
 [[sessions]]
