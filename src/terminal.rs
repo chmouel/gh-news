@@ -65,6 +65,7 @@ impl Terminal {
     pub fn size(&self) -> Result<Rect> {
         self.terminal
             .size()
+            .map(Rect::from)
             .map_err(|e| crate::error::Error::Terminal(e.to_string()))
     }
 

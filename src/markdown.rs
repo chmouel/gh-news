@@ -80,17 +80,13 @@ impl MarkdownRenderer {
     /// Render markdown to styled lines for Ratatui using comrak for proper parsing
     pub fn render_simple(markdown: &str, palette: &ColorPalette) -> Vec<Line<'static>> {
         // Configure comrak options
-        let mut options = comrak::ComrakOptions::default();
+        let mut options = comrak::Options::default();
         options.extension.strikethrough = true;
         options.extension.table = true;
         options.extension.autolink = true;
         options.extension.tasklist = true;
         options.extension.superscript = true;
-        options.extension.header_ids = None;
         options.extension.footnotes = true;
-        options.render.unsafe_ = true; // Allow raw HTML (for GitHub markdown)
-        options.render.github_pre_lang = true;
-        options.render.hardbreaks = true; // Treat soft breaks as hard breaks (line breaks)
 
         // Parse markdown into AST
         let arena = Arena::new();
@@ -705,8 +701,8 @@ impl MarkdownToRatatui {
                     spans.push(Span::raw(text));
                 }
             }
-            NodeValue::TaskItem(checked) => {
-                let marker = if checked.is_some() { "☑" } else { "☐" };
+            NodeValue::TaskItem(task) => {
+                let marker = if task.symbol.is_some() { "☑" } else { "☐" };
                 spans.push(Span::styled(
                     format!("{} ", marker),
                     Style::default().fg(self.colors.green),
