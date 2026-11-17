@@ -66,7 +66,7 @@ Easiest way is to just run `gh auth login` if you have the GitHub CLI installed.
 
 ## Usage
 
-Press `Ctrl+R` to force a refresh. gh-news shows the current refresh stage in the loading panel while it refreshes notifications and any enabled extra sources. When GitHub returns rate-limit headers, the status bar shows the remaining API quota. Local actions such as marking notifications read or archiving them update the on-disk cache straight away, so dismissed notifications do not reappear on the next startup. Should a background refresh fail, the status bar reports the error rather than failing silently.
+Updates are fetched automatically in the background from startup. Press `F5` or `Ctrl+R` to fetch fresh updates at any time, including when auto-refresh is disabled. When ready, a box at the top right prompts you to press the key again to apply them. The current list stays undisturbed until you apply the updates. Pressing the key during a fetch shows that the refresh is still in progress. Missing activity-event titles are fetched concurrently, with one lookup per subject URL in each feed fetch. gh-news shows the current refresh stage in the loading panel while it refreshes notifications and any enabled extra sources. When GitHub returns rate-limit headers, the status bar shows the remaining API quota. Local actions such as marking notifications read or archiving them update the on-disk cache straight away, so dismissed notifications do not reappear on the next startup. Should a background refresh fail, the status bar reports the error rather than failing silently.
 
 ### Options
 
@@ -135,6 +135,7 @@ Multi-select first with `Space` (magenta checkmark); the actions below then appl
 
 ### General
 
+- `F5` or `Ctrl+R` - Fetch fresh updates, or apply them when ready
 - `Esc` or `q` or `Ctrl+C` - Quit application
 - `?` - Show help
 

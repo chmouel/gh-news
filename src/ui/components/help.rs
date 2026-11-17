@@ -168,8 +168,8 @@ impl HelpWidget {
                         desc: "Act on selection, or on filtered list",
                     },
                     HelpLine {
-                        key: "Ctrl+R",
-                        desc: "Refresh notifications",
+                        key: "F5 / Ctrl+R",
+                        desc: "Refresh, or apply ready updates",
                     },
                 ],
             },

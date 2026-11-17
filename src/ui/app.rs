@@ -28,7 +28,7 @@ use crossterm::event::{
 };
 use parking_lot::Mutex;
 use ratatui::prelude::*;
-use ratatui::widgets::{Block, Borders, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -144,6 +144,7 @@ pub struct App {
     // refresh, local mutation).  Results tagged with an older generation
     // are discarded instead of merged.
     refresh_generation: u64,
+    pending_refresh: Option<Vec<Notification>>,
     // Last observed AppState::notification_mutation_seq, used to detect
     // local mutations from the main loop.
     last_seen_mutation_seq: u64,
@@ -226,6 +227,7 @@ impl App {
             cache_path: None,
             cache_options_hash: None,
             background_refresh_rx: None,
+            pending_refresh: None,
             refresh_generation: 0,
             last_seen_mutation_seq: 0,
             author_enrichment_rx: None,
@@ -620,6 +622,7 @@ impl App {
     }
 
     fn cancel_background_refresh(&mut self) {
+        self.pending_refresh = None;
         self.background_refresh_rx = None;
         // Invalidate any result an orphaned worker thread might still produce.
         self.refresh_generation = self.refresh_generation.wrapping_add(1);
@@ -651,11 +654,17 @@ impl App {
             self.last_seen_mutation_seq = seq;
             self.refresh_generation = self.refresh_generation.wrapping_add(1);
             self.persist_notifications_to_cache();
+            if self.pending_refresh.take().is_some() {
+                self.spawn_background_refresh();
+            }
         }
     }
 
     /// Spawn a background thread to fetch notifications without blocking the UI.
     pub fn spawn_background_refresh(&mut self) {
+        if self.background_refresh_rx.is_some() || self.pending_refresh.is_some() {
+            return;
+        }
         let Some(ref client) = self.api_client else {
             return;
         };
@@ -1462,6 +1471,9 @@ impl App {
     }
 
     pub fn run(&mut self, terminal: &mut Terminal) -> Result<()> {
+        if self.initial_load_rx.is_none() {
+            self.spawn_background_refresh();
+        }
         // Initial draw to show the UI
         self.sync_terminal_progress(terminal)?;
         terminal.draw(|frame| {
@@ -1545,7 +1557,9 @@ impl App {
                     Ok(Ok(data)) => {
                         self.background_refresh_rx = None;
                         if generation == self.refresh_generation {
-                            self.merge_refreshed_notifications(data.notifications);
+                            self.pending_refresh = Some(data.notifications);
+                            self.state.status_message =
+                                Some("Refresh ready — F5 or Ctrl+R to apply".into());
                         } else {
                             // The snapshot predates a local mutation or manual
                             // refresh; discard it and fetch a fresh one.
@@ -1614,6 +1628,7 @@ impl App {
             if self.config.auto_refresh_interval > 0
                 && !self.state.loading
                 && self.background_refresh_rx.is_none()
+                && self.pending_refresh.is_none()
             {
                 let elapsed = self.last_refresh.elapsed();
                 if elapsed >= Duration::from_secs(self.config.auto_refresh_interval) {
@@ -1856,6 +1871,28 @@ impl App {
                     }
                 }
             }
+        }
+
+        if self.pending_refresh.is_some() && self.state.input_mode == InputMode::Normal {
+            let width = size.width.min(46);
+            let area = Rect::new(
+                size.right().saturating_sub(width),
+                size.y,
+                width,
+                size.height.min(5),
+            );
+            frame.render_widget(Clear, area);
+            frame.render_widget(
+                Paragraph::new("\nF5 or Ctrl+R to apply refreshed content")
+                    .alignment(Alignment::Center)
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title(" Refresh ready "),
+                    )
+                    .style(Style::default().add_modifier(Modifier::BOLD)),
+                area,
+            );
         }
 
         // Render filter input as overlay (if in search mode)
@@ -3527,9 +3564,17 @@ impl App {
                     let page_size = 20;
                     self.state.preview_scroll = self.state.preview_scroll.saturating_add(page_size);
                 }
-            KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                // Force refresh notifications
-                self.queue_blocking_action(BlockingAction::Refresh, "Refreshing notifications...");
+            KeyCode::F(5) | KeyCode::Char('r')
+                if key.code == KeyCode::F(5) || key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.process_local_mutations();
+                if let Some(notifications) = self.pending_refresh.take() {
+                    self.merge_refreshed_notifications(notifications);
+                    self.state.status_message = Some("Refreshed notifications applied".into());
+                } else if self.background_refresh_rx.is_some() {
+                    self.state.status_message = Some("Refresh in progress...".into());
+                } else {
+                    self.spawn_background_refresh();
+                }
             }
             KeyCode::Char('E') | KeyCode::Char('e')
                 if key.modifiers.contains(KeyModifiers::SHIFT) =>
@@ -4398,6 +4443,105 @@ mod tests {
         )]);
 
         assert!(app.author_enrichment_rx.is_some());
+    }
+
+    #[test]
+    fn refresh_key_applies_pending_refresh_without_blocking() {
+        for key in [
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE),
+        ] {
+            let mut app = App::new(Config::default());
+            app.pending_refresh = Some(vec![notification_with("fresh", "Fresh", "mention", None)]);
+
+            app.handle_normal_key(key).unwrap();
+
+            assert!(app.pending_refresh.is_none());
+            assert_eq!(app.state.notifications[0].id, "fresh");
+            assert!(app.background_refresh_rx.is_none());
+            assert!(!app.state.loading);
+            assert!(app.pending_blocking_action.is_none());
+        }
+    }
+
+    #[test]
+    fn refresh_key_fetches_then_applies_with_auto_refresh_disabled() {
+        for key in [
+            KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL),
+            KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE),
+        ] {
+            let mut app = App::new(Config {
+                auto_refresh_interval: 0,
+                ..Config::default()
+            });
+            app.set_api_client(GitHubClient::new_test());
+            app.refresh_args = Some((false, false, Some(0)));
+            app.state.set_notifications(vec![notification_with(
+                "current", "Current", "mention", None,
+            )]);
+
+            app.handle_normal_key(key).unwrap();
+
+            assert_eq!(app.state.notifications[0].id, "current");
+            assert!(!app.state.loading);
+            assert!(app.pending_blocking_action.is_none());
+            assert_eq!(
+                app.state.status_message.as_deref(),
+                Some("Refreshing from GitHub...")
+            );
+            let (_, rx) = app.background_refresh_rx.take().unwrap();
+            let data = rx.recv_timeout(Duration::from_secs(2)).unwrap().unwrap();
+            app.pending_refresh = Some(data.notifications);
+
+            app.handle_normal_key(key).unwrap();
+
+            assert!(app.pending_refresh.is_none());
+            assert!(app.state.notifications.is_empty());
+            assert!(app.background_refresh_rx.is_none());
+
+            app.handle_normal_key(key).unwrap();
+
+            assert!(app.background_refresh_rx.is_some());
+        }
+    }
+
+    #[test]
+    fn refresh_key_keeps_an_inflight_refresh() {
+        let mut app = App::new(Config::default());
+        app.set_api_client(GitHubClient::new_test());
+        app.refresh_args = Some((false, false, Some(0)));
+        let (_tx, rx) = mpsc::channel();
+        app.background_refresh_rx = Some((app.refresh_generation, rx));
+        let generation = app.refresh_generation;
+        let key = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
+
+        app.handle_normal_key(key).unwrap();
+
+        assert_eq!(app.refresh_generation, generation);
+        assert!(app.background_refresh_rx.is_some());
+        assert_eq!(
+            app.state.status_message.as_deref(),
+            Some("Refresh in progress...")
+        );
+        assert!(!app.state.loading);
+        assert!(app.pending_blocking_action.is_none());
+    }
+
+    #[test]
+    fn pending_refresh_box_renders_at_top_right() {
+        let mut app = App::new(Config::default());
+        app.pending_refresh = Some(Vec::new());
+        let backend = ratatui::backend::TestBackend::new(100, 30);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|frame| app.render(frame)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let top: String = (54..100).map(|x| buffer.get(x, 0).symbol()).collect();
+        assert!(top.contains("Refresh ready"));
+        let prompt: String = (54..100).map(|x| buffer.get(x, 2).symbol()).collect();
+        assert!(prompt.contains("Ctrl+R to apply"));
+        let backend = ratatui::backend::TestBackend::new(10, 3);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal.draw(|frame| app.render(frame)).unwrap();
     }
 
     #[test]

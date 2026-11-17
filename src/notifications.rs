@@ -260,7 +260,11 @@ impl<'a> NotificationFetcher<'a> {
                 break;
             }
 
+            let page_len = notifications.len();
             all_notifications.extend(notifications.into_iter().take(remaining));
+            if all_notifications.len() >= max_notifications || page_len < per_page {
+                break;
+            }
         }
 
         Ok(all_notifications)
@@ -335,6 +339,44 @@ mod tests {
         });
 
         TestServer { base_url, handle }
+    }
+
+    #[test]
+    fn pagination_stops_without_an_extra_request() {
+        for (limit, count) in [(0, 0), (2, 2), (5, 2)] {
+            let notification = serde_json::json!({
+                "id": "1", "unread": true, "reason": "mention",
+                "repository": {"id": 1, "name": "repo", "full_name": "owner/repo",
+                    "owner": {"login": "owner", "id": 1, "type": "User"}, "private": false},
+                "subject": {"title": "Title", "type": "Issue"}
+            });
+            let routes = if limit == 0 {
+                vec![]
+            } else {
+                vec![(
+                    format!(
+                        "/notifications?all=false&participating=false&per_page={}&page=1",
+                        limit.min(3)
+                    ),
+                    200,
+                    serde_json::to_string(&vec![notification; count]).unwrap(),
+                )]
+            };
+            let server = spawn_json_server(routes);
+            let client = GitHubClient::new_test_with_base(server.base_url.clone());
+            let result = fetch_notifications(
+                &client,
+                NotificationFetchOptions {
+                    show_all: false,
+                    participating: false,
+                    max_notifications: Some(limit),
+                    per_page: 3,
+                },
+            )
+            .unwrap();
+            assert_eq!(result.len(), count);
+            server.join();
+        }
     }
 
     #[test]

@@ -4,7 +4,7 @@ use crate::models::{Notification, NotificationType, Owner, Repository, Subject};
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use std::cmp::Reverse;
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use std::thread;
 
@@ -468,20 +468,46 @@ fn extract_event_body(event_type: &str, event: &serde_json::Value) -> Option<Str
 /// a `title` field), so we make a follow-up request to the subject URL and
 /// append the title to the notification's subject line.
 fn enrich_event_titles(client: &GitHubClient, notifications: &mut [Notification]) {
-    for notif in notifications.iter_mut() {
-        if notif.subject.subject_type != NotificationType::ActivityEvent {
-            continue;
-        }
-        let url = match notif.subject.url.as_deref() {
-            Some(u) => u,
-            None => continue,
-        };
-        // Only enrich when the title is missing (no ": " suffix yet).
-        if notif.subject.title.contains(": ") {
-            continue;
-        }
-        if let Ok(value) = client.get_json_by_url(url) {
-            if let Some(title) = value.get("title").and_then(|v| v.as_str()) {
+    let urls: HashSet<String> = notifications
+        .iter()
+        .filter(|notif| {
+            notif.subject.subject_type == NotificationType::ActivityEvent
+                && !notif.subject.title.contains(": ")
+        })
+        .filter_map(|notif| notif.subject.url.clone())
+        .collect();
+    let worker_count = urls.len().min(MAX_EVENT_WORKERS);
+    let queue = Mutex::new(VecDeque::from_iter(urls));
+    let titles = thread::scope(|scope| {
+        let workers: Vec<_> = (0..worker_count)
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut titles = HashMap::new();
+                    loop {
+                        let Some(url) = queue.lock().pop_front() else {
+                            break;
+                        };
+                        if let Ok(value) = client.get_json_by_url(&url) {
+                            if let Some(title) = value.get("title").and_then(|v| v.as_str()) {
+                                titles.insert(url, title.to_owned());
+                            }
+                        }
+                    }
+                    titles
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .filter_map(|worker| worker.join().ok())
+            .flatten()
+            .collect::<HashMap<_, _>>()
+    });
+    for notif in notifications {
+        if notif.subject.subject_type == NotificationType::ActivityEvent
+            && !notif.subject.title.contains(": ")
+        {
+            if let Some(title) = notif.subject.url.as_ref().and_then(|url| titles.get(url)) {
                 notif.subject.title = format!("{}: {}", notif.subject.title, title);
             }
         }
@@ -497,5 +523,91 @@ fn event_type_to_reason(event_type: &str) -> &'static str {
         "ReleaseEvent" => "manual",
         "MemberEvent" => "invitation",
         _ => "manual",
+    }
+}
+
+#[cfg(test)]
+mod enrichment_tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn title_lookups_are_deduplicated_bounded_and_concurrent() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let server_peak = peak.clone();
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let mut workers = Vec::new();
+            while workers.len() < 8 && Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let active = active.clone();
+                        let peak = server_peak.clone();
+                        workers.push(thread::spawn(move || {
+                            stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                            let mut buf = [0; 4096];
+                            let size = stream.read(&mut buf).unwrap();
+                            let request = String::from_utf8_lossy(&buf[..size]);
+                            let count = active.fetch_add(1, Ordering::SeqCst) + 1;
+                            peak.fetch_max(count, Ordering::SeqCst);
+                            thread::sleep(Duration::from_millis(100));
+                            let (status, body) = if request.contains(" /0 ") {
+                                ("500 Error", "{}")
+                            } else if request.contains(" /1 ") {
+                                ("200 OK", "{}")
+                            } else {
+                                ("200 OK", r#"{"title":"Full title"}"#)
+                            };
+                            active.fetch_sub(1, Ordering::SeqCst);
+                            write!(stream, "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+                        }));
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(error) => panic!("{error}"),
+                }
+            }
+            let count = workers.len();
+            for worker in workers {
+                worker.join().unwrap();
+            }
+            count
+        });
+        let mut notifications: Vec<_> = (0..16)
+            .map(|i| {
+                let mut notification = event_to_notification(
+                    &serde_json::json!({"id": i.to_string()}),
+                    "IssuesEvent",
+                    "event-",
+                )
+                .unwrap();
+                notification.subject.title = format!("Event {i}");
+                notification.subject.url = Some(format!("{base}/{}", i % 8));
+                notification
+            })
+            .collect();
+        let mut existing = notifications[2].clone();
+        existing.subject.title = "Existing: title".into();
+        notifications.push(existing);
+        enrich_event_titles(&GitHubClient::new_test_with_base(base), &mut notifications);
+        assert_eq!(server.join().unwrap(), 8);
+        assert!((2..=MAX_EVENT_WORKERS).contains(&peak.load(Ordering::SeqCst)));
+        for (i, notification) in notifications[..16].iter().enumerate() {
+            let expected = if i % 8 < 2 {
+                format!("Event {i}")
+            } else {
+                format!("Event {i}: Full title")
+            };
+            assert_eq!(notification.subject.title, expected);
+        }
+        assert_eq!(notifications[16].subject.title, "Existing: title");
     }
 }
