@@ -565,16 +565,18 @@ impl AppState {
         self.preview_content_version = self.preview_content_version.wrapping_add(1);
     }
 
-    pub fn mark_notification_read(&mut self, notification_id: &str) {
-        if let Some(notif) = self
-            .notifications
-            .iter_mut()
-            .find(|n| n.id == notification_id)
-        {
-            notif.unread = false;
-            self.record_read_cutoff(notification_id);
-            self.note_notification_mutation();
+    pub fn mark_notifications_read(&mut self, notification_ids: &[String]) {
+        if notification_ids.is_empty() {
+            return;
         }
+        let ids: HashSet<_> = notification_ids.iter().map(String::as_str).collect();
+        for notification in &mut self.notifications {
+            if ids.contains(notification.id.as_str()) {
+                notification.unread = false;
+            }
+        }
+        self.record_read_cutoffs(notification_ids);
+        self.note_notification_mutation();
     }
 
     /// Record the current time as the local read cutoff for a thread.
@@ -585,7 +587,6 @@ impl AppState {
         let _ = crate::state_file::AppStateFile::save_read_cutoff(notification_id, now);
     }
 
-    /// Record one shared cutoff for a successfully completed batch operation.
     pub fn record_read_cutoffs(&mut self, notification_ids: &[String]) {
         if notification_ids.is_empty() {
             return;
@@ -668,13 +669,6 @@ impl AppState {
 
     pub fn remove_notification(&mut self, notification_id: &str) {
         self.notifications.retain(|n| n.id != notification_id);
-        self.note_notification_mutation();
-        self.apply_filter();
-    }
-
-    pub fn remove_notifications(&mut self, notification_ids: &[String]) {
-        let id_set: HashSet<&String> = notification_ids.iter().collect();
-        self.notifications.retain(|n| !id_set.contains(&n.id));
         self.note_notification_mutation();
         self.apply_filter();
     }

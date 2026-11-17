@@ -31,7 +31,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -52,13 +52,24 @@ pub struct PendingStateSettings {
 
 enum BlockingAction {
     Refresh,
-    MarkAllRead {
-        selected: MarkAllOption,
-    },
-    ArchiveSelected {
-        notification_ids: Vec<String>,
-        option: MarkAllOption,
-    },
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct ReadAction {
+    notification_id: String,
+    cutoff: chrono::DateTime<chrono::Utc>,
+    option: MarkAllOption,
+    was_unread: bool,
+}
+
+struct ReadOutcome {
+    action: ReadAction,
+    result: Result<()>,
+}
+
+struct ReadWorker {
+    tx: Sender<ReadAction>,
+    rx: Receiver<ReadOutcome>,
 }
 
 /// Pending interactive action to be executed with terminal access.
@@ -136,6 +147,9 @@ pub struct App {
     auto_archive_enabled: bool,
     auto_mark_on_open: bool,
     pending_mark_read: Option<(String, Instant)>, // (notification_id, timestamp)
+    read_worker: Option<ReadWorker>,
+    pending_read_actions: HashMap<String, ReadAction>,
+    refresh_after_read_actions: bool,
     // Track if pinned notifications need to be saved
     pinned_state_dirty: bool,
     // Notification cache
@@ -163,17 +177,6 @@ struct MergeOutcome {
     repo: String,
     number: u64,
     result: crate::error::Result<String>,
-}
-
-fn collect_successful_batch_result(
-    successful_ids: &mut Vec<String>,
-    notification_id: &str,
-    result: crate::error::Result<()>,
-) {
-    match result {
-        Ok(()) => successful_ids.push(notification_id.to_string()),
-        Err(e) => eprintln!("Failed to process notification {notification_id}: {e}"),
-    }
 }
 
 /// Results from the background enrichment thread that resolves author logins
@@ -229,6 +232,9 @@ impl App {
             auto_archive_enabled: false,
             auto_mark_on_open,
             pending_mark_read: None,
+            read_worker: None,
+            pending_read_actions: HashMap::new(),
+            refresh_after_read_actions: false,
             pinned_state_dirty: false,
             cache_path: None,
             cache_options_hash: None,
@@ -281,42 +287,19 @@ impl App {
 
         if let Some((ref notification_id, timestamp)) = self.pending_mark_read.clone() {
             if timestamp.elapsed() >= dwell_time {
-                // Update local state optimistically
-                self.state.mark_notification_read(notification_id);
-
-                if is_synthetic_id(notification_id) {
-                    let _ = AppStateFile::dismiss_synthetic_id(notification_id);
-                } else if let Some(client) = self.api_client.clone() {
-                    if self.auto_archive_enabled {
-                        let was_pinned = self.state.is_pinned(notification_id);
-                        match self.archive_thread(&client, notification_id) {
-                            Ok(()) => {
-                                self.persist_archived_threads();
-                                if was_pinned {
-                                    self.state.build_tree();
-                                    if !self.state.select_notification_by_id(notification_id) {
-                                        self.state.select_first_notification();
-                                    }
-                                }
-                            }
-                            Err(e) => eprintln!("Failed to auto-archive notification: {}", e),
-                        }
-                    } else if let Err(e) = client.mark_notification_read(notification_id) {
-                        eprintln!("Failed to auto-mark notification as read: {}", e);
-                    }
-                }
+                let option = if self.auto_archive_enabled {
+                    MarkAllOption::MarkReadAndArchive
+                } else {
+                    MarkAllOption::MarkReadOnly
+                };
+                self.mark_read_in_background(notification_id, option);
 
                 self.pending_mark_read = None;
             }
         }
     }
 
-    /// Archive a thread on GitHub, remember it in memory and unpin it so an
-    /// old pinned copy cannot bring it back. Call `persist_archived_threads`
-    /// once the archive action is finished.
-    fn archive_thread(&mut self, client: &crate::api::GitHubClient, id: &str) -> Result<()> {
-        // A selected ID may no longer be in the list after a refresh, in
-        // which case everything before the request counts as archived.
+    fn record_archived_thread(&mut self, id: &str) {
         let updated_at = self
             .state
             .notifications
@@ -324,7 +307,6 @@ impl App {
             .find(|n| n.id == id)
             .and_then(|n| n.updated_at)
             .unwrap_or_else(chrono::Utc::now);
-        client.mark_thread_done(id)?;
         if self
             .pending_mark_read
             .as_ref()
@@ -338,11 +320,8 @@ impl App {
             self.archived_threads_dirty = true;
             self.state.pinned_notifications.retain(|n| n.id != id);
         }
-        Ok(())
     }
 
-    /// Save the archive history, picking up archives from other windows.
-    /// On failure the in-memory history is kept so this window stays correct.
     fn persist_archived_threads(&mut self) {
         match AppStateFile::save_archived_threads(&self.config.github_host, &self.archived_threads)
         {
@@ -354,8 +333,6 @@ impl App {
         }
     }
 
-    /// Drop dismissed synthetic notifications and archived threads, using
-    /// the saved history so archives from other windows apply too.
     fn filter_dismissed_notifications(&mut self, notifications: &mut Vec<Notification>) {
         if let Ok(saved) = AppStateFile::load_archived_threads() {
             self.archived_threads.merge(&saved);
@@ -365,13 +342,193 @@ impl App {
         notifications.retain(|n| !self.archived_threads.is_archived(host, n));
     }
 
-    /// Unpin threads archived in another window. Call only when the
-    /// refreshed list is applied, so the tree is rebuilt with it.
     fn drop_archived_pins(&mut self) {
         let host = &self.config.github_host;
         self.state
             .pinned_notifications
             .retain(|n| !self.archived_threads.is_archived(host, n));
+    }
+
+    fn mark_read_in_background(&mut self, notification_id: &str, option: MarkAllOption) {
+        self.mark_reads_in_background(&[notification_id.to_string()], option);
+    }
+
+    fn mark_reads_in_background(&mut self, notification_ids: &[String], option: MarkAllOption) {
+        let to_mark: Vec<_> = notification_ids
+            .iter()
+            .filter_map(|id| {
+                let notification = self.state.notifications.iter().find(|n| n.id == *id)?;
+                if let Some(pending) = self.pending_read_actions.get(id) {
+                    if self.state.local_read_cutoffs.get(id) == Some(&pending.cutoff)
+                        && (pending.option == option
+                            || pending.option == MarkAllOption::MarkReadAndArchive)
+                    {
+                        return None;
+                    }
+                }
+                Some((id.clone(), notification.is_unread()))
+            })
+            .collect();
+        let ids: Vec<_> = to_mark.iter().map(|(id, _)| id.clone()).collect();
+        self.state.mark_notifications_read(&ids);
+        let synthetic_ids: Vec<_> = ids
+            .iter()
+            .filter(|id| is_synthetic_id(id))
+            .cloned()
+            .collect();
+        if !synthetic_ids.is_empty() {
+            let _ = AppStateFile::dismiss_synthetic_ids(&synthetic_ids);
+            if option == MarkAllOption::MarkReadAndArchive {
+                for id in &synthetic_ids {
+                    self.remove_archived_notification(id);
+                }
+            }
+        }
+        let actions: Vec<_> = to_mark
+            .into_iter()
+            .filter(|(id, _)| !is_synthetic_id(id))
+            .map(|(id, was_unread)| ReadAction {
+                cutoff: self.state.local_read_cutoffs[&id],
+                notification_id: id,
+                option,
+                was_unread,
+            })
+            .collect();
+        if actions.is_empty() {
+            return;
+        }
+        let Some(client) = self.api_client.clone() else {
+            return;
+        };
+
+        if self.read_worker.is_none() {
+            let (tx, requests) = mpsc::channel::<ReadAction>();
+            let (results, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                for action in requests {
+                    let result = match action.option {
+                        MarkAllOption::MarkReadOnly => {
+                            client.mark_notification_read(&action.notification_id)
+                        }
+                        MarkAllOption::MarkReadAndArchive => {
+                            client.mark_thread_done(&action.notification_id)
+                        }
+                    };
+                    if results.send(ReadOutcome { action, result }).is_err() {
+                        break;
+                    }
+                }
+            });
+            self.read_worker = Some(ReadWorker { tx, rx });
+        }
+
+        for action in &actions {
+            self.pending_read_actions
+                .insert(action.notification_id.clone(), action.clone());
+        }
+        self.refresh_generation = self.refresh_generation.wrapping_add(1);
+        if self.pending_refresh.take().is_some() {
+            self.refresh_after_read_actions = true;
+        }
+        for action in actions {
+            if self.read_worker.as_ref().unwrap().tx.send(action).is_err() {
+                self.fail_read_worker();
+                break;
+            }
+        }
+    }
+
+    fn finish_read_action(&mut self, outcome: ReadOutcome) {
+        let action = outcome.action;
+        if self.pending_read_actions.get(&action.notification_id) != Some(&action) {
+            return;
+        }
+        self.pending_read_actions.remove(&action.notification_id);
+        self.refresh_generation = self.refresh_generation.wrapping_add(1);
+        // A later local toggle must survive an older request's completion.
+        let still_current = self.state.local_read_cutoffs.get(&action.notification_id)
+            == Some(&action.cutoff)
+            && self
+                .state
+                .notifications
+                .iter()
+                .any(|n| n.id == action.notification_id && !n.is_unread());
+        match outcome.result {
+            Ok(()) => {
+                if action.option == MarkAllOption::MarkReadAndArchive && still_current {
+                    self.record_archived_thread(&action.notification_id);
+                    self.persist_archived_threads();
+                    self.remove_archived_notification(&action.notification_id);
+                    self.state.status_message = Some("Archived notification".into());
+                }
+            }
+            Err(error) => {
+                if action.was_unread && still_current {
+                    self.state.toggle_notification_read(&action.notification_id);
+                }
+                self.state.status_message = Some(match action.option {
+                    MarkAllOption::MarkReadOnly => {
+                        format!("Read update failed for {}: {error}", action.notification_id)
+                    }
+                    MarkAllOption::MarkReadAndArchive => {
+                        format!(
+                            "Failed to archive notification {}: {error}",
+                            action.notification_id
+                        )
+                    }
+                });
+            }
+        }
+    }
+
+    fn process_read_actions(&mut self) {
+        while let Some(worker) = &self.read_worker {
+            match worker.rx.try_recv() {
+                Ok(outcome) => self.finish_read_action(outcome),
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    self.fail_read_worker();
+                    break;
+                }
+            }
+        }
+        if self.pending_read_actions.is_empty() && self.refresh_after_read_actions {
+            self.refresh_after_read_actions = false;
+            self.process_local_mutations();
+            if !self.should_quit {
+                self.spawn_background_refresh();
+            }
+        }
+    }
+
+    fn fail_read_worker(&mut self) {
+        self.read_worker = None;
+        let pending: Vec<_> = self.pending_read_actions.values().cloned().collect();
+        for action in pending {
+            self.finish_read_action(ReadOutcome {
+                action,
+                result: Err(crate::error::Error::Terminal("Read worker stopped".into())),
+            });
+        }
+    }
+
+    fn remove_archived_notification(&mut self, notification_id: &str) {
+        let selected_id = self.state.selected_notification().map(|n| n.id.clone());
+        let selected_index = self.state.selected_index;
+        self.state.remove_notification(notification_id);
+        if let Some(id) = selected_id.filter(|id| id != notification_id) {
+            self.state.select_notification_by_id(&id);
+        } else {
+            self.state.selected_index =
+                selected_index.min(self.state.tree_items.len().saturating_sub(1));
+            if self.state.selected_notification().is_none() {
+                self.state.select_first_notification();
+            }
+            if self.state.show_preview() {
+                self.fetch_preview_for_selected_notification();
+                self.prefetch_neighbour_previews();
+            }
+        }
     }
 
     fn save_notifications_cache(&self, notifications: &[Notification]) {
@@ -748,6 +905,10 @@ impl App {
 
     /// Spawn a background thread to fetch notifications without blocking the UI.
     pub fn spawn_background_refresh(&mut self) {
+        if !self.pending_read_actions.is_empty() {
+            self.refresh_after_read_actions = true;
+            return;
+        }
         if self.background_refresh_rx.is_some() || self.pending_refresh.is_some() {
             return;
         }
@@ -794,7 +955,7 @@ impl App {
         match rx.try_recv() {
             Ok(Ok(mut data)) => {
                 self.background_refresh_rx = None;
-                if generation != self.refresh_generation {
+                if generation != self.refresh_generation || !self.pending_read_actions.is_empty() {
                     self.spawn_background_refresh();
                     return;
                 }
@@ -1049,7 +1210,7 @@ impl App {
             } else {
                 ProgressState::Indeterminate
             }
-        } else if self.background_refresh_rx.is_some() {
+        } else if self.background_refresh_rx.is_some() || !self.pending_read_actions.is_empty() {
             ProgressState::Indeterminate
         } else {
             ProgressState::Hidden
@@ -1089,154 +1250,6 @@ impl App {
                 self.refresh_notifications(Some(terminal))?;
                 Ok(None)
             }
-            BlockingAction::MarkAllRead { selected } => {
-                // Count non-pinned, non-synthetic filtered notifications
-                let to_process: Vec<String> = self
-                    .state
-                    .filtered_notifications
-                    .iter()
-                    .filter_map(|&idx| {
-                        let notif = &self.state.notifications[idx];
-                        if !self.state.is_pinned(&notif.id) {
-                            Some(notif.id.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                let total = to_process.len();
-                let is_filtered = self.state.filter.is_some();
-
-                // Persist dismissed state for synthetic notifications
-                let synthetic_ids: Vec<String> = to_process
-                    .iter()
-                    .filter(|id| is_synthetic_id(id))
-                    .cloned()
-                    .collect();
-                if !synthetic_ids.is_empty() {
-                    let _ = AppStateFile::dismiss_synthetic_ids(&synthetic_ids);
-                }
-
-                // Take the client temporarily to avoid borrow conflicts during render
-                if let Some(client) = self.api_client.take() {
-                    let mut successful_ids = Vec::new();
-                    for (i, notification_id) in to_process.iter().enumerate() {
-                        // Update progress
-                        self.state.loading_progress = Some((i + 1, total));
-                        self.sync_terminal_progress(terminal)?;
-
-                        // Re-render every 5 items to show progress
-                        if i % 5 == 0 || i == total - 1 {
-                            terminal.draw(|frame| self.render(frame))?;
-                        }
-
-                        // Make the API call
-                        let result = match selected {
-                            MarkAllOption::MarkReadAndArchive => {
-                                self.archive_thread(&client, notification_id)
-                            }
-                            MarkAllOption::MarkReadOnly => {
-                                client.mark_notification_read(notification_id)
-                            }
-                        };
-                        collect_successful_batch_result(
-                            &mut successful_ids,
-                            notification_id,
-                            result,
-                        );
-                    }
-                    self.state.record_read_cutoffs(&successful_ids);
-                    if matches!(selected, MarkAllOption::MarkReadAndArchive) {
-                        self.persist_archived_threads();
-                    }
-
-                    // Clear progress and restore client
-                    self.state.loading_progress = None;
-                    self.sync_terminal_progress(terminal)?;
-                    self.api_client = Some(client);
-
-                    self.refresh_notifications(Some(terminal))?;
-                }
-                let msg = match (selected, is_filtered) {
-                    (MarkAllOption::MarkReadAndArchive, true) => {
-                        format!("Archived {} filtered notifications", total)
-                    }
-                    (MarkAllOption::MarkReadAndArchive, false) => {
-                        format!("Archived {} notifications", total)
-                    }
-                    (MarkAllOption::MarkReadOnly, true) => {
-                        format!("Marked {} filtered notifications as read", total)
-                    }
-                    (MarkAllOption::MarkReadOnly, false) => format!("Marked {} as read", total),
-                };
-                Ok(Some(msg))
-            }
-            BlockingAction::ArchiveSelected {
-                notification_ids,
-                option,
-            } => {
-                // Persist dismissed state for synthetic notifications
-                let synthetic_ids: Vec<String> = notification_ids
-                    .iter()
-                    .filter(|id| is_synthetic_id(id))
-                    .cloned()
-                    .collect();
-                if !synthetic_ids.is_empty() {
-                    let _ = AppStateFile::dismiss_synthetic_ids(&synthetic_ids);
-                }
-
-                let total = notification_ids.len();
-                // Take the client temporarily to avoid borrow conflicts during render
-                if let Some(client) = self.api_client.take() {
-                    let mut successful_ids = Vec::new();
-                    for (i, notification_id) in notification_ids.iter().enumerate() {
-                        // Update progress
-                        self.state.loading_progress = Some((i + 1, total));
-                        self.sync_terminal_progress(terminal)?;
-
-                        // Re-render every 5 items to show progress
-                        if i % 5 == 0 || i == total - 1 {
-                            terminal.draw(|frame| self.render(frame))?;
-                        }
-
-                        // Make the API call
-                        let result = match option {
-                            MarkAllOption::MarkReadAndArchive => {
-                                self.archive_thread(&client, notification_id)
-                            }
-                            MarkAllOption::MarkReadOnly => {
-                                client.mark_notification_read(notification_id)
-                            }
-                        };
-
-                        collect_successful_batch_result(
-                            &mut successful_ids,
-                            notification_id,
-                            result,
-                        );
-                    }
-                    self.state.record_read_cutoffs(&successful_ids);
-                    if matches!(option, MarkAllOption::MarkReadAndArchive) {
-                        self.persist_archived_threads();
-                    }
-
-                    // Clear progress and restore client
-                    self.state.loading_progress = None;
-                    self.sync_terminal_progress(terminal)?;
-                    self.api_client = Some(client);
-
-                    self.refresh_notifications(Some(terminal))?;
-                }
-                let msg = match option {
-                    MarkAllOption::MarkReadAndArchive => {
-                        format!("Archived {} selected notifications", total)
-                    }
-                    MarkAllOption::MarkReadOnly => {
-                        format!("Marked {} selected notifications as read", total)
-                    }
-                };
-                Ok(Some(msg))
-            }
         }
     }
 
@@ -1244,6 +1257,12 @@ impl App {
         // A manual refresh should win over any older in-flight background fetch.
         // Dropping the receiver makes stale background results harmless.
         self.cancel_background_refresh();
+        if !self.pending_read_actions.is_empty() {
+            self.refresh_after_read_actions = true;
+            self.state.loading = false;
+            self.state.status_message = Some("Refresh queued until read updates finish".into());
+            return Ok(());
+        }
 
         if let Some(client) = self.api_client.clone() {
             if let Some((all, participating, max_notifications)) = self.refresh_args {
@@ -1624,7 +1643,7 @@ impl App {
         })?;
 
         loop {
-            if self.should_quit {
+            if self.should_quit && self.pending_read_actions.is_empty() {
                 break;
             }
 
@@ -1687,12 +1706,9 @@ impl App {
                 }
             }
 
-            // Persist local mutations (mark read, remove, ...) to the cache and
-            // invalidate in-flight refresh snapshots that predate them.
-            self.process_local_mutations();
-
-            // Apply any completed quick-merge.
+            self.process_read_actions();
             self.process_merge_outcome();
+            self.process_local_mutations();
 
             self.process_background_refresh();
 
@@ -1743,6 +1759,7 @@ impl App {
 
             // Check for auto-refresh signal (non-blocking background fetch)
             if self.config.auto_refresh_interval > 0
+                && !self.should_quit
                 && !self.state.loading
                 && self.background_refresh_rx.is_none()
                 && self.pending_refresh.is_none()
@@ -1775,7 +1792,14 @@ impl App {
             }
 
             // Process pending auto-mark-read (debounced)
-            self.process_pending_mark_read();
+            if self.should_quit {
+                self.state.status_message = Some(format!(
+                    "Finishing read updates ({} remaining)...",
+                    self.pending_read_actions.len()
+                ));
+            } else {
+                self.process_pending_mark_read();
+            }
 
             // Use standard timeout for native ratatui behavior
             let timeout = Duration::from_millis(250); // Standard ratatui polling timeout
@@ -1784,7 +1808,7 @@ impl App {
                 match event::read().map_err(|e| crate::error::Error::Terminal(e.to_string()))? {
                     Event::Key(key)
                         if key.kind == KeyEventKind::Press => {
-                            if self.state.loading {
+                            if self.state.loading || self.should_quit {
                                 if key.code == KeyCode::Char('q')
                                     || key.code == KeyCode::Esc
                                     || (key.code == KeyCode::Char('c')
@@ -1801,7 +1825,7 @@ impl App {
                     }
                     Event::Mouse(mouse_event)
                         // Only handle mouse events when not in help or loading
-                        if !self.state.show_help && !self.state.loading => {
+                        if !self.state.show_help && !self.state.loading && !self.should_quit => {
                             // Get terminal size for layout calculations
                             let size = terminal.size()?;
                             self.handle_mouse(mouse_event, size)?;
@@ -2814,31 +2838,42 @@ impl App {
     fn execute_confirmed_action(&mut self, action: ConfirmAction) -> Result<()> {
         match action {
             ConfirmAction::MarkAllRead { selected } => {
-                // Queue the blocking action to be handled by the main loop with progress
-                let msg = match (selected, self.state.filter.is_some()) {
-                    (MarkAllOption::MarkReadAndArchive, true) => "Archiving filtered notifications",
-                    (MarkAllOption::MarkReadAndArchive, false) => "Archiving notifications",
-                    (MarkAllOption::MarkReadOnly, true) => "Marking filtered notifications as read",
-                    (MarkAllOption::MarkReadOnly, false) => "Marking notifications as read",
+                let ids: Vec<_> = self
+                    .state
+                    .filtered_notifications
+                    .iter()
+                    .filter_map(|&idx| {
+                        let notification = &self.state.notifications[idx];
+                        (!self.state.is_pinned(&notification.id)).then(|| notification.id.clone())
+                    })
+                    .collect();
+                let count = ids.len();
+                self.mark_reads_in_background(&ids, selected);
+                let target = if self.state.filter.is_some() {
+                    "filtered notifications"
+                } else {
+                    "notifications"
                 };
-                self.queue_blocking_action(BlockingAction::MarkAllRead { selected }, msg);
+                self.state.status_message = Some(match selected {
+                    MarkAllOption::MarkReadOnly => format!("Marked {count} {target} as read"),
+                    MarkAllOption::MarkReadAndArchive => {
+                        format!("Archiving {count} {target} in background")
+                    }
+                });
             }
             ConfirmAction::ArchiveSelected { count: _, option } => {
                 let selected_ids: Vec<String> = self.state.get_selected_notification_ids();
                 self.state.clear_selection();
-
-                // Queue the blocking action to be handled by the main loop with progress
-                let msg = match option {
-                    MarkAllOption::MarkReadAndArchive => "Archiving selected notifications",
-                    MarkAllOption::MarkReadOnly => "Marking selected notifications as read",
-                };
-                self.queue_blocking_action(
-                    BlockingAction::ArchiveSelected {
-                        notification_ids: selected_ids,
-                        option,
-                    },
-                    msg,
-                );
+                let count = selected_ids.len();
+                self.mark_reads_in_background(&selected_ids, option);
+                self.state.status_message = Some(match option {
+                    MarkAllOption::MarkReadOnly => {
+                        format!("Marked {count} selected notifications as read")
+                    }
+                    MarkAllOption::MarkReadAndArchive => {
+                        format!("Archiving {count} selected notifications in background")
+                    }
+                });
             }
             ConfirmAction::MergePullRequest {
                 notification_id,
@@ -2993,12 +3028,7 @@ impl App {
                 } else {
                     format!("Merged {}#{}: {}", outcome.repo, outcome.number, message)
                 });
-                // Mark read locally (records the read cutoff, clearing the
-                // new-activity feed) and persist on GitHub's side.
-                self.state.mark_notification_read(&outcome.notification_id);
-                if let Some(ref client) = self.api_client {
-                    let _ = client.mark_notification_read(&outcome.notification_id);
-                }
+                self.mark_read_in_background(&outcome.notification_id, MarkAllOption::MarkReadOnly);
                 // Revalidate the preview so the merged state shows up.
                 let notification = self
                     .state
@@ -3183,13 +3213,11 @@ impl App {
                                     marked_count += 1;
                                 }
                             }
-                            self.state.mark_notification_read(notification_id);
-                            if is_synthetic_id(notification_id) {
-                                let _ = AppStateFile::dismiss_synthetic_id(notification_id);
-                            } else if let Some(ref client) = self.api_client {
-                                let _ = client.mark_notification_read(notification_id);
-                            }
                         }
+                    }
+
+                    if self.auto_mark_on_open {
+                        self.mark_reads_in_background(&selected_ids, MarkAllOption::MarkReadOnly);
                     }
 
                     self.state.clear_selection();
@@ -3225,17 +3253,7 @@ impl App {
                     if self.auto_mark_on_open && notification.is_unread() {
                         let notification_id = notification.id.clone();
 
-                        // Update local state optimistically (for better UX)
-                        self.state.mark_notification_read(&notification_id);
-
-                        // Persist read state
-                        if is_synthetic_id(&notification_id) {
-                            let _ = AppStateFile::dismiss_synthetic_id(&notification_id);
-                        } else if let Some(ref client) = self.api_client {
-                            if let Err(e) = client.mark_notification_read(&notification_id) {
-                                eprintln!("Failed to mark notification as read: {}", e);
-                            }
-                        }
+                        self.mark_read_in_background(&notification_id, MarkAllOption::MarkReadOnly);
                     }
                 }
             }
@@ -3369,6 +3387,7 @@ impl App {
                     let count = selected_ids.len();
                     let mut marked_read = 0;
                     let mut marked_unread = 0;
+                    let mut read_ids = Vec::new();
 
                     for notification_id in &selected_ids {
                         // Check current state before toggle
@@ -3380,29 +3399,15 @@ impl App {
                             .map(|n| n.is_unread())
                             .unwrap_or(false);
 
-                        if let Some(is_now_unread) =
-                            self.state.toggle_notification_read(notification_id)
-                        {
-                            if was_unread && !is_now_unread {
-                                // Went from unread to read
-                                marked_read += 1;
-                                if is_synthetic_id(notification_id) {
-                                    let _ = AppStateFile::dismiss_synthetic_id(notification_id);
-                                } else if let Some(ref client) = self.api_client {
-                                    if let Err(e) = client.mark_notification_read(notification_id) {
-                                        eprintln!(
-                                            "Failed to mark notification {} as read: {}",
-                                            notification_id, e
-                                        );
-                                    }
-                                }
-                            } else if !was_unread && is_now_unread {
-                                // Went from read to unread - local only
-                                marked_unread += 1;
-                            }
+                        if was_unread {
+                            read_ids.push(notification_id.clone());
+                            marked_read += 1;
+                        } else if self.state.toggle_notification_read(notification_id).is_some() {
+                            marked_unread += 1;
                         }
                     }
 
+                    self.mark_reads_in_background(&read_ids, MarkAllOption::MarkReadOnly);
                     self.state.clear_selection();
 
                     // Build status message based on what happened
@@ -3424,35 +3429,18 @@ impl App {
                     let notification_id = notification.id.clone();
                     let was_unread = notification.is_unread();
 
-                    // Toggle local state
-                    if let Some(is_now_unread) =
-                        self.state.toggle_notification_read(&notification_id)
-                    {
-                        // If marking as read (was unread, now read), persist the change
-                        if was_unread && !is_now_unread {
-                            if is_synthetic_id(&notification_id) {
-                                let _ = AppStateFile::dismiss_synthetic_id(&notification_id);
-                            } else if let Some(ref client) = self.api_client {
-                                if let Err(e) = client.mark_notification_read(&notification_id) {
-                                    eprintln!("Failed to mark notification as read: {}", e);
-                                    // Revert local state on API failure
-                                    self.state.toggle_notification_read(&notification_id);
-                                }
-                            }
-                            if advance {
-                                // Move to next notification
-                                self.state.move_down();
-                                // Scroll preview to top when selection changes
-                                self.state.preview_scroll = 0;
-                                // Auto-fetch preview for the newly selected notification
-                                if self.state.show_preview() {
-                                    self.fetch_preview_for_selected_notification();
-                                    self.prefetch_neighbour_previews();
-                                }
+                    if was_unread {
+                        self.mark_read_in_background(&notification_id, MarkAllOption::MarkReadOnly);
+                        if advance {
+                            self.state.move_down();
+                            self.state.preview_scroll = 0;
+                            if self.state.show_preview() {
+                                self.fetch_preview_for_selected_notification();
+                                self.prefetch_neighbour_previews();
                             }
                         }
-                        // If marking as unread (was read, now unread), just update local state
-                        // Note: GitHub API doesn't support marking as unread, so this won't persist on refresh
+                    } else {
+                        self.state.toggle_notification_read(&notification_id);
                     }
                 }
             }
@@ -3461,93 +3449,29 @@ impl App {
                     // Archive all selected notifications
                     let selected_ids = self.state.get_selected_notification_ids();
                     let count = selected_ids.len();
-
-                    let synthetic_ids: Vec<String> = selected_ids
-                        .iter()
-                        .filter(|id| is_synthetic_id(id))
-                        .cloned()
-                        .collect();
-                    if !synthetic_ids.is_empty() {
-                        let _ = AppStateFile::dismiss_synthetic_ids(&synthetic_ids);
-                    }
-
-                    let mut successful_ids = synthetic_ids;
-                    if let Some(client) = self.api_client.clone() {
-                        for notification_id in &selected_ids {
-                            if !is_synthetic_id(notification_id) {
-                                let result = self.archive_thread(&client, notification_id);
-                                collect_successful_batch_result(
-                                    &mut successful_ids,
-                                    notification_id,
-                                    result,
-                                );
-                            }
-                        }
-                        self.persist_archived_threads();
-                    }
-
-                    let saved_index = self.state.selected_index;
-                    self.state.remove_notifications(&successful_ids);
+                    let has_remote_ids = selected_ids.iter().any(|id| !is_synthetic_id(id));
+                    self.mark_reads_in_background(
+                        &selected_ids,
+                        MarkAllOption::MarkReadAndArchive,
+                    );
                     self.state.clear_selection();
-
-                    // Stay near the same position
-                    if !self.state.tree_items.is_empty() {
-                        self.state.selected_index =
-                            saved_index.min(self.state.tree_items.len() - 1);
-                        if !matches!(
-                            self.state.tree_items.get(self.state.selected_index),
-                            Some(crate::state::TreeItem::Notification(_))
-                        ) {
-                            self.state.select_first_notification();
-                        }
-                    }
-
-                    if self.state.show_preview() {
-                        self.fetch_preview_for_selected_notification();
-                        self.prefetch_neighbour_previews();
-                    }
-
-                    self.state.status_message = Some(if successful_ids.len() == count {
-                        format!("Archived {} notifications", count)
+                    self.state.status_message = Some(if has_remote_ids {
+                        format!("Archiving {} notifications", count)
                     } else {
-                        format!("Archived {} of {} notifications; failed to archive the rest", successful_ids.len(), count)
+                        format!("Archived {} notifications", count)
                     });
                 } else if let Some(notification) = self.state.selected_notification() {
                     let notification_id = notification.id.clone();
-                    let saved_index = self.state.selected_index;
-
-                    // Skip API call for synthetic notifications (no real thread)
-                    if is_synthetic_id(&notification_id) {
-                        let _ = AppStateFile::dismiss_synthetic_id(&notification_id);
-                    } else if let Some(client) = self.api_client.clone() {
-                        if let Err(e) = self.archive_thread(&client, &notification_id) {
-                            self.state.status_message = Some(format!("Failed to archive notification: {e}"));
-                            return Ok(());
-                        }
-                        self.persist_archived_threads();
-                    }
-
-                    self.state.remove_notification(&notification_id);
-
-                    // Stay at the same position (or clamp to end of list)
-                    if !self.state.tree_items.is_empty() {
-                        self.state.selected_index =
-                            saved_index.min(self.state.tree_items.len() - 1);
-                        // Skip headers — find nearest notification
-                        if !matches!(
-                            self.state.tree_items.get(self.state.selected_index),
-                            Some(crate::state::TreeItem::Notification(_))
-                        ) {
-                            self.state.select_first_notification();
-                        }
-                    }
-
-                    if self.state.show_preview() {
-                        self.fetch_preview_for_selected_notification();
-                        self.prefetch_neighbour_previews();
-                    }
-
-                    self.state.status_message = Some("Archived notification".to_string());
+                    let is_synthetic = is_synthetic_id(&notification_id);
+                    self.mark_read_in_background(
+                        &notification_id,
+                        MarkAllOption::MarkReadAndArchive,
+                    );
+                    self.state.status_message = Some(if is_synthetic {
+                        "Archived notification".to_string()
+                    } else {
+                        "Archiving notification".to_string()
+                    });
                 }
             }
             KeyCode::Char('!') => {
@@ -3697,6 +3621,9 @@ impl App {
                     self.state.status_message = Some("Refreshed notifications applied".into());
                 } else if self.background_refresh_rx.is_some() {
                     self.state.status_message = Some("Refresh in progress...".into());
+                } else if !self.pending_read_actions.is_empty() {
+                    self.refresh_after_read_actions = true;
+                    self.state.status_message = Some("Refresh queued until read updates finish".into());
                 } else {
                     self.spawn_background_refresh();
                 }
@@ -4345,6 +4272,351 @@ mod tests {
         }
     }
 
+    fn mock_read_worker(app: &mut App) -> (Receiver<ReadAction>, Sender<ReadOutcome>) {
+        let (tx, requests) = mpsc::channel();
+        let (results, rx) = mpsc::channel();
+        app.api_client = Some(GitHubClient::new_test());
+        app.read_worker = Some(ReadWorker { tx, rx });
+        (requests, results)
+    }
+
+    #[test]
+    fn automatic_and_opened_notifications_queue_reads() {
+        for automatic in [true, false] {
+            let mut app = App::new(Config {
+                open_method: OpenMethod::Print,
+                ..Config::default()
+            });
+            let (requests, _results) = mock_read_worker(&mut app);
+            app.state
+                .set_notifications(vec![test_notification("1", true)]);
+            if automatic {
+                app.pending_mark_read = Some((
+                    "1".into(),
+                    Instant::now() - Duration::from_millis(app.auto_mark_read_delay_ms + 1),
+                ));
+                app.process_pending_mark_read();
+                assert!(app.pending_mark_read.is_none());
+            } else {
+                app.set_auto_mark_on_open(true);
+                app.handle_normal_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+                    .unwrap();
+                assert_eq!(app.pending_print_urls.len(), 1);
+            }
+            assert_eq!(requests.try_recv().unwrap().notification_id, "1");
+            assert!(!app.state.notifications[0].is_unread());
+            assert!(!app.state.loading);
+        }
+    }
+
+    #[test]
+    fn read_request_keeps_navigation_responsive() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let (requested, request) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        assert!(Instant::now() < deadline, "No read request received");
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                    Err(error) => panic!("{error}"),
+                }
+            };
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            assert!(line.starts_with("PATCH /notifications/threads/1 "));
+            loop {
+                line.clear();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+            }
+            requested.send(()).unwrap();
+            released.recv_timeout(Duration::from_secs(5)).unwrap();
+            write!(
+                stream,
+                "HTTP/1.1 205 Reset Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+            )
+            .unwrap();
+        });
+        let mut app = App::new(Config::default());
+        app.api_client = Some(GitHubClient::new_test_with_base(base));
+        app.state.set_notifications(vec![
+            test_notification("1", true),
+            test_notification("2", true),
+        ]);
+
+        app.handle_normal_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE))
+            .unwrap();
+        request.recv_timeout(Duration::from_secs(5)).unwrap();
+
+        assert!(!app.state.notifications[0].is_unread());
+        assert!(!app.state.loading);
+        assert!(app.pending_blocking_action.is_none());
+        app.handle_normal_key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(app.state.selected_notification().unwrap().id, "2");
+        release.send(()).unwrap();
+        let outcome = app
+            .read_worker
+            .as_ref()
+            .unwrap()
+            .rx
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap();
+        assert!(outcome.result.is_ok());
+        app.finish_read_action(outcome);
+        server.join().unwrap();
+        assert!(app.pending_read_actions.is_empty());
+        assert!(!app.state.notifications[0].is_unread());
+    }
+
+    #[test]
+    fn read_failures_restore_only_failed_notifications() {
+        let mut app = App::new(Config::default());
+        let (requests, results) = mock_read_worker(&mut app);
+        app.state.set_notifications(vec![
+            test_notification("1", true),
+            test_notification("2", true),
+        ]);
+        app.state.toggle_selection("1".into());
+        app.state.toggle_selection("2".into());
+
+        app.handle_normal_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE))
+            .unwrap();
+
+        assert!(app.state.notifications.iter().all(|n| !n.is_unread()));
+        assert_eq!(
+            app.state.local_read_cutoffs["1"],
+            app.state.local_read_cutoffs["2"]
+        );
+        assert!(!app.state.has_selection());
+        for _ in 0..2 {
+            let action = requests.try_recv().unwrap();
+            let result = if action.notification_id == "1" {
+                Ok(())
+            } else {
+                Err(crate::error::Error::Config("request failed".into()))
+            };
+            results.send(ReadOutcome { action, result }).unwrap();
+        }
+        app.process_read_actions();
+
+        assert!(!app.state.notifications[0].is_unread());
+        assert!(app.state.notifications[1].is_unread());
+        assert!(app.state.local_read_cutoffs.contains_key("1"));
+        assert!(!app.state.local_read_cutoffs.contains_key("2"));
+        assert!(app.pending_read_actions.is_empty());
+        assert!(app
+            .state
+            .status_message
+            .as_deref()
+            .unwrap()
+            .contains("request failed"));
+    }
+
+    #[test]
+    fn read_completion_preserves_later_local_toggles() {
+        for result in [
+            Ok(()),
+            Err(crate::error::Error::Config("request failed".into())),
+        ] {
+            let mut app = App::new(Config::default());
+            let (requests, results) = mock_read_worker(&mut app);
+            app.state
+                .set_notifications(vec![test_notification("1", true)]);
+            let key = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE);
+            app.handle_normal_key(key).unwrap();
+            let action = requests.try_recv().unwrap();
+            app.handle_normal_key(key).unwrap();
+            assert!(app.state.notifications[0].is_unread());
+
+            results.send(ReadOutcome { action, result }).unwrap();
+            app.process_read_actions();
+
+            assert!(app.state.notifications[0].is_unread());
+            assert!(!app.state.local_read_cutoffs.contains_key("1"));
+        }
+    }
+
+    #[test]
+    fn older_read_failure_does_not_revert_a_new_read_request() {
+        let mut app = App::new(Config::default());
+        let (requests, results) = mock_read_worker(&mut app);
+        app.state
+            .set_notifications(vec![test_notification("1", true)]);
+        let key = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE);
+        app.handle_normal_key(key).unwrap();
+        let older = requests.try_recv().unwrap();
+        app.handle_normal_key(key).unwrap();
+        app.handle_normal_key(key).unwrap();
+        let newer = requests.try_recv().unwrap();
+
+        results
+            .send(ReadOutcome {
+                action: older,
+                result: Err(crate::error::Error::Config("old failure".into())),
+            })
+            .unwrap();
+        app.process_read_actions();
+
+        assert!(!app.state.notifications[0].is_unread());
+        assert_eq!(app.pending_read_actions.len(), 1);
+        assert_eq!(app.state.local_read_cutoffs.get("1"), Some(&newer.cutoff));
+        results
+            .send(ReadOutcome {
+                action: newer,
+                result: Ok(()),
+            })
+            .unwrap();
+        app.process_read_actions();
+        assert!(app.pending_read_actions.is_empty());
+        assert!(!app.state.notifications[0].is_unread());
+    }
+
+    #[test]
+    fn duplicate_read_requests_share_pending_work() {
+        let mut app = App::new(Config::default());
+        let (requests, _results) = mock_read_worker(&mut app);
+        app.state
+            .set_notifications(vec![test_notification("1", true)]);
+
+        app.mark_read_in_background("1", MarkAllOption::MarkReadOnly);
+        app.mark_read_in_background("1", MarkAllOption::MarkReadOnly);
+
+        assert!(requests.try_recv().is_ok());
+        assert!(matches!(requests.try_recv(), Err(TryRecvError::Empty)));
+        assert_eq!(app.pending_read_actions.len(), 1);
+    }
+
+    #[test]
+    fn bulk_read_skips_pinned_and_hidden_notifications() {
+        let mut app = App::new(Config::default());
+        let (requests, _results) = mock_read_worker(&mut app);
+        let pinned = notification_with("pinned", "Visible pinned", "mention", None);
+        app.state.set_pinned_notifications(vec![pinned.clone()]);
+        app.state.set_notifications(vec![
+            notification_with("visible", "Visible", "mention", None),
+            pinned,
+            notification_with("hidden", "Hidden", "mention", None),
+        ]);
+        app.state
+            .set_filter(Some(Filter::from_pattern(Some("Visible")).unwrap()));
+
+        app.execute_confirmed_action(ConfirmAction::MarkAllRead {
+            selected: MarkAllOption::MarkReadOnly,
+        })
+        .unwrap();
+
+        assert!(!app.state.loading);
+        assert_eq!(requests.try_recv().unwrap().notification_id, "visible");
+        assert!(matches!(requests.try_recv(), Err(TryRecvError::Empty)));
+        assert!(!app.state.notifications[0].is_unread());
+        assert!(app.state.notifications[1].is_unread());
+        assert!(app.state.notifications[2].is_unread());
+    }
+
+    #[test]
+    fn background_archive_preserves_current_selection() {
+        let mut app = App::new(Config::default());
+        let (requests, results) = mock_read_worker(&mut app);
+        app.state.set_notifications(vec![
+            test_notification("1", true),
+            test_notification("2", true),
+        ]);
+        app.state.toggle_selection("1".into());
+
+        app.execute_confirmed_action(ConfirmAction::ArchiveSelected {
+            count: 1,
+            option: MarkAllOption::MarkReadAndArchive,
+        })
+        .unwrap();
+        let action = requests.try_recv().unwrap();
+        assert_eq!(action.option, MarkAllOption::MarkReadAndArchive);
+        assert!(!app.state.loading);
+        assert_eq!(app.state.notifications.len(), 2);
+        assert!(app.state.select_notification_by_id("2"));
+
+        results
+            .send(ReadOutcome {
+                action,
+                result: Ok(()),
+            })
+            .unwrap();
+        app.process_read_actions();
+
+        assert_eq!(app.state.notifications.len(), 1);
+        assert_eq!(app.state.selected_notification().unwrap().id, "2");
+    }
+
+    #[test]
+    fn refresh_waits_for_background_read_updates() {
+        let mut app = App::new(Config::default());
+        let (requests, results) = mock_read_worker(&mut app);
+        let notification = test_notification("1", true);
+        app.state.set_notifications(vec![notification.clone()]);
+        app.refresh_args = Some((false, false, Some(0)));
+        app.pending_refresh = Some(vec![notification.clone()]);
+
+        app.mark_read_in_background("1", MarkAllOption::MarkReadOnly);
+        let action = requests.try_recv().unwrap();
+        assert!(app.pending_refresh.is_none());
+        complete_background_refresh(&mut app, vec![notification]);
+
+        assert!(app.pending_refresh.is_none());
+        assert!(app.background_refresh_rx.is_none());
+        assert!(app.refresh_after_read_actions);
+        assert!(!app.state.notifications[0].is_unread());
+
+        results
+            .send(ReadOutcome {
+                action,
+                result: Ok(()),
+            })
+            .unwrap();
+        app.process_read_actions();
+
+        assert!(app.background_refresh_rx.is_some());
+        assert!(!app.refresh_after_read_actions);
+        assert!(!app.state.notifications[0].is_unread());
+    }
+
+    #[test]
+    fn stopped_read_worker_reports_failure_and_restores_unread() {
+        let mut app = App::new(Config::default());
+        let (requests, results) = mock_read_worker(&mut app);
+        app.state
+            .set_notifications(vec![test_notification("1", true)]);
+        app.mark_read_in_background("1", MarkAllOption::MarkReadOnly);
+        drop(requests);
+        drop(results);
+
+        app.process_read_actions();
+
+        assert!(app.pending_read_actions.is_empty());
+        assert!(app.state.notifications[0].is_unread());
+        assert!(app
+            .state
+            .status_message
+            .as_deref()
+            .unwrap()
+            .contains("Read worker stopped"));
+    }
+
     #[test]
     fn process_pending_mark_read_marks_synthetic_locally() {
         let mut app = App::new(Config::default());
@@ -4360,20 +4632,6 @@ mod tests {
         // Local state should be updated (no API client, so no API call)
         assert!(!app.state.notifications[0].is_unread());
         assert!(app.pending_mark_read.is_none());
-    }
-
-    #[test]
-    fn batch_cutoffs_exclude_failed_operations() {
-        let mut successful_ids = Vec::new();
-
-        collect_successful_batch_result(&mut successful_ids, "ok", Ok(()));
-        collect_successful_batch_result(
-            &mut successful_ids,
-            "failed",
-            Err(crate::error::Error::Config("request failed".to_string())),
-        );
-
-        assert_eq!(successful_ids, ["ok"]);
     }
 
     #[test]
@@ -4446,6 +4704,17 @@ mod tests {
         (client, handle)
     }
 
+    fn finish_archive_request(app: &mut App, server: std::thread::JoinHandle<()>) {
+        server.join().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !app.pending_read_actions.is_empty() && Instant::now() < deadline {
+            app.process_read_actions();
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        app.process_read_actions();
+        assert!(app.pending_read_actions.is_empty());
+    }
+
     #[test]
     fn archived_real_notification_stays_hidden_after_refresh() {
         let (client, server) = archive_test_client(204);
@@ -4458,7 +4727,7 @@ mod tests {
 
         app.handle_normal_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))
             .unwrap();
-        server.join().unwrap();
+        finish_archive_request(&mut app, server);
         assert!(app.state.notifications.is_empty());
 
         app.merge_refreshed_notifications(vec![notification.clone()]);
@@ -4486,7 +4755,7 @@ mod tests {
 
         app.handle_normal_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))
             .unwrap();
-        server.join().unwrap();
+        finish_archive_request(&mut app, server);
 
         assert_eq!(app.state.notifications.len(), 1);
         assert!(app
@@ -4512,7 +4781,7 @@ mod tests {
 
             app.handle_normal_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))
                 .unwrap();
-            server.join().unwrap();
+            finish_archive_request(&mut app, server);
 
             let expected = if status == 204 { 0 } else { 1 };
             assert_eq!(app.state.notifications.len(), expected);
@@ -4536,7 +4805,7 @@ mod tests {
         ));
 
         app.process_pending_mark_read();
-        server.join().unwrap();
+        finish_archive_request(&mut app, server);
         app.merge_refreshed_notifications(vec![test_notification("123", true)]);
 
         assert!(app.state.notifications.is_empty());
@@ -4597,7 +4866,7 @@ mod tests {
 
         app.handle_normal_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))
             .unwrap();
-        server.join().unwrap();
+        finish_archive_request(&mut app, server);
 
         assert!(app.state.get_pinned_notifications().is_empty());
         app.merge_refreshed_notifications(vec![notification]);
@@ -5456,9 +5725,13 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            app.state.loading_message,
-            "Marking filtered notifications as read"
+            app.state.status_message.as_deref(),
+            Some("Marked 1 filtered notifications as read")
         );
+        assert!(!app.state.loading);
+        assert!(app.pending_blocking_action.is_none());
+        assert!(!app.state.notifications[0].is_unread());
+        assert!(app.state.notifications[1].is_unread());
     }
 
     #[test]
@@ -5545,7 +5818,7 @@ mod tests {
         app.last_seen_mutation_seq = app.state.notification_mutation_seq;
         let generation = app.refresh_generation;
 
-        app.state.mark_notification_read("1");
+        app.state.mark_notifications_read(&["1".to_string()]);
         app.process_local_mutations();
 
         // Generation bumped so any in-flight refresh snapshot is discarded.

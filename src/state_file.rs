@@ -268,17 +268,6 @@ impl AppStateFile {
         })
     }
 
-    /// Record a synthetic notification ID as dismissed so it is filtered out
-    /// on future fetches. The list is capped at 200 entries.
-    pub fn dismiss_synthetic_id(id: &str) -> Result<()> {
-        Self::update_with(|state| {
-            if !state.dismissed_synthetic_ids.iter().any(|d| d == id) {
-                state.dismissed_synthetic_ids.push(id.to_string());
-            }
-            Self::trim_dismissed(&mut state.dismissed_synthetic_ids);
-        })
-    }
-
     /// Batch-dismiss multiple synthetic notification IDs.
     pub fn dismiss_synthetic_ids(ids: &[String]) -> Result<()> {
         if ids.is_empty() {
