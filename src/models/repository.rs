@@ -1,7 +1,7 @@
 use crate::models::NotificationType;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Repository {
     pub id: u64,
     pub name: String,
@@ -11,7 +11,7 @@ pub struct Repository {
     pub private: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Owner {
     pub login: String,
     pub id: u64,
@@ -19,7 +19,7 @@ pub struct Owner {
     pub owner_type: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Subject {
     pub title: String,
     #[serde(rename = "type")]

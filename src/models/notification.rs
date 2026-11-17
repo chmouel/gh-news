@@ -33,6 +33,21 @@ pub struct Notification {
 }
 
 impl Notification {
+    pub fn matches_refresh(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.unread == other.unread
+            && self.last_read_at == other.last_read_at
+            && self.updated_at == other.updated_at
+            && self.reason == other.reason
+            && self.repository == other.repository
+            && self.subject == other.subject
+            && self.latest_comment_url == other.latest_comment_url
+            && self.event_body == other.event_body
+            // Activity feeds supply these fields; standard notifications gain them via enrichment.
+            && (self.subject.subject_type != NotificationType::ActivityEvent
+                || (self.author == other.author && self.context == other.context))
+    }
+
     pub fn is_unread(&self) -> bool {
         self.unread
     }

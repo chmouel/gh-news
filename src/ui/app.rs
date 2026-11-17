@@ -29,7 +29,7 @@ use crossterm::event::{
 use parking_lot::Mutex;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::Arc;
@@ -356,6 +356,7 @@ impl App {
 
         let mut notifications = data.notifications;
         filter_dismissed_synthetic(&mut notifications);
+        self.seed_cached_enrichment(&mut notifications);
 
         let mut app_state = AppState::new();
         app_state.org_grouping = self.config.org_grouping;
@@ -700,21 +701,69 @@ impl App {
         self.last_refresh = Instant::now();
     }
 
-    /// Spawn a background thread that resolves author logins and subject state
-    /// context for notifications. Results are merged back on the next tick.
-    fn spawn_author_enrichment(&mut self) {
-        use crate::models::NotificationReason;
-
-        self.author_enrichment_rx = None;
-
-        let Some(client) = self.api_client.clone() else {
+    fn process_background_refresh(&mut self) {
+        let Some((generation, ref rx)) = self.background_refresh_rx else {
             return;
         };
 
-        // Load persisted caches and seed known values into notifications.
+        match rx.try_recv() {
+            Ok(Ok(mut data)) => {
+                self.background_refresh_rx = None;
+                if generation != self.refresh_generation {
+                    self.spawn_background_refresh();
+                    return;
+                }
+
+                filter_dismissed_synthetic(&mut data.notifications);
+                let refreshed: HashMap<_, _> = self
+                    .state
+                    .get_pinned_notifications()
+                    .iter()
+                    .chain(&data.notifications)
+                    .map(|notification| (notification.id.as_str(), notification))
+                    .collect();
+                let now = chrono::Utc::now();
+                let snoozes_expired = self
+                    .state
+                    .snoozed_ids
+                    .values()
+                    .any(|entry| entry.wake_time <= now);
+                let unchanged = !snoozes_expired
+                    && refreshed.len() == self.state.notifications.len()
+                    && self.state.notifications.iter().all(|notification| {
+                        refreshed
+                            .get(notification.id.as_str())
+                            .is_some_and(|other| notification.matches_refresh(other))
+                    });
+
+                self.last_refresh = Instant::now();
+                if unchanged {
+                    self.state.status_message = Some("Up to date".into());
+                } else {
+                    self.pending_refresh = Some(data.notifications);
+                    self.state.status_message =
+                        Some("Refresh ready — F5 or Ctrl+R to apply".into());
+                }
+            }
+            Ok(Err(error)) => {
+                self.background_refresh_rx = None;
+                self.state.status_message = Some(format!("Refresh failed: {error}"));
+            }
+            Err(TryRecvError::Disconnected) => {
+                self.background_refresh_rx = None;
+            }
+            Err(TryRecvError::Empty) => {}
+        }
+    }
+
+    fn seed_cached_enrichment(&self, notifications: &mut [Notification]) {
+        if self.api_client.is_none() {
+            return;
+        }
+
         let cached_authors = crate::state_file::load_author_cache();
         let cached_contexts = crate::state_file::load_context_cache();
-        for notif in &mut self.state.notifications {
+        for notif in notifications {
             if notif.author.is_none() {
                 if let Some(author) = cached_authors.get(&notif.id) {
                     notif.author = Some(author.clone());
@@ -726,8 +775,18 @@ impl App {
                 }
             }
         }
-        // Re-apply filter so cached values take effect immediately.
-        self.reapply_filter_preserving_selection();
+    }
+
+    /// Spawn a background thread that resolves author logins and subject state
+    /// context for notifications. Results are merged back on the next tick.
+    fn spawn_author_enrichment(&mut self) {
+        use crate::models::NotificationReason;
+
+        self.author_enrichment_rx = None;
+
+        let Some(client) = self.api_client.clone() else {
+            return;
+        };
 
         // Each item: (id, comment_url_if_needed, subject_url_if_state_change, is_pr)
         struct FetchItem {
@@ -1152,10 +1211,7 @@ impl App {
                 // Preserve current selection if possible
                 let old_notif_id = self.state.selected_notification().map(|n| n.id.clone());
 
-                // Preserve current filter
-                let current_filter = self.state.filter.clone();
-                let filter_pattern = self.state.filter_pattern.clone();
-
+                self.seed_cached_enrichment(&mut all_notifications);
                 self.state.set_notifications(all_notifications);
 
                 // Mark stale cached previews and get the set of invalidated IDs.
@@ -1195,10 +1251,6 @@ impl App {
                 }
 
                 self.previous_notification_ids = current_ids;
-
-                // Restore filter
-                self.state.set_filter(current_filter);
-                self.state.set_filter_pattern(filter_pattern);
 
                 // Try to restore selection by ID
                 if let Some(old_id) = old_notif_id {
@@ -1267,11 +1319,8 @@ impl App {
         // Preserve current selection
         let old_notif_id = self.state.selected_notification().map(|n| n.id.clone());
 
-        // Preserve current filter
-        let current_filter = self.state.filter.clone();
-        let filter_pattern = self.state.filter_pattern.clone();
-
         let old_count = self.state.notifications.len();
+        self.seed_cached_enrichment(&mut notifications);
         self.state.set_notifications(notifications);
 
         let invalidated = if let Some(ref pm) = self.preview_manager {
@@ -1323,10 +1372,6 @@ impl App {
         } else if old_count > 0 {
             self.state.status_message = Some("Refreshed".to_string());
         }
-
-        // Restore filter
-        self.state.set_filter(current_filter);
-        self.state.set_filter_pattern(filter_pattern);
 
         // Restore selection
         if let Some(old_id) = old_notif_id {
@@ -1551,33 +1596,7 @@ impl App {
             // Apply any completed quick-merge.
             self.process_merge_outcome();
 
-            // Poll background refresh (after cache-hit startup)
-            if let Some((generation, ref rx)) = self.background_refresh_rx {
-                match rx.try_recv() {
-                    Ok(Ok(data)) => {
-                        self.background_refresh_rx = None;
-                        if generation == self.refresh_generation {
-                            self.pending_refresh = Some(data.notifications);
-                            self.state.status_message =
-                                Some("Refresh ready — F5 or Ctrl+R to apply".into());
-                        } else {
-                            // The snapshot predates a local mutation or manual
-                            // refresh; discard it and fetch a fresh one.
-                            self.spawn_background_refresh();
-                        }
-                    }
-                    Ok(Err(e)) => {
-                        // Background refresh failed; keep showing cached data
-                        // but tell the user instead of failing silently.
-                        self.background_refresh_rx = None;
-                        self.state.status_message = Some(format!("Refresh failed: {}", e));
-                    }
-                    Err(TryRecvError::Disconnected) => {
-                        self.background_refresh_rx = None;
-                    }
-                    Err(TryRecvError::Empty) => {}
-                }
-            }
+            self.process_background_refresh();
 
             if self.initial_load_rx.is_none() {
                 if let Some(action) = self.pending_blocking_action.take() {
@@ -4443,6 +4462,228 @@ mod tests {
         )]);
 
         assert!(app.author_enrichment_rx.is_some());
+    }
+
+    fn complete_background_refresh(app: &mut App, notifications: Vec<Notification>) {
+        let (tx, rx) = mpsc::channel();
+        tx.send(Ok(InitialLoadData {
+            notifications,
+            pinned_notifications: Vec::new(),
+        }))
+        .unwrap();
+        app.background_refresh_rx = Some((app.refresh_generation, rx));
+        app.process_background_refresh();
+    }
+
+    #[test]
+    fn unchanged_refresh_preserves_selection_preview_and_enrichment() {
+        let mut app = App::new(Config::default());
+        let first = notification_with("first", "First", "mention", None);
+        let second = notification_with("second", "Second", "state_change", None);
+        let pinned = notification_with("pinned", "Pinned", "mention", None);
+        let mut enriched = second.clone();
+        enriched.author = Some("alice".into());
+        enriched.context = Some("closed".into());
+        app.state.set_pinned_notifications(vec![pinned.clone()]);
+        app.state
+            .set_notifications(vec![first.clone(), enriched, pinned]);
+        assert!(app.state.select_notification_by_id("second"));
+        app.state.set_preview_content(
+            Some(PreviewData::Generic {
+                title: "Second".into(),
+                body: "Preview".into(),
+            }),
+            Some(second.preview_cache_key()),
+        );
+        app.state.preview_scroll = 17;
+        app.state.selected_notification_ids.insert("first".into());
+        let preview_version = app.state.preview_content_version;
+        let (_tx, rx) = mpsc::channel();
+        app.author_enrichment_rx = Some(rx);
+        app.last_refresh = Instant::now() - Duration::from_secs(3600);
+        let previous_refresh = app.last_refresh;
+
+        complete_background_refresh(&mut app, vec![second, first]);
+
+        assert!(app.background_refresh_rx.is_none());
+        assert!(app.pending_refresh.is_none());
+        assert_eq!(app.state.status_message.as_deref(), Some("Up to date"));
+        assert_eq!(app.state.selected_notification().unwrap().id, "second");
+        assert_eq!(
+            app.state.selected_notification().unwrap().author.as_deref(),
+            Some("alice")
+        );
+        assert_eq!(
+            app.state
+                .selected_notification()
+                .unwrap()
+                .context
+                .as_deref(),
+            Some("closed")
+        );
+        assert_eq!(app.state.preview_scroll, 17);
+        assert_eq!(app.state.preview_content_version, preview_version);
+        assert!(app.state.selected_notification_ids.contains("first"));
+        assert!(app.author_enrichment_rx.is_some());
+        assert!(app.last_refresh > previous_refresh);
+    }
+
+    #[test]
+    fn empty_refresh_is_up_to_date() {
+        let mut app = App::new(Config::default());
+
+        complete_background_refresh(&mut app, Vec::new());
+
+        assert!(app.pending_refresh.is_none());
+        assert_eq!(app.state.status_message.as_deref(), Some("Up to date"));
+    }
+
+    #[test]
+    fn changed_refresh_content_waits_for_apply() {
+        let changes: [fn(&mut Notification); 7] = [
+            |n| n.subject.title = "Updated title".into(),
+            |n| n.unread = false,
+            |n| n.updated_at = Some(chrono::Utc::now()),
+            |n| n.subject.latest_comment_url = Some("https://example.com/new-comment".into()),
+            |n| n.reason = "review_requested".into(),
+            |n| n.repository.private = true,
+            |n| n.subject.url = Some("https://example.com/new-subject".into()),
+        ];
+        for change in changes {
+            let mut app = App::new(Config::default());
+            let original = notification_with("current", "Current", "mention", None);
+            app.state.set_notifications(vec![original.clone()]);
+            let mut updated = original.clone();
+            change(&mut updated);
+
+            complete_background_refresh(&mut app, vec![updated.clone()]);
+
+            assert!(app.pending_refresh.is_some());
+            assert!(app.state.notifications[0].matches_refresh(&original));
+
+            app.handle_normal_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL))
+                .unwrap();
+
+            assert!(app.pending_refresh.is_none());
+            assert!(app.state.notifications[0].matches_refresh(&updated));
+        }
+    }
+
+    #[test]
+    fn refresh_detects_added_removed_and_replaced_notifications() {
+        let first = notification_with("first", "First", "mention", None);
+        let second = notification_with("second", "Second", "mention", None);
+        for notifications in [
+            Vec::new(),
+            vec![second.clone()],
+            vec![first.clone(), second],
+        ] {
+            let mut app = App::new(Config::default());
+            app.state.set_notifications(vec![first.clone()]);
+
+            complete_background_refresh(&mut app, notifications);
+
+            assert!(app.pending_refresh.is_some());
+            assert_eq!(app.state.notifications.len(), 1);
+            assert_eq!(app.state.notifications[0].id, "first");
+        }
+    }
+
+    #[test]
+    fn refresh_detects_activity_event_content_changes() {
+        let changes: [fn(&mut Notification); 3] = [
+            |n| n.author = Some("bob".into()),
+            |n| n.context = Some("PullRequestEvent".into()),
+            |n| n.event_body = Some("Updated body".into()),
+        ];
+        for change in changes {
+            let mut app = App::new(Config::default());
+            let mut event = notification_with("event-refresh", "Event", "comment", None);
+            event.subject.subject_type = NotificationType::ActivityEvent;
+            event.author = Some("alice".into());
+            event.context = Some("IssueCommentEvent".into());
+            event.event_body = Some("Original body".into());
+            app.state.set_notifications(vec![event.clone()]);
+            change(&mut event);
+
+            complete_background_refresh(&mut app, vec![event]);
+
+            assert!(app.pending_refresh.is_some());
+        }
+    }
+
+    #[test]
+    fn refresh_with_expired_snooze_waits_for_apply() {
+        let mut app = App::new(Config::default());
+        let notification = notification_with("snoozed", "Snoozed", "mention", None);
+        app.state.set_notifications(vec![notification.clone()]);
+        app.state.snoozed_ids.insert(
+            notification.id.clone(),
+            crate::state_file::SnoozeEntry {
+                wake_time: chrono::Utc::now() - chrono::Duration::seconds(1),
+                note: None,
+            },
+        );
+        app.state.reapply_filter();
+        assert_eq!(app.state.visible_count(), 0);
+
+        complete_background_refresh(&mut app, vec![notification]);
+
+        assert!(app.pending_refresh.is_some());
+        app.handle_normal_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL))
+            .unwrap();
+        assert_eq!(app.state.visible_count(), 1);
+    }
+
+    #[test]
+    fn stale_background_refresh_is_discarded() {
+        let mut app = App::new(Config::default());
+        app.set_api_client(GitHubClient::new_test());
+        app.refresh_args = Some((false, false, Some(0)));
+        let (tx, rx) = mpsc::channel();
+        tx.send(Ok(InitialLoadData {
+            notifications: vec![notification_with("stale", "Stale", "mention", None)],
+            pinned_notifications: Vec::new(),
+        }))
+        .unwrap();
+        app.background_refresh_rx = Some((app.refresh_generation, rx));
+        app.refresh_generation += 1;
+
+        app.process_background_refresh();
+
+        assert!(app.pending_refresh.is_none());
+        assert!(app.background_refresh_rx.is_some());
+        assert!(app.state.notifications.is_empty());
+    }
+
+    #[test]
+    fn applying_refresh_preserves_filter_selection_and_collapsed_repos() {
+        let mut app = App::new(Config::default());
+        let mut first = notification_with("first", "First", "mention", None);
+        let mut second = notification_with("second", "Second", "mention", None);
+        second.repository.full_name = "owner/other".into();
+        second.repository.name = "other".into();
+        app.state
+            .set_notifications(vec![first.clone(), second.clone()]);
+        app.state
+            .set_filter(Some(Filter::from_pattern(Some("First|Second")).unwrap()));
+        app.state.set_filter_pattern(Some("First|Second".into()));
+        app.state.expanded_repos.insert("owner/other".into(), false);
+        app.state.build_tree();
+        assert!(app.state.select_notification_by_id("first"));
+        first.subject.title = "First update".into();
+
+        app.merge_refreshed_notifications(vec![
+            first,
+            second,
+            notification_with("hidden", "Hidden", "mention", None),
+        ]);
+
+        assert_eq!(app.state.filter_pattern.as_deref(), Some("First|Second"));
+        assert!(app.state.filter.is_some());
+        assert_eq!(app.state.visible_count(), 2);
+        assert_eq!(app.state.selected_notification().unwrap().id, "first");
+        assert_eq!(app.state.expanded_repos.get("owner/other"), Some(&false));
     }
 
     #[test]
