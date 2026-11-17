@@ -1846,7 +1846,7 @@ impl App {
     fn render(&mut self, frame: &mut Frame) {
         self.sync_rate_limit_status();
 
-        let size = frame.size();
+        let size = frame.area();
 
         // Ensure minimum terminal size
         if size.width < 40 || size.height < 10 {
@@ -5578,9 +5578,9 @@ mod tests {
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
         terminal.draw(|frame| app.render(frame)).unwrap();
         let buffer = terminal.backend().buffer();
-        let top: String = (54..100).map(|x| buffer.get(x, 0).symbol()).collect();
+        let top: String = (54..100).map(|x| buffer[(x, 0)].symbol()).collect();
         assert!(top.contains("Refresh ready"));
-        let prompt: String = (54..100).map(|x| buffer.get(x, 2).symbol()).collect();
+        let prompt: String = (54..100).map(|x| buffer[(x, 2)].symbol()).collect();
         assert!(prompt.contains("Ctrl+R to apply"));
         let backend = ratatui::backend::TestBackend::new(10, 3);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();

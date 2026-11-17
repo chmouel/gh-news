@@ -10,10 +10,7 @@ use crate::ui::components::pills::{
 use crate::ui::theme::{ColorPalette, Theme};
 use ratatui::{
     prelude::*,
-    widgets::{
-        block::{Position, Title},
-        Block, Borders, Paragraph, Scrollbar, ScrollbarState,
-    },
+    widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarState},
 };
 
 pub struct PreviewWidget {
@@ -102,12 +99,10 @@ impl PreviewWidget {
                         .add_modifier(Modifier::BOLD),
                 ),
             )
-            .title(
-                Title::from(
-                    Line::from(" ? Help q Quit ").style(Style::default().fg(self.colors.fg_dim)),
-                )
-                .alignment(Alignment::Right)
-                .position(Position::Bottom),
+            .title_bottom(
+                Line::from(" ? Help q Quit ")
+                    .right_aligned()
+                    .style(Style::default().fg(self.colors.fg_dim)),
             )
             .border_style(self.theme.border)
             .border_type(ratatui::widgets::BorderType::Rounded)
