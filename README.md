@@ -70,6 +70,9 @@ appear in the status bar; affected notifications return to unread unless you
 have changed them again. On exit, gh-news waits for pending read updates to finish.
 Local read and archive changes are saved to the cache for the next launch.
 
+Marking everything read also drops the status-bar cache, so a bar polling
+`--json` stops showing those threads straight away.
+
 The loading panel shows the current refresh stage. The status bar reports
 refresh errors and shows your remaining API quota when GitHub provides it.
 

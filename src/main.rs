@@ -135,6 +135,13 @@ fn run() -> Result<()> {
         } else {
             println!("Marked {} notifications as {}.", to_process.len(), action);
         }
+
+        // Drop the status-bar cache, otherwise a bar polling it would keep
+        // showing the threads that were just read for up to a minute.
+        if let Ok(cache_path) = cache::get_json_cache_path() {
+            let _ = std::fs::remove_file(cache_path);
+        }
+
         return Ok(());
     }
 
