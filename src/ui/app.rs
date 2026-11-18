@@ -86,15 +86,6 @@ fn is_synthetic_id(id: &str) -> bool {
     id.starts_with("actions-") || id.starts_with("event-") || id.starts_with("repo-event-")
 }
 
-/// Remove previously dismissed synthetic notifications from a list.
-fn filter_dismissed_synthetic(notifications: &mut Vec<Notification>) {
-    if let Ok(dismissed) = AppStateFile::load_dismissed_synthetic_ids() {
-        if !dismissed.is_empty() {
-            notifications.retain(|n| !dismissed.contains(&n.id));
-        }
-    }
-}
-
 /// Copy text to the system clipboard via the OSC 52 terminal escape sequence.
 fn osc52_copy(text: &str) {
     use base64::Engine;
@@ -163,6 +154,11 @@ pub struct App {
     // are discarded instead of merged.
     refresh_generation: u64,
     pending_refresh: Option<Vec<Notification>>,
+    // Set by F5/Ctrl+R and sticky until that refresh completes (an automatic
+    // tick never downgrades it): only manual refreshes ask for a second press
+    // to apply, and they always invalidate the status-bar cache.
+    manual_refresh: bool,
+    status_bar_generation_path: Option<PathBuf>,
     // Last observed AppState::notification_mutation_seq, used to detect
     // local mutations from the main loop.
     last_seen_mutation_seq: u64,
@@ -240,6 +236,8 @@ impl App {
             cache_options_hash: None,
             background_refresh_rx: None,
             pending_refresh: None,
+            manual_refresh: false,
+            status_bar_generation_path: None,
             refresh_generation: 0,
             last_seen_mutation_seq: 0,
             author_enrichment_rx: None,
@@ -337,9 +335,11 @@ impl App {
         if let Ok(saved) = AppStateFile::load_archived_threads() {
             self.archived_threads.merge(&saved);
         }
-        filter_dismissed_synthetic(notifications);
-        let host = &self.config.github_host;
-        notifications.retain(|n| !self.archived_threads.is_archived(host, n));
+        crate::state_file::drop_dismissed(
+            notifications,
+            &self.archived_threads,
+            &self.config.github_host,
+        );
     }
 
     fn drop_archived_pins(&mut self) {
@@ -440,6 +440,10 @@ impl App {
 
     fn finish_read_action(&mut self, outcome: ReadOutcome) {
         let action = outcome.action;
+        // GitHub acknowledged it even if a newer local toggle superseded it.
+        if outcome.result.is_ok() {
+            self.invalidate_status_bar();
+        }
         if self.pending_read_actions.get(&action.notification_id) != Some(&action) {
             return;
         }
@@ -534,6 +538,17 @@ impl App {
     fn save_notifications_cache(&self, notifications: &[Notification]) {
         if let (Some(ref path), Some(ref hash)) = (&self.cache_path, &self.cache_options_hash) {
             let _ = crate::cache::save_cache(path, notifications, hash);
+        }
+    }
+
+    pub fn set_status_bar_generation_path(&mut self, path: PathBuf) {
+        self.status_bar_generation_path = Some(path);
+    }
+
+    /// Make `gh-news --json` fetch again on its next poll.
+    fn invalidate_status_bar(&self) {
+        if let Some(path) = &self.status_bar_generation_path {
+            crate::cache::bump_generation(path);
         }
     }
 
@@ -980,18 +995,26 @@ impl App {
                     .snoozed_ids
                     .values()
                     .any(|entry| entry.wake_time <= now);
-                let unchanged = !snoozes_expired
-                    && !pins_archived
-                    && refreshed.len() == self.state.notifications.len()
+                let fetched_unchanged = refreshed.len() == self.state.notifications.len()
                     && self.state.notifications.iter().all(|notification| {
                         refreshed
                             .get(notification.id.as_str())
                             .is_some_and(|other| notification.matches_refresh(other))
                     });
+                let unchanged = fetched_unchanged && !snoozes_expired && !pins_archived;
 
                 self.last_refresh = Instant::now();
+                let manual = std::mem::take(&mut self.manual_refresh);
+                // Snooze expiry only changes the TUI's view; the bar applies it
+                // itself when it reads the state file.
+                if manual || !fetched_unchanged {
+                    self.invalidate_status_bar();
+                }
                 if unchanged {
                     self.state.status_message = Some("Up to date".into());
+                } else if !manual || self.state.notifications.is_empty() {
+                    self.merge_refreshed_notifications(data.notifications);
+                    self.state.status_message = Some("Refreshed notifications applied".into());
                 } else {
                     self.pending_refresh = Some(data.notifications);
                     self.state.status_message =
@@ -1000,10 +1023,12 @@ impl App {
             }
             Ok(Err(error)) => {
                 self.background_refresh_rx = None;
+                self.manual_refresh = false;
                 self.state.status_message = Some(format!("Refresh failed: {error}"));
             }
             Err(TryRecvError::Disconnected) => {
                 self.background_refresh_rx = None;
+                self.manual_refresh = false;
             }
             Err(TryRecvError::Empty) => {}
         }
@@ -1263,6 +1288,8 @@ impl App {
             self.state.status_message = Some("Refresh queued until read updates finish".into());
             return Ok(());
         }
+        // This fetch replaces any manual request and invalidates the bar on success.
+        self.manual_refresh = false;
 
         if let Some(client) = self.api_client.clone() {
             if let Some((all, participating, max_notifications)) = self.refresh_args {
@@ -1317,6 +1344,7 @@ impl App {
 
                 // Update notification cache
                 self.save_notifications_cache(&all_notifications);
+                self.invalidate_status_bar();
 
                 self.drop_archived_pins();
                 for pinned in self.state.get_pinned_notifications() {
@@ -3620,12 +3648,17 @@ impl App {
                     self.merge_refreshed_notifications(notifications);
                     self.state.status_message = Some("Refreshed notifications applied".into());
                 } else if self.background_refresh_rx.is_some() {
+                    self.manual_refresh = true;
                     self.state.status_message = Some("Refresh in progress...".into());
                 } else if !self.pending_read_actions.is_empty() {
+                    self.manual_refresh = true;
                     self.refresh_after_read_actions = true;
                     self.state.status_message = Some("Refresh queued until read updates finish".into());
                 } else {
+                    self.manual_refresh = true;
                     self.spawn_background_refresh();
+                    // Nothing was started (no client), so no result will clear it.
+                    self.manual_refresh &= self.background_refresh_rx.is_some();
                 }
             }
             KeyCode::Char('E') | KeyCode::Char('e')
@@ -4563,6 +4596,175 @@ mod tests {
         assert_eq!(app.state.selected_notification().unwrap().id, "2");
     }
 
+    fn status_bar_marker(app: &mut App, name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("gh-news-marker-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("generation");
+        app.set_status_bar_generation_path(path.clone());
+        path
+    }
+
+    fn deliver_refresh(app: &mut App, notifications: Vec<Notification>) {
+        let (tx, rx) = mpsc::channel();
+        tx.send(Ok(InitialLoadData {
+            notifications,
+            pinned_notifications: Vec::new(),
+        }))
+        .unwrap();
+        app.background_refresh_rx = Some((app.refresh_generation, rx));
+        app.process_background_refresh();
+    }
+
+    #[test]
+    fn manual_up_to_date_invalidates_status_bar_but_automatic_does_not() {
+        let mut app = App::new(Config::default());
+        let marker = status_bar_marker(&mut app, "uptodate");
+        let current = notification_with("current", "Current", "mention", None);
+        app.state.set_notifications(vec![current.clone()]);
+
+        deliver_refresh(&mut app, vec![current.clone()]);
+        assert_eq!(crate::cache::read_generation(&marker), "");
+
+        app.manual_refresh = true;
+        deliver_refresh(&mut app, vec![current]);
+        assert_ne!(crate::cache::read_generation(&marker), "");
+        assert!(!app.manual_refresh);
+    }
+
+    #[test]
+    fn automatic_refresh_after_manual_up_to_date_applies_and_invalidates() {
+        let mut app = App::new(Config::default());
+        let marker = status_bar_marker(&mut app, "auto-after-manual");
+        let current = notification_with("current", "Current", "mention", None);
+        app.state.set_notifications(vec![current.clone()]);
+        app.manual_refresh = true;
+        deliver_refresh(&mut app, vec![current]);
+        let after_manual = crate::cache::read_generation(&marker);
+
+        deliver_refresh(
+            &mut app,
+            vec![notification_with("fresh", "Fresh", "mention", None)],
+        );
+
+        assert!(app.pending_refresh.is_none());
+        assert_eq!(app.state.notifications[0].id, "fresh");
+        assert_ne!(crate::cache::read_generation(&marker), after_manual);
+    }
+
+    #[test]
+    fn failed_refresh_clears_manual_flag_without_invalidating() {
+        let mut app = App::new(Config::default());
+        let marker = status_bar_marker(&mut app, "failed");
+        app.manual_refresh = true;
+        let (tx, rx) = mpsc::channel();
+        tx.send(Err(crate::error::Error::Config("boom".into())))
+            .unwrap();
+        app.background_refresh_rx = Some((app.refresh_generation, rx));
+        app.process_background_refresh();
+
+        assert!(!app.manual_refresh);
+        assert_eq!(crate::cache::read_generation(&marker), "");
+    }
+
+    #[test]
+    fn read_invalidates_status_bar_only_once_acknowledged() {
+        let mut app = App::new(Config::default());
+        let marker = status_bar_marker(&mut app, "read");
+        let (requests, results) = mock_read_worker(&mut app);
+        app.state
+            .set_notifications(vec![test_notification("1", true)]);
+
+        app.mark_read_in_background("1", MarkAllOption::MarkReadOnly);
+        let action = requests.try_recv().unwrap();
+        assert_eq!(crate::cache::read_generation(&marker), "");
+
+        results
+            .send(ReadOutcome {
+                action,
+                result: Ok(()),
+            })
+            .unwrap();
+        app.process_read_actions();
+        assert_ne!(crate::cache::read_generation(&marker), "");
+    }
+
+    #[test]
+    fn superseded_read_still_invalidates_status_bar_when_acknowledged() {
+        let mut app = App::new(Config::default());
+        let marker = status_bar_marker(&mut app, "superseded");
+        let (requests, results) = mock_read_worker(&mut app);
+        app.state
+            .set_notifications(vec![test_notification("1", true)]);
+        app.mark_read_in_background("1", MarkAllOption::MarkReadOnly);
+        let mut old = requests.try_recv().unwrap();
+        old.cutoff += chrono::Duration::seconds(1);
+
+        results
+            .send(ReadOutcome {
+                action: old,
+                result: Ok(()),
+            })
+            .unwrap();
+        app.process_read_actions();
+
+        assert_ne!(crate::cache::read_generation(&marker), "");
+    }
+
+    #[test]
+    fn blocking_refresh_queued_behind_reads_keeps_manual_intent() {
+        let mut app = App::new(Config::default());
+        let marker = status_bar_marker(&mut app, "blocking-queued");
+        let (_requests, _results) = mock_read_worker(&mut app);
+        app.state
+            .set_notifications(vec![test_notification("1", true)]);
+        app.mark_read_in_background("1", MarkAllOption::MarkReadOnly);
+        app.manual_refresh = true;
+
+        app.refresh_notifications(None).unwrap();
+
+        assert!(app.manual_refresh && app.refresh_after_read_actions);
+        assert_eq!(crate::cache::read_generation(&marker), "");
+    }
+
+    #[test]
+    fn queued_manual_refresh_survives_automatic_tick_and_invalidates() {
+        let mut app = App::new(Config::default());
+        let marker = status_bar_marker(&mut app, "queued");
+        let (requests, results) = mock_read_worker(&mut app);
+        let current = test_notification("1", true);
+        app.state.set_notifications(vec![current.clone()]);
+        app.refresh_args = Some((false, false, Some(0)));
+        app.mark_read_in_background("1", MarkAllOption::MarkReadOnly);
+        let action = requests.try_recv().unwrap();
+
+        app.handle_normal_key(KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE))
+            .unwrap();
+        assert!(app.refresh_after_read_actions && app.manual_refresh);
+        app.spawn_background_refresh();
+        assert!(app.manual_refresh);
+
+        results
+            .send(ReadOutcome {
+                action,
+                result: Ok(()),
+            })
+            .unwrap();
+        app.process_read_actions();
+        let after_read = crate::cache::read_generation(&marker);
+        assert!(app.manual_refresh);
+        // Draining the read queue must itself start the deferred refresh.
+        assert!(app.background_refresh_rx.is_some());
+
+        let mut unchanged = app.state.notifications[0].clone();
+        unchanged.unread = false;
+        deliver_refresh(&mut app, vec![unchanged]);
+
+        assert_eq!(app.state.status_message.as_deref(), Some("Up to date"));
+        assert!(!app.manual_refresh);
+        assert_ne!(crate::cache::read_generation(&marker), after_read);
+    }
+
     #[test]
     fn refresh_waits_for_background_read_updates() {
         let mut app = App::new(Config::default());
@@ -5250,6 +5452,7 @@ mod tests {
     }
 
     fn complete_background_refresh(app: &mut App, notifications: Vec<Notification>) {
+        app.manual_refresh = true;
         let (tx, rx) = mpsc::channel();
         tx.send(Ok(InitialLoadData {
             notifications,
@@ -5338,6 +5541,37 @@ mod tests {
 
         assert!(app.pending_refresh.is_none());
         assert_eq!(app.state.status_message.as_deref(), Some("Up to date"));
+    }
+
+    #[test]
+    fn automatic_refresh_applies_without_prompt() {
+        let mut app = App::new(Config::default());
+        app.state.set_notifications(vec![notification_with(
+            "current", "Current", "mention", None,
+        )]);
+        let (tx, rx) = mpsc::channel();
+        tx.send(Ok(InitialLoadData {
+            notifications: vec![notification_with("fresh", "Fresh", "mention", None)],
+            pinned_notifications: Vec::new(),
+        }))
+        .unwrap();
+        app.background_refresh_rx = Some((app.refresh_generation, rx));
+        app.process_background_refresh();
+
+        assert!(app.pending_refresh.is_none());
+        assert_eq!(app.state.notifications[0].id, "fresh");
+    }
+
+    #[test]
+    fn manual_refresh_fills_an_empty_inbox_without_prompt() {
+        let mut app = App::new(Config::default());
+        complete_background_refresh(
+            &mut app,
+            vec![notification_with("fresh", "Fresh", "mention", None)],
+        );
+
+        assert!(app.pending_refresh.is_none());
+        assert_eq!(app.state.notifications[0].id, "fresh");
     }
 
     #[test]

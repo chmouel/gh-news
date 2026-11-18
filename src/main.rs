@@ -136,10 +136,10 @@ fn run() -> Result<()> {
             println!("Marked {} notifications as {}.", to_process.len(), action);
         }
 
-        // Drop the status-bar cache, otherwise a bar polling it would keep
+        // Invalidate the status-bar cache, otherwise a bar polling it would keep
         // showing the threads that were just read for up to a minute.
-        if let Ok(cache_path) = cache::get_json_cache_path() {
-            let _ = std::fs::remove_file(cache_path);
+        if let Ok(path) = cache::get_json_generation_path() {
+            cache::bump_generation(&path);
         }
 
         return Ok(());
@@ -207,6 +207,13 @@ fn run() -> Result<()> {
     // Notification cache setup
     let use_cache = !args.no_cache && !args.static_display;
     let cache_path = cache::get_cache_path(config.cache_file.as_deref())?;
+
+    // The status-bar token holds no notifications, so --no-cache keeps it.
+    if !args.static_display {
+        if let Ok(path) = cache::get_json_generation_path() {
+            app.set_status_bar_generation_path(path);
+        }
+    }
 
     // Pass cache info to app so refreshes can update it.  Skipped entirely
     // with --no-cache so the app never writes the cache either.

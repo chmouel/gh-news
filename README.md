@@ -60,7 +60,8 @@ Run `gh auth login` if you use the GitHub CLI, or set `GH_TOKEN` to a personal a
 
 gh-news fetches updates in the background. Press `F5` or `Ctrl+R` to fetch updates
 on demand, even with auto-refresh disabled. When updates are ready, a box at the
-top right prompts you to press the key again to apply them. Until then, your
+top right prompts you to press the key again to apply them. Automatic background
+updates, and any refresh of an empty list, are applied without prompting. Until then, your
 list stays as it is. If nothing changed, the status bar reports “Up to date”
 and keeps your selection and preview position.
 
@@ -70,8 +71,8 @@ appear in the status bar; affected notifications return to unread unless you
 have changed them again. On exit, gh-news waits for pending read updates to finish.
 Local read and archive changes are saved to the cache for the next launch.
 
-Marking everything read also drops the status-bar cache, so a bar polling
-`--json` stops showing those threads straight away.
+Once GitHub confirms a read update, a bar polling `--json` fetches again on
+its next poll instead of waiting out its cache.
 
 The loading panel shows the current refresh stage. The status bar reports
 refresh errors and shows your remaining API quota when GitHub provides it.
@@ -116,8 +117,18 @@ on a timer. `text` carries the unread count next to a GitHub glyph, `tooltip`
 holds one line per notification, and each subject is trimmed to
 `--tooltip-width` characters with an ellipsis. Unread entries are marked `•`.
 Everything else (`-p`, `-f`, `-n`, filters, `exclude_*`) applies as usual, and
-`--json` keeps its own 60-second cache so a tight polling interval does not
-burn API quota.
+`--json` keeps its own 60-second cache (empty results included) so a tight
+polling interval does not burn API quota.
+
+The bar is an independent query with its own options, so its count can differ
+from the TUI when the two are started with different flags. It does share the
+TUI's local state: threads you archived, dismissed or snoozed there disappear
+from the bar on its next poll, because the bar applies the saved state itself
+(a confirmed archive on GitHub also makes it fetch again). Local-only changes, such
+as toggling a notification back to unread, are not mirrored. A manual refresh in the
+TUI, an automatic refresh that found changes, and a read update confirmed by
+GitHub make the bar fetch again on its next poll. Both processes must use the
+same state file.
 
 Each line reads `• <type glyph> <repo>  <subject>`:
 

@@ -205,152 +205,138 @@ fn append_watch_repo_events(
     }
 }
 
+fn json_str<'a>(value: Option<&'a serde_json::Value>, path: &[&str]) -> Option<&'a str> {
+    path.iter()
+        .try_fold(value?, |v, key| v.get(key))?
+        .as_str()
+        .filter(|s| !s.is_empty())
+}
+
+fn first_line(text: &str) -> &str {
+    text.lines().next().unwrap_or_default().trim()
+}
+
+/// Build the one-line summary.  The repository is shown separately by every
+/// view (group header, tooltip column), so it is only repeated for events
+/// that have nothing else to name.
 fn format_event_title(
     event_type: &str,
     actor: &str,
     repo: &str,
     event: &serde_json::Value,
 ) -> String {
+    let payload = event.get("payload");
     match event_type {
-        "WatchEvent" => format!("{} starred {}", actor, repo),
-        "ForkEvent" => format!("{} forked {}", actor, repo),
-        "CreateEvent" => {
-            let ref_type = event
-                .get("payload")
-                .and_then(|p| p.get("ref_type"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("repository");
-            let ref_name = event
-                .get("payload")
-                .and_then(|p| p.get("ref"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            if ref_name.is_empty() {
-                format!("{} created {} {}", actor, ref_type, repo)
+        "WatchEvent" => format!("{actor} starred {repo}"),
+        "ForkEvent" => format!("{actor} forked {repo}"),
+        "CreateEvent" | "DeleteEvent" => {
+            let verb = if event_type == "CreateEvent" {
+                "created"
             } else {
-                format!("{} created {} {} in {}", actor, ref_type, ref_name, repo)
+                "deleted"
+            };
+            let ref_type = json_str(payload, &["ref_type"]).unwrap_or("repository");
+            match json_str(payload, &["ref"]) {
+                Some(name) => format!("{actor} {verb} {ref_type} {name}"),
+                None => format!("{actor} {verb} {ref_type} {repo}"),
             }
         }
-        "DeleteEvent" => {
-            let ref_type = event
-                .get("payload")
-                .and_then(|p| p.get("ref_type"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("branch");
-            let ref_name = event
-                .get("payload")
-                .and_then(|p| p.get("ref"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown");
-            format!("{} deleted {} {} in {}", actor, ref_type, ref_name, repo)
-        }
         "PushEvent" => {
-            let size = event
-                .get("payload")
+            let count = payload
                 .and_then(|p| p.get("size"))
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
-            format!("{} pushed {} commit(s) to {}", actor, size, repo)
+            let plural = if count == 1 { "" } else { "s" };
+            let branch = json_str(payload, &["ref"])
+                .map(|r| r.strip_prefix("refs/heads/").unwrap_or(r))
+                .map(|b| format!(" to {b}"))
+                .unwrap_or_default();
+            let headline = payload
+                .and_then(|p| p.get("commits"))
+                .and_then(|c| c.as_array())
+                .and_then(|c| c.last())
+                .and_then(|c| json_str(Some(c), &["message"]))
+                .map(|m| format!(": {}", first_line(m)))
+                .unwrap_or_default();
+            format!("{actor} pushed {count} commit{plural}{branch}{headline}")
         }
-        "IssuesEvent" => {
-            let payload = event.get("payload");
-            let action = payload
-                .and_then(|p| p.get("action"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("updated");
-            let issue = payload.and_then(|p| p.get("issue"));
-            let issue_title = issue.and_then(|i| i.get("title")).and_then(|v| v.as_str());
-            let number = issue.and_then(|i| i.get("number")).and_then(|v| v.as_u64());
-            let action_detail = format_action_detail(action, payload);
-            let num_str = number.map(|n| format!("#{n}")).unwrap_or_default();
-            let suffix = issue_title.map(|t| format!(": {t}")).unwrap_or_default();
-            format!(
-                "{} {} issue {} in {}{}",
-                actor, action_detail, num_str, repo, suffix
-            )
-        }
-        "PullRequestEvent" => {
-            let payload = event.get("payload");
-            let action = payload
-                .and_then(|p| p.get("action"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("updated");
-            let pr = payload.and_then(|p| p.get("pull_request"));
-            let pr_title = pr.and_then(|p| p.get("title")).and_then(|v| v.as_str());
-            let number = pr.and_then(|p| p.get("number")).and_then(|v| v.as_u64());
-            let action_detail = format_action_detail(action, payload);
-            let num_str = number.map(|n| format!("#{n}")).unwrap_or_default();
-            let suffix = pr_title.map(|t| format!(": {t}")).unwrap_or_default();
-            format!(
-                "{} {} PR {} in {}{}",
-                actor, action_detail, num_str, repo, suffix
-            )
+        "IssuesEvent" | "PullRequestEvent" => {
+            let (noun, key) = if event_type == "IssuesEvent" {
+                ("issue", "issue")
+            } else {
+                ("PR", "pull_request")
+            };
+            let item = payload.and_then(|p| p.get(key));
+            let phrase = action_phrase(payload, item);
+            let number = item
+                .and_then(|i| i.get("number"))
+                .and_then(|v| v.as_u64())
+                .map(|n| format!(" #{n}"))
+                .unwrap_or_default();
+            let title = json_str(item, &["title"])
+                .map(|t| format!(": {t}"))
+                .unwrap_or_default();
+            format!("{actor} {phrase} {noun}{number}{title}")
         }
         "ReleaseEvent" => {
-            let tag = event
-                .get("payload")
-                .and_then(|p| p.get("release"))
-                .and_then(|r| r.get("tag_name"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown");
-            format!("{} released {} in {}", actor, tag, repo)
+            let tag = json_str(payload, &["release", "tag_name"]).unwrap_or("a release");
+            format!("{actor} released {tag}")
         }
         "IssueCommentEvent" => {
-            let issue = event.get("payload").and_then(|p| p.get("issue"));
-            let issue_title = issue
-                .and_then(|i| i.get("title"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("an issue");
-            let number = issue.and_then(|i| i.get("number")).and_then(|v| v.as_u64());
-            match number {
-                Some(n) => format!("{} commented on #{} in {}: {}", actor, n, repo, issue_title),
-                None => format!("{} commented on {}: {}", actor, repo, issue_title),
-            }
+            let issue = payload.and_then(|p| p.get("issue"));
+            let noun = if issue.and_then(|i| i.get("pull_request")).is_some() {
+                "PR"
+            } else {
+                "issue"
+            };
+            let verb = match json_str(payload, &["action"]) {
+                Some("edited") => "edited a comment on",
+                Some("deleted") => "deleted a comment on",
+                _ => "commented on",
+            };
+            let number = issue
+                .and_then(|i| i.get("number"))
+                .and_then(|v| v.as_u64())
+                .map(|n| format!(" #{n}"))
+                .unwrap_or_default();
+            let title = json_str(issue, &["title"])
+                .map(|t| format!(": {t}"))
+                .unwrap_or_default();
+            format!("{actor} {verb} {noun}{number}{title}")
         }
         "MemberEvent" => {
-            let action = event
-                .get("payload")
-                .and_then(|p| p.get("action"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("added");
-            let member = event
-                .get("payload")
-                .and_then(|p| p.get("member"))
-                .and_then(|m| m.get("login"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("someone");
-            format!("{} {} {} to {}", actor, action, member, repo)
+            let action = json_str(payload, &["action"]).unwrap_or("added");
+            let member = json_str(payload, &["member", "login"]).unwrap_or("someone");
+            format!("{actor} {action} {member} to {repo}")
         }
-        "PublicEvent" => format!("{} made {} public", actor, repo),
-        "GollumEvent" => format!("{} updated wiki pages in {}", actor, repo),
-        _ => format!("{}: {} in {}", event_type, actor, repo),
+        "PublicEvent" => format!("{actor} made {repo} public"),
+        "GollumEvent" => format!("{actor} updated wiki pages in {repo}"),
+        _ => format!("{event_type}: {actor} in {repo}"),
     }
 }
 
-/// Enrich the action string with contextual detail (label name, assignee login).
-fn format_action_detail(action: &str, payload: Option<&serde_json::Value>) -> String {
-    match action {
-        "labeled" | "unlabeled" => {
-            let label = payload
-                .and_then(|p| p.get("label"))
-                .and_then(|l| l.get("name"))
-                .and_then(|v| v.as_str());
-            match label {
-                Some(name) => format!("{action} \"{name}\" on"),
-                None => action.to_string(),
-            }
-        }
-        "assigned" | "unassigned" => {
-            let assignee = payload
-                .and_then(|p| p.get("assignee"))
-                .and_then(|a| a.get("login"))
-                .and_then(|v| v.as_str());
-            match assignee {
-                Some(login) => format!("{action} @{login} on"),
-                None => action.to_string(),
-            }
-        }
-        _ => action.to_string(),
+/// Turn a GitHub event action into a phrase that reads before the noun
+/// ("added label \"bug\" to PR #1", "merged PR #1").
+fn action_phrase(payload: Option<&serde_json::Value>, item: Option<&serde_json::Value>) -> String {
+    let action = json_str(payload, &["action"]).unwrap_or("updated");
+    let label = json_str(payload, &["label", "name"]);
+    let assignee = json_str(payload, &["assignee", "login"]);
+    let reviewer = json_str(payload, &["requested_reviewer", "login"]);
+    let merged = item
+        .and_then(|i| i.get("merged"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    match (action, label, assignee, reviewer) {
+        ("labeled", Some(l), ..) => format!("added label \"{l}\" to"),
+        ("unlabeled", Some(l), ..) => format!("removed label \"{l}\" from"),
+        ("assigned", _, Some(a), _) => format!("assigned @{a} to"),
+        ("unassigned", _, Some(a), _) => format!("unassigned @{a} from"),
+        ("review_requested", _, _, Some(r)) => format!("requested review from @{r} on"),
+        ("closed", ..) if merged => "merged".to_string(),
+        ("ready_for_review", ..) => "marked ready for review".to_string(),
+        ("synchronize", ..) => "pushed to".to_string(),
+        (other, ..) => other.replace('_', " "),
     }
 }
 
@@ -609,5 +595,82 @@ mod enrichment_tests {
             assert_eq!(notification.subject.title, expected);
         }
         assert_eq!(notifications[16].subject.title, "Existing: title");
+    }
+}
+
+#[cfg(test)]
+mod title_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn title(event_type: &str, payload: serde_json::Value) -> String {
+        format_event_title(
+            event_type,
+            "alice",
+            "owner/repo",
+            &json!({ "payload": payload }),
+        )
+    }
+
+    #[test]
+    fn labels_and_assignees_read_naturally_without_the_repository() {
+        let pr = json!({ "number": 7, "title": "Fix it" });
+        assert_eq!(
+            title(
+                "PullRequestEvent",
+                json!({ "action": "labeled", "label": { "name": "bug" }, "pull_request": pr })
+            ),
+            "alice added label \"bug\" to PR #7: Fix it"
+        );
+        assert_eq!(
+            title(
+                "IssuesEvent",
+                json!({ "action": "assigned", "assignee": { "login": "bob" }, "issue": { "number": 3 } })
+            ),
+            "alice assigned @bob to issue #3"
+        );
+    }
+
+    #[test]
+    fn merged_pull_requests_say_merged() {
+        let payload = json!({
+            "action": "closed",
+            "pull_request": { "number": 9, "merged": true }
+        });
+        assert_eq!(title("PullRequestEvent", payload), "alice merged PR #9");
+    }
+
+    #[test]
+    fn pushes_name_the_branch_and_headline() {
+        let payload = json!({
+            "ref": "refs/heads/main",
+            "size": 2,
+            "commits": [{ "message": "first" }, { "message": "second\n\nbody" }]
+        });
+        assert_eq!(
+            title("PushEvent", payload),
+            "alice pushed 2 commits to main: second"
+        );
+        assert_eq!(
+            title("PushEvent", json!({ "ref": "refs/heads/dev", "size": 1 })),
+            "alice pushed 1 commit to dev"
+        );
+    }
+
+    #[test]
+    fn comments_distinguish_pull_requests_from_issues() {
+        let on_pr = json!({
+            "action": "created",
+            "issue": { "number": 4, "title": "T", "pull_request": {} }
+        });
+        assert_eq!(
+            title("IssueCommentEvent", on_pr),
+            "alice commented on PR #4: T"
+        );
+        let on_issue = json!({ "issue": { "number": 5, "title": "T" } });
+        assert_eq!(
+            title("IssueCommentEvent", on_issue),
+            "alice commented on issue #5: T"
+        );
     }
 }

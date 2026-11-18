@@ -6,6 +6,7 @@ use crate::error::Result;
 use crate::filter::Filter;
 use crate::models::{Notification, NotificationType};
 use crate::notifications::{fetch_extra_sources, fetch_notifications, NotificationFetchOptions};
+use crate::state_file::AppStateFile;
 use crate::ui::theme::ColorPalette;
 use crate::RuntimeOptions;
 use chrono::Duration;
@@ -35,31 +36,53 @@ pub fn run(
     );
     let cache_path = cache::get_json_cache_path()?;
 
-    let notifications = match cache::load_cache_fresh(&cache_path, &options_hash, CACHE_TTL) {
-        Some(cached) => cached,
-        None => {
-            let client = GitHubClient::new(config)?;
-            let mut fetched = fetch_notifications(
-                &client,
-                NotificationFetchOptions {
-                    show_all: opts.show_all,
-                    participating: opts.participating,
-                    max_notifications: opts.max_notifications,
-                    per_page: config.pagination_size,
-                },
-            )?;
-            let extra = fetch_extra_sources(&client, config, &fetched);
-            fetched.extend(extra);
+    // Read before any fetch: an entry fetched across an invalidation then
+    // carries the old token and is not served as fresh.
+    let generation_path = cache::get_json_generation_path()?;
+    let generation = cache::read_generation(&generation_path);
 
-            // A cache write failure must not turn a good tooltip into an error.
-            let _ = cache::save_cache(&cache_path, &fetched, &options_hash);
-            fetched
-        }
-    };
+    let notifications =
+        match cache::load_cache_fresh(&cache_path, &options_hash, CACHE_TTL, &generation) {
+            Some(cached) => cached,
+            None => {
+                let client = GitHubClient::new(config)?;
+                let mut fetched = fetch_notifications(
+                    &client,
+                    NotificationFetchOptions {
+                        show_all: opts.show_all,
+                        participating: opts.participating,
+                        max_notifications: opts.max_notifications,
+                        per_page: config.pagination_size,
+                    },
+                )?;
+                let extra = fetch_extra_sources(&client, config, &fetched);
+                fetched.extend(extra);
+
+                // A cache write failure must not turn a good tooltip into an error.
+                let _ = cache::save_cache_with_generation(
+                    &cache_path,
+                    &fetched,
+                    &options_hash,
+                    &generation,
+                );
+                fetched
+            }
+        };
 
     let filter = Filter::from_config(opts.filter_pattern.as_deref(), config)?;
-    let mut shown: Vec<&Notification> =
-        notifications.iter().filter(|n| filter.matches(n)).collect();
+    // Mirror the TUI's local state at read time, so archiving, dismissing or
+    // snoozing there shows on the next poll without another fetch.
+    let mut notifications = notifications;
+    crate::state_file::drop_dismissed(
+        &mut notifications,
+        &AppStateFile::load_archived_threads().unwrap_or_default(),
+        &config.github_host,
+    );
+    let snoozed = AppStateFile::load_snoozed_notifications().unwrap_or_default();
+    let mut shown: Vec<&Notification> = notifications
+        .iter()
+        .filter(|n| !snoozed.contains_key(&n.id) && filter.matches(n))
+        .collect();
 
     // Extra sources are appended after the API page limit, so `-n` has to be
     // applied once more here to keep the tooltip the size the caller asked for.

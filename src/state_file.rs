@@ -99,6 +99,22 @@ pub struct SnoozeEntry {
 
 /// Successful archives per host and thread ID, with the latest activity the
 /// user saw before archiving.
+/// Drop notifications the user archived or dismissed locally.  Shared by the
+/// TUI and `--json` so both show the same list.  Snoozes are deliberately
+/// excluded: the TUI keeps snoozed items so they return when the snooze ends.
+pub fn drop_dismissed(
+    notifications: &mut Vec<Notification>,
+    archived: &ArchivedThreads,
+    host: &str,
+) {
+    if let Ok(dismissed) = AppStateFile::load_dismissed_synthetic_ids() {
+        if !dismissed.is_empty() {
+            notifications.retain(|n| !dismissed.contains(&n.id));
+        }
+    }
+    notifications.retain(|n| !archived.is_archived(host, n));
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ArchivedThreads(HashMap<String, HashMap<String, DateTime<Utc>>>);
