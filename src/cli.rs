@@ -33,6 +33,18 @@ pub struct Args {
     #[arg(long)]
     pub mark_read_archive: bool,
 
+    /// Print a status-bar JSON document (text/tooltip/class) instead of the TUI
+    #[arg(long)]
+    pub json: bool,
+
+    /// Characters of each subject kept in the --json tooltip before an ellipsis
+    #[arg(long, value_name = "N", default_value_t = 50)]
+    pub tooltip_width: usize,
+
+    /// Leave repo names uncoloured in the --json tooltip (also honours NO_COLOR)
+    #[arg(long)]
+    pub no_color: bool,
+
     /// Print a static display (non-interactive, cache is bypassed)
     #[arg(short = 's', long)]
     pub static_display: bool,

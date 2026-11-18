@@ -89,6 +89,9 @@ back. Archiving a pinned notification also unpins it.
 - `-r, --mark-read` - Mark all notifications as read (non-interactive)
 - `--mark-read-archive` - Mark all notifications as read and archive them (non-interactive)
 - `-s, --static-display` - Print notifications and exit (for scripts)
+- `--json` - Print a status-bar JSON document (`text`, `class`, `tooltip`) and exit, for waybar and friends
+- `--tooltip-width <N>` - Characters of each subject kept in the `--json` tooltip before an ellipsis (default: 50)
+- `--no-color` - Leave repo names and type glyphs uncoloured in the `--json` tooltip (also honours `NO_COLOR`)
 - `--check-config` - Validate config, custom actions, filters, views, and GitHub authentication, then exit
 - `--no-cache` - Bypass notification cache and always fetch fresh from the API
 - `--state-file <PATH>` - Use a custom state file path (overrides config and default)
@@ -102,6 +105,48 @@ gh news --mark-read # Mark everything read
 gh news --check-config # Check config and token access
 gh news --static-display | grep "something" # List notifications without TUI
 ```
+
+### Status bar integration
+
+`--json` prints one document on stdout and exits, so a status bar can poll it
+on a timer. `text` carries the unread count next to a GitHub glyph, `tooltip`
+holds one line per notification, and each subject is trimmed to
+`--tooltip-width` characters with an ellipsis. Unread entries are marked `•`.
+Everything else (`-p`, `-f`, `-n`, filters, `exclude_*`) applies as usual, and
+`--json` keeps its own 60-second cache so a tight polling interval does not
+burn API quota.
+
+Each line reads `• <type glyph> <repo>  <subject>`:
+
+- The type glyph is one Nerd Font cell: pull request, bug for issues, shield for
+  security alerts, comments for discussions, tag for releases, commit, and a
+  check square for check suites. Events, workflow runs, and unknown types leave
+  the cell blank so the columns stay aligned.
+- Types take their colour from the configured theme's accents, lifted to a
+  minimum lightness so muted palettes such as rose-pine stay legible on a dark
+  tooltip.
+- The repo name is coloured from a hash of its name, so the same repository
+  always wears the same hue. `--no-color`, or a non-empty `NO_COLOR`, prints
+  plain text instead.
+
+```json
+{"text":"\uea843","class":"","tooltip":"•  <span foreground=\"#8dc2d8\">liseur</span>  Select words…\n  <span foreground=\"#8ce085\">pipeline</span>  Fix CVEs…"}
+```
+
+Waybar needs `"return-type": "json"` and `"tooltip": true` on the module:
+
+```jsonc
+"custom/github_notifications": {
+  "format": "{}",
+  "return-type": "json",
+  "tooltip": true,
+  "interval": 30,
+  "exec": "gh-news --json --participating --max-notifications 10"
+}
+```
+
+Subjects are escaped for Pango markup, so a `<` in a title is displayed rather
+than swallowed.
 
 ## Keybindings
 

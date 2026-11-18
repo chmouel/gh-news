@@ -60,12 +60,20 @@ pub fn get_cache_path(custom_path: Option<&str>) -> Result<PathBuf> {
     Ok(dir.join("notifications_cache.json"))
 }
 
-/// Try to load cached notifications.  Returns `Some` when the file exists
-/// and the version and options hash match.  An empty cache is treated as a
-/// miss so startup performs a full refresh instead of showing an empty
-/// list.  No TTL check -- the caller always triggers a background refresh
-/// after displaying cached data.
-pub fn load_cache(cache_path: &Path, options_hash: &str) -> Option<Vec<Notification>> {
+/// Cache path used by `--json`.  It is kept separate from the TUI cache so
+/// the short-lived waybar polling can never evict what the interactive mode
+/// has just loaded.
+pub fn get_json_cache_path() -> Result<PathBuf> {
+    let cache_dir = dirs::cache_dir()
+        .ok_or_else(|| Error::Config("Could not determine cache directory".to_string()))?;
+
+    let dir = cache_dir.join("gh-news");
+    fs::create_dir_all(&dir).map_err(Error::Io)?;
+
+    Ok(dir.join("notifications_json_cache.json"))
+}
+
+fn read_cache(cache_path: &Path, options_hash: &str) -> Option<NotificationCache> {
     let content = fs::read_to_string(cache_path).ok()?;
     let cache: NotificationCache = serde_json::from_str(&content).ok()?;
 
@@ -76,6 +84,31 @@ pub fn load_cache(cache_path: &Path, options_hash: &str) -> Option<Vec<Notificat
         return None;
     }
     if cache.notifications.is_empty() {
+        return None;
+    }
+
+    Some(cache)
+}
+
+/// Try to load cached notifications.  Returns `Some` when the file exists
+/// and the version and options hash match.  An empty cache is treated as a
+/// miss so startup performs a full refresh instead of showing an empty
+/// list.  No TTL check -- the caller always triggers a background refresh
+/// after displaying cached data.
+pub fn load_cache(cache_path: &Path, options_hash: &str) -> Option<Vec<Notification>> {
+    read_cache(cache_path, options_hash).map(|cache| cache.notifications)
+}
+
+/// Load cached notifications only when the entry is younger than `max_age`.
+/// `--json` is polled on a short timer by status bars, so a stale-but-valid
+/// entry must trigger a fetch instead of being served indefinitely.
+pub fn load_cache_fresh(
+    cache_path: &Path,
+    options_hash: &str,
+    max_age: chrono::Duration,
+) -> Option<Vec<Notification>> {
+    let cache = read_cache(cache_path, options_hash)?;
+    if Utc::now().signed_duration_since(cache.timestamp) > max_age {
         return None;
     }
 

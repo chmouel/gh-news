@@ -18,6 +18,7 @@ mod preview;
 mod preview_manager;
 mod state;
 mod state_file;
+mod statusbar;
 mod terminal;
 mod ui;
 mod workflow_runs;
@@ -28,6 +29,7 @@ use config::Config;
 use error::Result;
 use filter::Filter;
 use notifications::{fetch_extra_sources, fetch_notifications, NotificationFetchOptions};
+use std::io::IsTerminal;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::mpsc::channel;
@@ -37,8 +39,12 @@ use ui::{App, InitialLoadData, PendingStateSettings};
 
 fn main() {
     if let Err(e) = run() {
-        let _ = std::io::stdout().write_all(&ProgressState::Error(None).osc9_4_sequence());
-        let _ = std::io::stdout().flush();
+        // The progress sequence belongs to the terminal; writing it into a pipe
+        // would corrupt the JSON document produced by `--json`.
+        if std::io::stdout().is_terminal() {
+            let _ = std::io::stdout().write_all(&ProgressState::Error(None).osc9_4_sequence());
+            let _ = std::io::stdout().flush();
+        }
         eprintln!("Error: {}", e);
         std::process::exit(1);
     }
@@ -46,7 +52,7 @@ fn main() {
 
 /// Merged runtime options from CLI args and config file.
 #[derive(Clone)]
-struct RuntimeOptions {
+pub(crate) struct RuntimeOptions {
     show_all: bool,
     participating: bool,
     max_notifications: Option<usize>,
@@ -134,6 +140,14 @@ fn run() -> Result<()> {
 
     if args.static_display {
         handle_static_display(&config, &opts)?;
+        return Ok(());
+    }
+
+    if args.json {
+        // NO_COLOR follows the informal standard: set and non-empty disables colour.
+        let color =
+            !args.no_color && std::env::var_os("NO_COLOR").is_none_or(|value| value.is_empty());
+        statusbar::run(&config, &opts, args.tooltip_width, color)?;
         return Ok(());
     }
 
